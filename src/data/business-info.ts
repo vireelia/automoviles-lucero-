@@ -22,8 +22,9 @@ export const businessInfo = {
   ],
   internal_whatsapp_number: null, // PENDIENTE DE CONFIRMAR (Sección 1)
   hours: {
-    value: null, // NO usar el horario de compramostufurgon.com hasta que el dueño lo apruebe
-    unvalidated_reference: "Web compramostufurgon.com dice L-V 9:30-14:00 y 16:30-19:30, S-D con cita previa, festivos con cita -- SIN VALIDAR, puede haber horario distinto para ventas y gestoría.",
+    value: null, // resto del horario aún SIN confirmar -- solo la apertura está validada
+    owner_confirmed_earliest_appointment: "09:30", // confirmado por el dueño 23/09/2026: no citas antes de esta hora
+    unvalidated_reference: "Web compramostufurgon.com dice L-V 9:30-14:00 y 16:30-19:30, S-D con cita previa, festivos con cita -- el resto SIN VALIDAR, puede haber horario distinto para ventas y gestoría.",
     validation_status: "pending",
   },
   financing: {
