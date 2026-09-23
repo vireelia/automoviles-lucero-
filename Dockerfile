@@ -17,6 +17,6 @@ COPY --from=build /app/dist ./dist
 # fuente maestra definitiva.
 VOLUME ["/app/data"]
 ENV DATA_DIR=/app/data
-EXPOSE 8080
-ENV PORT=8080
+EXPOSE 80
+ENV PORT=80
 CMD ["node", "dist/server.js"]
