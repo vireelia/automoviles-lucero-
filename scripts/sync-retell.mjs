@@ -149,12 +149,28 @@ async function syncVoice(state) {
     ...AGENT_TOOLS,
   ];
 
-  await api("PATCH", `/update-retell-llm/${llmId}`, {
-    general_prompt: voicePrompt,
-    general_tools: generalTools,
-    begin_message: "Hola, has llamado a Automóviles Lucero. Soy el asistente virtual de inteligencia artificial. ¿En qué puedo ayudarte?",
-  });
-  console.log("LLM de voz actualizado:", llmId);
+  try {
+    await api("PATCH", `/update-retell-llm/${llmId}`, {
+      general_prompt: voicePrompt,
+      general_tools: generalTools,
+      begin_message: "Hola, has llamado a Automóviles Lucero. Soy el asistente virtual de inteligencia artificial. ¿En qué puedo ayudarte?",
+    });
+    console.log("LLM de voz actualizado:", llmId);
+  } catch (err) {
+    if (!String(err.message).includes("Cannot update published LLM")) throw err;
+    // La versión publicada quedó inmutable -- hay que crear un nuevo draft
+    // de agente (mismo llm_id, nueva versión editable) antes de poder tocar
+    // el prompt/tools otra vez.
+    const current = await api("GET", `/get-agent/${agentId}`);
+    console.log(`LLM publicado e inmutable -- creando nuevo draft a partir de la version ${current.version}...`);
+    await api("POST", `/create-agent-version/${agentId}`, { base_version: current.version });
+    await api("PATCH", `/update-retell-llm/${llmId}`, {
+      general_prompt: voicePrompt,
+      general_tools: generalTools,
+      begin_message: "Hola, has llamado a Automóviles Lucero. Soy el asistente virtual de inteligencia artificial. ¿En qué puedo ayudarte?",
+    });
+    console.log("LLM de voz actualizado en el nuevo draft:", llmId);
+  }
 
   const agent = await api("GET", `/get-agent/${agentId}`);
   console.log(`Draft del agente de voz ahora en version ${agent.version} (is_published=${agent.is_published})`);
@@ -188,12 +204,25 @@ async function syncChat(state) {
     chatLlmId = llm.llm_id;
     console.log("LLM de chat creado:", chatLlmId);
   } else {
-    await api("PATCH", `/update-retell-llm/${chatLlmId}`, {
-      general_prompt: chatPrompt,
-      general_tools: AGENT_TOOLS,
-      begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
-    });
-    console.log("LLM de chat actualizado:", chatLlmId);
+    try {
+      await api("PATCH", `/update-retell-llm/${chatLlmId}`, {
+        general_prompt: chatPrompt,
+        general_tools: AGENT_TOOLS,
+        begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
+      });
+      console.log("LLM de chat actualizado:", chatLlmId);
+    } catch (err) {
+      if (!String(err.message).includes("Cannot update published LLM")) throw err;
+      const current = await api("GET", `/get-chat-agent/${state.chat_agent_id}`);
+      console.log(`LLM de chat publicado e inmutable -- creando nuevo draft a partir de la version ${current.version}...`);
+      await api("POST", `/create-agent-version/${state.chat_agent_id}`, { base_version: current.version });
+      await api("PATCH", `/update-retell-llm/${chatLlmId}`, {
+        general_prompt: chatPrompt,
+        general_tools: AGENT_TOOLS,
+        begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
+      });
+      console.log("LLM de chat actualizado en el nuevo draft:", chatLlmId);
+    }
   }
 
   let chatAgentId = state.chat_agent_id;
@@ -212,7 +241,10 @@ async function syncChat(state) {
 
   if (SHOULD_PUBLISH) {
     const agent = await api("GET", `/get-chat-agent/${chatAgentId}`);
-    await api("POST", `/publish-chat-agent-version/${chatAgentId}`, { version: agent.version });
+    // Mismo endpoint que los agentes de voz -- Retell no tiene una ruta
+    // separada de publish para chat agents, pese a lo que sugiere el índice
+    // de su documentación.
+    await api("POST", `/publish-agent-version/${chatAgentId}`, { version: agent.version });
     console.log(`Publicado: version ${agent.version} del chat agent es ahora la versión activa.`);
   } else {
     console.log("No publicado todavía (pasa --publish para activarlo).");
