@@ -117,8 +117,12 @@ const AGENT_TOOLS = [
   }),
   tool("update_appointment", "Modifica fecha/hora de una cita ya solicitada.", { appointment_id: S, requested_date: S, requested_time: S, notes: S }, ["appointment_id"]),
   tool("cancel_appointment", "Cancela una cita ya solicitada.", { appointment_id: S, reason: S }, ["appointment_id"]),
-  tool("create_reservation_pending", "Inicia una reserva (señal de 500€, 15 días) si el vehículo está disponible. Nunca la des por confirmada.", { vehicle_id: S, lead_phone: S }, ["vehicle_id"]),
-  tool("submit_payment_receipt", "Registra que el cliente dice haber enviado el justificante de pago de la señal. Sigue pendiente de validación humana.", { reservation_id: S, note: S }, ["reservation_id"]),
+  // create_reservation_pending / submit_payment_receipt quedaron FUERA de las
+  // tools del agente a propósito (decisión del usuario): la reserva y el
+  // pago de la señal de 500€ los gestiona siempre un comercial directamente,
+  // nunca el agente -- basta con create_handoff urgente. El backend sigue
+  // teniendo esas funciones por si se necesitan desde una herramienta
+  // interna del equipo más adelante, pero no se le declaran a Retell.
   tool("request_financing", "Registra una solicitud de financiación y comprueba los criterios orientativos confirmados. Nunca aprueba ni calcula cuota.", { lead_phone: S, vehicle_id: S }),
   tool("create_vehicle_valuation", "Registra una solicitud de tasación/compra de un vehículo que trae el cliente (venta a particular). Nunca tasa automáticamente.", {
     lead_phone: S, make: S, model: S, year: N, km: N, condition: S, known_issues: S, expected_price_eur: N, trade_in_vehicle_id: S,
