@@ -27,16 +27,23 @@ export function sendInternalSummary(args: { summary_text: string; structured_fie
   });
 }
 
+// Si no hay URL individual confirmada del vehículo (hoy ninguna unidad del
+// seed la tiene todavía), cae al enlace general del perfil de coches.net --
+// es un enlace real, solo que no apunta al anuncio concreto (Sección 30:
+// "enviarle también un enlace con nuestra página de venta para que pueda
+// ver todo"). Nunca inventamos una URL individual que no exista.
 export function sendVehicleLink(args: { lead_phone?: string; vehicle_id?: string; channel?: string }) {
   const vehicle = args.vehicle_id ? vehiclesSeed.find((v) => v.id === args.vehicle_id) : undefined;
-  const record = { id: crypto.randomUUID(), ...args, url: vehicle?.ref_cochesnet ?? null, delivery_status: "queued" as const, created_at: now() };
+  const url = vehicle?.ref_cochesnet ?? businessInfo.profiles.cochesnet;
+  const isIndividual = Boolean(vehicle?.ref_cochesnet);
+  const record = { id: crypto.randomUUID(), ...args, url, is_individual_url: isIndividual, delivery_status: "queued" as const, created_at: now() };
   appendToCollection("vehicle_link_sends", record);
   return envelope({
-    status: vehicle?.ref_cochesnet ? "denied" : "not_found",
+    status: "denied",
     data: record,
-    error_code: vehicle?.ref_cochesnet ? "no_destination_configured" : "vehicle_url_not_available",
+    error_code: "no_destination_configured",
     source: "cola interna, sin canal de envío confirmado",
-    conflicts: vehicle?.ref_cochesnet ? [] : ["No hay URL individual confirmada para este vehículo -- no inventar un enlace."],
+    conflicts: isIndividual ? [] : ["No hay URL individual confirmada para este vehículo -- se usa el enlace general del catálogo en su lugar, dilo así si el cliente pregunta por el enlace concreto."],
   });
 }
 

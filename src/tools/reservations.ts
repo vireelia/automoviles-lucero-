@@ -38,15 +38,13 @@ export function createReservationPending(args: { vehicle_id: string; lead_phone?
       source: "Estado interno de reservas.",
     });
   }
-  if (currentStatus === "RESERVATION_PENDING") {
-    return envelope({
-      status: "denied",
-      error_code: "reservation_already_pending",
-      data: { official_status: currentStatus },
-      source: "Estado interno de reservas.",
-      conflicts: ["Ya hay una reserva en curso para este vehículo -- prioridad de quien primero pague y envíe justificante (Sección 27)."],
-    });
-  }
+  // Confirmado en llamada real 29/09/2026: pueden existir varias reservas
+  // pendientes EN PARALELO para el mismo coche (varias personas intentando
+  // pagar a la vez) -- no se bloquea la segunda, solo se avisa. El vehículo
+  // solo pasa a RESERVED de verdad cuando el equipo confirma la primera que
+  // llega con justificante válido (confirmReservation cancela las demás
+  // pendientes de ese vehículo en ese momento).
+  const alreadyPending = currentStatus === "RESERVATION_PENDING";
 
   const amount = businessInfo.reservation.amount_eur;
   const durationDays = businessInfo.reservation.duration_days;
@@ -68,14 +66,14 @@ export function createReservationPending(args: { vehicle_id: string; lead_phone?
   appendToCollection("reservations", reservation);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
 
-  return envelope({
-    status: "ok",
-    data: reservation,
-    source: "registro interno",
-    conflicts: [
-      "Datos bancarios/Bizum para el pago de la señal NO están configurados en este sistema todavía -- deriva con create_handoff para que el equipo le pase las instrucciones de pago reales. No inventes un número de cuenta ni un enlace de pago.",
-    ],
-  });
+  const conflicts = [
+    "Datos bancarios/Bizum para el pago de la señal NO están configurados en este sistema todavía -- deriva con create_handoff para que el equipo le pase las instrucciones de pago reales. No inventes un número de cuenta ni un enlace de pago.",
+  ];
+  if (alreadyPending) {
+    conflicts.push("Ya había otra reserva en curso para este mismo vehículo -- es válido, gana quien primero pague Y envíe justificante (Sección 27). Dile al cliente que conviene darse prisa si quiere asegurarlo, sin inventar quién más lo está pidiendo.");
+  }
+
+  return envelope({ status: "ok", data: reservation, source: "registro interno", conflicts });
 }
 
 export function submitPaymentReceipt(args: { reservation_id: string; note?: string }) {
@@ -110,10 +108,27 @@ export function confirmReservation(args: { reservation_id: string; verified_by: 
   reservation.status = "confirmed";
   reservation.verified_by = args.verified_by;
   reservation.verified_at = now().toISOString();
+
+  // Si había otras reservas pendientes en paralelo para el mismo vehículo
+  // (Sección 27: puede pasar), esta es la que ganó -- las demás quedan
+  // canceladas automáticamente, nunca se confirman dos para el mismo coche.
+  const superseded: string[] = [];
+  for (const other of reservations) {
+    if (other.id !== reservation.id && other.vehicle_id === reservation.vehicle_id && (other.status === "pending_payment" || other.status === "pending_verification")) {
+      other.status = "cancelled";
+      superseded.push(other.id);
+    }
+  }
+
   writeCollection("reservations", reservations);
   setOfficialStatus(reservation.vehicle_id, "RESERVED", reservation.id);
 
-  return envelope({ status: "ok", data: reservation, source: "confirmación manual del equipo" });
+  return envelope({
+    status: "ok",
+    data: reservation,
+    source: "confirmación manual del equipo",
+    conflicts: superseded.length ? [`Otras ${superseded.length} reserva(s) pendiente(s) del mismo vehículo quedaron canceladas automáticamente.`] : [],
+  });
 }
 
 export function cancelReservation(args: { reservation_id: string; reason?: string }) {
