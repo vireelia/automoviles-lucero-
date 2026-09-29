@@ -30,6 +30,11 @@ export function createPurchaseRequest(args: {
   return envelope({ status: "ok", data: request, source: "registro interno", source_updated_at: now() });
 }
 
+// create_vehicle_valuation es el mismo flujo (Sección 34/43 usa este nombre
+// para el tool de Retell) -- misma tabla purchase_requests, sin tasación
+// automática nunca.
+export const createVehicleValuation = createPurchaseRequest;
+
 // create_service_request: registra un trámite o incidencia (Sección 12/14).
 // No incluye precio -- el importe de trámites sigue sin aprobar (23/09/2026).
 export function createServiceRequest(args: { lead_phone?: string; procedure_type?: string; notes?: string }) {

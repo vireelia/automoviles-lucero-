@@ -5,7 +5,7 @@ export function getBusinessInfo() {
   return envelope({
     status: "ok",
     data: businessInfo,
-    source: "Especificación interna 22/09/2026, sin validar por el dueño en la mayoría de campos.",
-    source_updated_at: "2026-09-22",
+    source: "Especificación maestra de producción confirmada por el responsable del negocio, 29/09/2026. Campos individuales llevan su propio validation_status.",
+    source_updated_at: "2026-09-29",
   });
 }

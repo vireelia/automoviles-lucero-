@@ -1,11 +1,13 @@
 import express from "express";
 import cors from "cors";
 import { getBusinessInfo } from "./tools/business.js";
-import { searchVehicles, getVehicle } from "./tools/vehicles.js";
-import { upsertLead, updateContactPreferences } from "./tools/leads.js";
-import { createPurchaseRequest, createServiceRequest, createHandoff } from "./tools/requests.js";
-import { getAppointmentSlots, createAppointment } from "./tools/appointments.js";
-import { sendInternalSummary, sendVehicleDetails } from "./tools/delivery.js";
+import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
+import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups } from "./tools/leads.js";
+import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
+import { getAppointmentSlots, createAppointment, updateAppointment, cancelAppointment } from "./tools/appointments.js";
+import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
+import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation } from "./tools/reservations.js";
+import { requestFinancing } from "./tools/financing.js";
 
 const app = express();
 app.use(cors());
@@ -32,18 +34,59 @@ function route(fn: (args: any) => unknown) {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// -- Tools expuestas a los agentes de voz/chat de Retell (Sección 43) --
 app.post("/tools/get_business_info", route(() => getBusinessInfo()));
 app.post("/tools/search_vehicles", route((a) => searchVehicles(a)));
+// Alias con el nombre exacto de la Sección 43 de la especificación maestra
+// (search_vehicle, create_lead, update_lead) -- mismo backend, sin duplicar
+// lógica, solo para que el nombre de tool declarado a Retell coincida con
+// el encargo confirmado.
+app.post("/tools/search_vehicle", route((a) => searchVehicles(a)));
+app.post("/tools/create_lead", route((a) => upsertLead(a)));
+app.post("/tools/update_lead", route((a) => upsertLead(a)));
 app.post("/tools/get_vehicle", route((a) => getVehicle(a)));
+app.post("/tools/get_vehicle_status", route((a) => getVehicleStatus(a)));
+app.post("/tools/find_similar_vehicles", route((a) => findSimilarVehicles(a)));
 app.post("/tools/upsert_lead", route((a) => upsertLead(a)));
 app.post("/tools/update_contact_preferences", route((a) => updateContactPreferences(a)));
+app.post("/tools/get_customer_history", route((a) => getCustomerHistory(a)));
+app.post("/tools/score_lead", route((a) => scoreLead(a)));
+app.post("/tools/create_followup", route((a) => createFollowup(a)));
+app.post("/tools/stop_followups", route((a) => stopFollowups(a)));
 app.post("/tools/create_purchase_request", route((a) => createPurchaseRequest(a)));
+app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(a)));
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
 app.post("/tools/create_handoff", route((a) => createHandoff(a)));
 app.post("/tools/get_appointment_slots", route(() => getAppointmentSlots()));
 app.post("/tools/create_appointment", route((a) => createAppointment(a)));
+app.post("/tools/update_appointment", route((a) => updateAppointment(a)));
+app.post("/tools/cancel_appointment", route((a) => cancelAppointment(a)));
+app.post("/tools/create_reservation_pending", route((a) => createReservationPending(a)));
+app.post("/tools/submit_payment_receipt", route((a) => submitPaymentReceipt(a)));
+app.post("/tools/request_financing", route((a) => requestFinancing(a)));
 app.post("/tools/send_internal_summary", route((a) => sendInternalSummary(a)));
-app.post("/tools/send_vehicle_details", route((a) => sendVehicleDetails(a)));
+app.post("/tools/send_vehicle_link", route((a) => sendVehicleLink(a)));
+app.post("/tools/send_location", route(() => sendLocation()));
+app.post("/tools/send_whatsapp", route((a) => sendWhatsapp(a)));
+app.post("/tools/notify_salesperson", route((a) => notifySalesperson(a)));
+app.post("/tools/save_conversation", route((a) => saveConversation(a)));
+app.post("/tools/create_conversation_summary", route((a) => createConversationSummary(a)));
+app.post("/tools/sync_inventory", route(() => syncInventory()));
+
+// -- Rutas administrativas: SOLO para el equipo humano (Ramón/José/Virelia),
+// nunca declaradas como tool de Retell. confirm/cancel de una reserva
+// requieren validación humana real del pago (Sección 26) -- por eso no
+// están al alcance del agente. Protegidas por un token simple compartido.
+function requireAdminToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const token = req.header("x-admin-token");
+  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  next();
+}
+app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
+app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 
 const port = Number(process.env.PORT ?? 8080);
 app.listen(port, () => console.log(`Automóviles Lucero backend escuchando en :${port}`));
