@@ -16,14 +16,26 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Retell envía cada llamada de función personalizada como POST con el
-// cuerpo de argumentos directamente (sin envolver en "args"), y también
-// puede mandar metadatos de la llamada en cabeceras -- no dependemos de
-// eso, cada handler solo usa lo que declara en su JSON schema de Retell.
+// BUG REAL encontrado 30/09/2026 en producción: el comentario de abajo
+// decía que Retell manda los argumentos sueltos en la raíz del body -- FALSO.
+// Por defecto Retell envuelve cada llamada de tool como
+// {"name": "...", "args": {...}, "call": {...}} (ver documentación real de
+// custom-function), así que todas las tools estaban leyendo un objeto vacío
+// como argumentos desde que se desplegaron -- por eso search_vehicle nunca
+// filtraba de verdad (devolvía siempre las 38 unidades sin filtrar, y solo
+// "acertaba" cuando el resultado correcto caía entre los primeros del orden
+// natural del catálogo). Verificado en vivo: mismo make/model exacto vía
+// curl directo SÍ filtraba (1 resultado), vía Retell daba 38 -- la única
+// diferencia real era este envoltorio. Se acepta cualquiera de las dos
+// formas (envuelta o plana) para no depender de que Retell no cambie el
+// comportamiento por defecto, y para que las llamadas directas (admin,
+// scripts de prueba) sigan funcionando igual que antes.
 function route(fn: (args: any) => unknown) {
   return (req: express.Request, res: express.Response) => {
     try {
-      res.json(fn(req.body ?? {}));
+      const body = req.body ?? {};
+      const args = body && typeof body === "object" && "args" in body && body.args && typeof body.args === "object" ? body.args : body;
+      res.json(fn(args));
     } catch (err) {
       res.status(200).json({
         status: "error",
