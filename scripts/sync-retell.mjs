@@ -84,10 +84,10 @@ function tool(name, description, properties, required = []) {
 // defensivas ya probadas en producción: get_business_info/get_appointment_slots
 // evitan que el agente invente datos cuando no hay fuente conectada).
 // Quedan fuera deliberadamente: confirm_reservation/cancel_reservation
-// (Sección 26: exigen validación humana, no son tool del agente),
-// sync_inventory (Sección 46: automatización, no una acción de conversación)
-// y transfer_call (Sección 2: número de transferencia de José aún sin
-// confirmar -- usar create_handoff hasta entonces).
+// (Sección 26: exigen validación humana, no son tool del agente) y
+// sync_inventory (Sección 46: automatización, no una acción de conversación).
+// transfer_call SÍ está activo (ver transferTools en syncVoice) -- solo en
+// voz, con Ramón y José ya confirmados.
 const AGENT_TOOLS = [
   tool("get_business_info", "Devuelve políticas confirmadas del negocio (horarios, financiación, garantía, reserva, ubicación, WhatsApp).", {}, []),
   tool("search_vehicle", "Busca vehículos por texto libre, marca, modelo, combustible o rango de precio/km.", {
@@ -148,8 +148,37 @@ async function syncVoice(state) {
   const llmId = state.voice_llm_id ?? "llm_1160238e920c112c159f5a6768db";
   const agentId = state.voice_agent_id ?? "agent_283e9ab2882dc0e65b85db9945";
 
+  // Transferencia real de llamada, SOLO en voz (no aplica a chat). Orden
+  // confirmado por el usuario 30/09/2026: Ramón primero, José si no
+  // contesta -- son dos tools de transfer_call separadas porque Retell no
+  // encadena varios destinos en una sola; el prompt decide cuál probar.
+  function warmTransferOption(name) {
+    return {
+      type: "warm_transfer",
+      agent_detection_timeout_ms: 20000,
+      public_handoff_option: { type: "static_message", message: `Un momento, te paso con ${name}.` },
+    };
+  }
+  const transferTools = [
+    {
+      type: "transfer_call",
+      name: "transfer_to_ramon",
+      description: "Transfiere la llamada a Ramón (responsable principal). Probar siempre primero para cualquier transferencia a una persona.",
+      transfer_destination: { type: "predefined", number: "+34622177052" },
+      transfer_option: warmTransferOption("Ramón"),
+    },
+    {
+      type: "transfer_call",
+      name: "transfer_to_jose",
+      description: "Transfiere la llamada a José (hermano de Ramón). Usar SOLO si ya se intentó transfer_to_ramon y no contestó.",
+      transfer_destination: { type: "predefined", number: "+34624807069" },
+      transfer_option: warmTransferOption("José"),
+    },
+  ];
+
   const generalTools = [
     { type: "end_call", name: "end_call", description: "Termina la llamada cuando la conversación ha concluido de forma natural.", speak_after_execution: true },
+    ...transferTools,
     ...AGENT_TOOLS,
   ];
 

@@ -36,9 +36,10 @@ export const businessInfo = {
     { number: "622188213", note: "Publicado en compramostufurgon.com (misma dirección) -- sin confirmar relación exacta.", validation_status: "unconfirmed" },
   ],
   responsables: {
-    ramon: { role: "Responsable. Gestiona financiación internamente. Confirma reservas/ventas.", transfer_number: null, validation_status: "name_confirmed_number_pending" },
+    ramon: { role: "Responsable. Gestiona financiación internamente. Confirma reservas/ventas.", transfer_number: "+34622177052", validation_status: "owner_confirmed" },
     jose: { role: "Responsable (hermano de Ramón).", transfer_number: "+34624807069", validation_status: "owner_confirmed" },
-    note: "Número completo confirmado 30/09/2026. transfer_call en vivo ya activado hacia este número para el agente de voz.",
+    transfer_priority: "Ramón primero; si no contesta, José.",
+    note: "Ambos números confirmados 30/09/2026. transfer_call en vivo activado en el agente de voz con este orden.",
   },
   hours: {
     weekdays: { visits: ["09:30-14:00", "16:30-19:00"] },
