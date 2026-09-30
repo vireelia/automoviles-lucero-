@@ -207,6 +207,16 @@ async function syncVoice(state) {
     console.log("LLM de voz actualizado en el nuevo draft:", llmId);
   }
 
+  // Pronunciación real: Cartesia decía "Carabangel" en vez de "Carabanchel".
+  // pronunciation_dictionary vive en el objeto AGENTE (no en el LLM) -- para
+  // esta fecha, el draft ya está desbloqueado por el bloque de arriba, así
+  // que esto debería aplicar directo. Sin garantía de que Cartesia soporte
+  // IPA -- solo se confirma probando con audio real.
+  await api("PATCH", `/update-agent/${agentId}`, {
+    pronunciation_dictionary: [{ word: "Carabanchel", alphabet: "ipa", phoneme: "kaɾaβanˈtʃel" }],
+  });
+  console.log("Diccionario de pronunciación actualizado (Carabanchel).");
+
   const agent = await api("GET", `/get-agent/${agentId}`);
   console.log(`Draft del agente de voz ahora en version ${agent.version} (is_published=${agent.is_published})`);
 
