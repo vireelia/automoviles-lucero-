@@ -306,19 +306,22 @@ async function syncChat(state) {
     console.log("Chat agent ya existente:", chatAgentId, "-- LLM actualizado, no hace falta tocar el agente.");
   }
 
+  // Endpoint distinto al de voz (/update-chat-agent, no /update-agent) y
+  // campo distinto (post_chat_analysis_data, no post_call_analysis_data) --
+  // confirmado contra la documentación real, no adivinado.
   try {
-    await api("PATCH", `/update-agent/${chatAgentId}`, {
+    await api("PATCH", `/update-chat-agent/${chatAgentId}`, {
       webhook_url: WEBHOOK_URL,
-      post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
+      post_chat_analysis_data: POST_CALL_ANALYSIS_DATA,
     });
     console.log("Webhook + análisis post-chat actualizados.");
   } catch (err) {
     if (!String(err.message).includes("Cannot update published agent")) throw err;
     const current = await api("GET", `/get-chat-agent/${chatAgentId}`);
     await api("POST", `/create-agent-version/${chatAgentId}`, { base_version: current.version });
-    await api("PATCH", `/update-agent/${chatAgentId}`, {
+    await api("PATCH", `/update-chat-agent/${chatAgentId}`, {
       webhook_url: WEBHOOK_URL,
-      post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
+      post_chat_analysis_data: POST_CALL_ANALYSIS_DATA,
     });
     console.log("Webhook + análisis post-chat actualizados en nuevo draft.");
   }
