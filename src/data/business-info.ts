@@ -37,8 +37,8 @@ export const businessInfo = {
   ],
   responsables: {
     ramon: { role: "Responsable. Gestiona financiación internamente. Confirma reservas/ventas.", transfer_number: null, validation_status: "name_confirmed_number_pending" },
-    jose: { role: "Responsable (hermano de Ramón).", transfer_number_partial: "624...", validation_status: "partial_number_pending" },
-    note: "En llamada real 29/09/2026 Ramón empezó a dar el número de José ('624...') pero quedó incompleto -- Eliud lo pedirá directamente fuera de esta llamada. NO completar el número inventando dígitos. Hasta tener el número completo, no usar transfer_call en vivo -- registrar con create_handoff.",
+    jose: { role: "Responsable (hermano de Ramón).", transfer_number: "+34624807069", validation_status: "owner_confirmed" },
+    note: "Número completo confirmado 30/09/2026. transfer_call en vivo ya activado hacia este número para el agente de voz.",
   },
   hours: {
     weekdays: { visits: ["09:30-14:00", "16:30-19:00"] },

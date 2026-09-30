@@ -157,7 +157,7 @@ async function syncVoice(state) {
     await api("PATCH", `/update-retell-llm/${llmId}`, {
       general_prompt: voicePrompt,
       general_tools: generalTools,
-      begin_message: "Hola, has llamado a Automóviles Lucero. Soy el asistente virtual de inteligencia artificial. ¿En qué puedo ayudarte?",
+      begin_message: "Hola, has llamado a Automóviles Lucero. Soy Miguel, el asistente de inteligencia artificial. ¿En qué puedo ayudarte?",
     });
     console.log("LLM de voz actualizado:", llmId);
   } catch (err) {
@@ -171,7 +171,7 @@ async function syncVoice(state) {
     await api("PATCH", `/update-retell-llm/${llmId}`, {
       general_prompt: voicePrompt,
       general_tools: generalTools,
-      begin_message: "Hola, has llamado a Automóviles Lucero. Soy el asistente virtual de inteligencia artificial. ¿En qué puedo ayudarte?",
+      begin_message: "Hola, has llamado a Automóviles Lucero. Soy Miguel, el asistente de inteligencia artificial. ¿En qué puedo ayudarte?",
     });
     console.log("LLM de voz actualizado en el nuevo draft:", llmId);
   }
@@ -203,7 +203,7 @@ async function syncChat(state) {
       model_temperature: 0.3,
       general_prompt: chatPrompt,
       general_tools: AGENT_TOOLS,
-      begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
+      begin_message: "Hola, soy Miguel, el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
     });
     chatLlmId = llm.llm_id;
     console.log("LLM de chat creado:", chatLlmId);
@@ -212,7 +212,7 @@ async function syncChat(state) {
       await api("PATCH", `/update-retell-llm/${chatLlmId}`, {
         general_prompt: chatPrompt,
         general_tools: AGENT_TOOLS,
-        begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
+        begin_message: "Hola, soy Miguel, el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
       });
       console.log("LLM de chat actualizado:", chatLlmId);
     } catch (err) {
@@ -223,7 +223,7 @@ async function syncChat(state) {
       await api("PATCH", `/update-retell-llm/${chatLlmId}`, {
         general_prompt: chatPrompt,
         general_tools: AGENT_TOOLS,
-        begin_message: "Hola, soy el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
+        begin_message: "Hola, soy Miguel, el asistente de inteligencia artificial de Automóviles Lucero. ¿En qué puedo ayudarte?",
       });
       console.log("LLM de chat actualizado en el nuevo draft:", chatLlmId);
     }
