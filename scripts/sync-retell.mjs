@@ -93,7 +93,14 @@ function tool(name, description, properties, required = []) {
     name,
     description,
     url: `${TOOLS_BASE}/${name}`,
-    speak_during_execution: true,
+    // speak_during_execution en false a propósito: con él en true, el modelo
+    // tiende a narrar literalmente la acción ("Buscando Audi Q3...",
+    // "Registrando interés...") aunque el prompt lo prohíba explícitamente --
+    // pasó dos veces. El backend es JSON local, normalmente responde en
+    // milisegundos, así que no hace falta ningún aviso de espera para la
+    // mayoría de tools -- la instrucción de "dame un segundo" en el prompt
+    // sigue existiendo para el caso raro de que algo tarde de verdad.
+    speak_during_execution: false,
     speak_after_execution: true,
     timeout_ms: 8000,
     parameters: { type: "object", properties, required },
