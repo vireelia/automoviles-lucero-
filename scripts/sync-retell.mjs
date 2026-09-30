@@ -21,7 +21,27 @@ const API_KEY = process.env.RETELL_API_KEY;
 if (!API_KEY) throw new Error("Falta RETELL_API_KEY (usa: node --env-file=.env scripts/sync-retell.mjs)");
 const BASE = "https://api.retellai.com";
 const TOOLS_BASE = "https://virelia-hub-lucero.lzc0bh.easypanel.host/tools";
+const WEBHOOK_URL = "https://virelia-hub-lucero.lzc0bh.easypanel.host/webhooks/retell";
 const SHOULD_PUBLISH = process.argv.includes("--publish");
+
+// Extracción automática post-llamada/chat -- para el panel interno de
+// Ramón/José, sin depender de que el agente lo diga en la conversación.
+const POST_CALL_ANALYSIS_DATA = [
+  { type: "string", name: "customer_name", description: "Nombre del cliente, si lo dio." },
+  { type: "string", name: "vehicle_of_interest", description: "Marca y modelo del vehículo por el que preguntó, si quedó claro." },
+  {
+    type: "enum", name: "intent", description: "Intención principal de la conversación.",
+    choices: ["comprar", "vender_o_tasar", "tramite", "consulta_general", "reclamacion", "otro"],
+  },
+  {
+    type: "enum", name: "outcome", description: "Resultado al terminar la conversación.",
+    choices: ["cita_solicitada", "reserva_derivada_a_equipo", "escalado_a_persona", "sin_avance"],
+  },
+  {
+    type: "enum", name: "lead_temperature", description: "Temperatura del lead según la conversación (coincide con score_lead si se usó).",
+    choices: ["COLD", "WARM", "HOT"],
+  },
+];
 
 const STATE_PATH = path.join(ROOT, ".retell-state.json");
 function loadState() {
@@ -214,8 +234,10 @@ async function syncVoice(state) {
   // IPA -- solo se confirma probando con audio real.
   await api("PATCH", `/update-agent/${agentId}`, {
     pronunciation_dictionary: [{ word: "Carabanchel", alphabet: "ipa", phoneme: "kaɾaβanˈtʃel" }],
+    webhook_url: WEBHOOK_URL,
+    post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
   });
-  console.log("Diccionario de pronunciación actualizado (Carabanchel).");
+  console.log("Diccionario de pronunciación + webhook + análisis post-llamada actualizados.");
 
   const agent = await api("GET", `/get-agent/${agentId}`);
   console.log(`Draft del agente de voz ahora en version ${agent.version} (is_published=${agent.is_published})`);
@@ -282,6 +304,23 @@ async function syncChat(state) {
     console.log("Chat agent creado:", chatAgentId, "(version", agent.version, ", is_published:", agent.is_published, ")");
   } else {
     console.log("Chat agent ya existente:", chatAgentId, "-- LLM actualizado, no hace falta tocar el agente.");
+  }
+
+  try {
+    await api("PATCH", `/update-agent/${chatAgentId}`, {
+      webhook_url: WEBHOOK_URL,
+      post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
+    });
+    console.log("Webhook + análisis post-chat actualizados.");
+  } catch (err) {
+    if (!String(err.message).includes("Cannot update published agent")) throw err;
+    const current = await api("GET", `/get-chat-agent/${chatAgentId}`);
+    await api("POST", `/create-agent-version/${chatAgentId}`, { base_version: current.version });
+    await api("PATCH", `/update-agent/${chatAgentId}`, {
+      webhook_url: WEBHOOK_URL,
+      post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
+    });
+    console.log("Webhook + análisis post-chat actualizados en nuevo draft.");
   }
 
   if (SHOULD_PUBLISH) {

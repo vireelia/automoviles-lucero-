@@ -8,6 +8,9 @@ import { getAppointmentSlots, createAppointment, updateAppointment, cancelAppoin
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
 import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation } from "./tools/reservations.js";
 import { requestFinancing } from "./tools/financing.js";
+import { handleRetellWebhook } from "./tools/webhooks.js";
+import { renderPanel } from "./panel.js";
+import { startScheduler } from "./scheduler.js";
 
 const app = express();
 app.use(cors());
@@ -88,5 +91,40 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 
+// Webhook de Retell (call_analyzed / chat_analyzed) -- guarda el análisis
+// automático configurado en el agente. No requiere auth propia: Retell no
+// manda nuestro ADMIN_TOKEN; si hace falta verificar la firma más adelante,
+// añadir aquí (Sección "secure-webhook" de su documentación).
+app.post("/webhooks/retell", (req, res) => {
+  try {
+    res.json(handleRetellWebhook(req.body ?? {}));
+  } catch (err) {
+    console.error("[webhook] error:", err);
+    res.status(200).json({ received: false });
+  }
+});
+
+// Panel interno de solo lectura para Ramón/José -- Basic Auth con el mismo
+// ADMIN_TOKEN (usuario "lucero", contraseña = ADMIN_TOKEN). No es el CRM
+// real, es una ventana sobre lo que el backend ya guarda.
+function requireBasicAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const header = req.header("authorization");
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected) {
+    res.status(503).send("ADMIN_TOKEN no configurado");
+    return;
+  }
+  if (header?.startsWith("Basic ")) {
+    const [, password] = Buffer.from(header.slice(6), "base64").toString("utf8").split(":");
+    if (password === expected) return next();
+  }
+  res.set("WWW-Authenticate", 'Basic realm="Panel Automóviles Lucero"');
+  res.status(401).send("Autenticación requerida");
+}
+app.get("/panel", requireBasicAuth, (_req, res) => res.type("html").send(renderPanel()));
+
 const port = Number(process.env.PORT ?? 8080);
-app.listen(port, () => console.log(`Automóviles Lucero backend escuchando en :${port}`));
+app.listen(port, () => {
+  console.log(`Automóviles Lucero backend escuchando en :${port}`);
+  startScheduler();
+});
