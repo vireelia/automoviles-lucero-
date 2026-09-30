@@ -90,8 +90,10 @@ function tool(name, description, properties, required = []) {
 // voz, con Ramón y José ya confirmados.
 const AGENT_TOOLS = [
   tool("get_business_info", "Devuelve políticas confirmadas del negocio (horarios, financiación, garantía, reserva, ubicación, WhatsApp).", {}, []),
-  tool("search_vehicle", "Busca vehículos por texto libre, marca, modelo, combustible o rango de precio/km.", {
-    query: S, make: S, model: S, fuel: S, max_price_eur: N, min_price_eur: N, max_km: N, page: N,
+  tool("search_vehicle", "Busca vehículos por texto libre, marca, modelo, tipo de carrocería, combustible o rango de precio/km.", {
+    query: S, make: S, model: S,
+    category: { type: "string", enum: ["SUV", "Berlina", "Compacto", "Monovolumen", "Familiar", "Urbano", "Furgoneta"] },
+    fuel: S, max_price_eur: N, min_price_eur: N, max_km: N, page: N,
   }),
   tool("get_vehicle", "Devuelve la ficha completa de una unidad por su id interno.", { id: S }, ["id"]),
   tool("get_vehicle_status", "Consulta el estado oficial interno de un vehículo (AVAILABLE/RESERVATION_PENDING/RESERVED/SOLD).", { id: S }, ["id"]),

@@ -15,6 +15,12 @@ export type Vehicle = {
   id: string;
   ref_cochesnet: string | null;
   ref_wallapop: string | null;
+  // Carrocería real del modelo (SUV/Berlina/Compacto/Monovolumen/Familiar/
+  // Urbano/Furgoneta) -- dato objetivo y verificable del modelo (no de esta
+  // unidad concreta), añadido 30/09/2026 porque search_vehicle no podía
+  // filtrar por tipo de carrocería y ofrecía sedanes/familiares como si
+  // fueran SUV cuando el cliente pedía "SUV" explícitamente.
+  category: "SUV" | "Berlina" | "Compacto" | "Monovolumen" | "Familiar" | "Urbano" | "Furgoneta";
   make: string;
   model: string;
   version: string;
@@ -39,6 +45,7 @@ const SOURCE = "coches.net (observado 22/09/2026, sin validar)";
 export const vehiclesSeed: Vehicle[] = [
   {
     id: "lucero-001", ref_cochesnet: null, ref_wallapop: null,
+    category: "Berlina",
     make: "Audi", model: "A7 Sportback", version: "50 TDI quattro",
     year: 2019, year_note: null, km: 200000, fuel: "Diésel", power_cv: 286, price_eur: 27990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -48,6 +55,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-002", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Audi", model: "Q3", version: "2.0 TDI quattro S tronic Advance",
     year: 2012, year_note: null, km: 290000, fuel: "Diésel", power_cv: 177, price_eur: 8490,
     stock_status: "unknown", validation_status: "conflict",
@@ -57,6 +65,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-003", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Audi", model: "Q5", version: "2.0 TDI quattro",
     year: 2009, year_note: null, km: 320000, fuel: "Diésel", power_cv: 170, price_eur: 7490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -65,6 +74,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-004", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Audi", model: "SQ7", version: "4.0 TDI quattro tiptronic",
     year: 2017, year_note: null, km: 130000, fuel: "Diésel", power_cv: 435, price_eur: 41990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -74,6 +84,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-005", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "BMW", model: "Serie 1", version: "120d",
     year: 2006, year_note: null, km: 260000, fuel: "Diésel", power_cv: 163, price_eur: 3900,
     stock_status: "unknown", validation_status: "conflict",
@@ -83,6 +94,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-006", ref_cochesnet: null, ref_wallapop: null,
+    category: "Berlina",
     make: "BMW", model: "Serie 3", version: "330d xDrive",
     year: 2010, year_note: null, km: 290000, fuel: "Diésel", power_cv: 245, price_eur: 8890,
     stock_status: "unknown", validation_status: "observed_public",
@@ -91,6 +103,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-007", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Ford", model: "S-MAX", version: "ST-Line automático",
     year: 2021, year_note: null, km: 320000, fuel: "Diésel", power_cv: 190, price_eur: 11900,
     stock_status: "unknown", validation_status: "observed_public",
@@ -99,6 +112,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-008", ref_cochesnet: null, ref_wallapop: null,
+    category: "Berlina",
     make: "Maserati", model: "Ghibli", version: "S Q4 3.0 V6",
     year: 2016, year_note: null, km: 177000, fuel: "Gasolina", power_cv: 410, price_eur: 29990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -107,6 +121,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-009", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Mercedes-Benz", model: "Clase A", version: "A150",
     year: 2009, year_note: null, km: 310000, fuel: "Gasolina", power_cv: 95, price_eur: 2990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -115,6 +130,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-010", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Mercedes-Benz", model: "Clase B", version: "B200 d Urban",
     year: 2016, year_note: null, km: 270000, fuel: "Diésel", power_cv: 136, price_eur: 9990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -123,6 +139,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-011", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Mercedes-Benz", model: "Clase R", version: "R320 CDI 4MATIC",
     year: 2006, year_note: null, km: 516000, fuel: "Diésel", power_cv: 224, price_eur: 9490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -131,6 +148,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-012", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Mercedes-Benz", model: "Viano", version: "3.0 CDI Trend Larga",
     year: 2012, year_note: null, km: 600000, fuel: "Diésel", power_cv: 224, price_eur: 10900,
     stock_status: "unknown", validation_status: "observed_public",
@@ -139,6 +157,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-013", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Mitsubishi", model: "Outlander", version: "2.0 DID Kaiteki",
     year: 2007, year_note: null, km: 294000, fuel: "Diésel", power_cv: 140, price_eur: 3990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -147,6 +166,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-014", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Opel", model: "Mokka", version: "1.6 CDTi Excellence",
     year: 2016, year_note: null, km: 300000, fuel: "Diésel", power_cv: 136, price_eur: 4490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -155,6 +175,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-015", ref_cochesnet: null, ref_wallapop: null,
+    category: "Familiar",
     make: "Peugeot", model: "308 SW", version: "Allure BlueHDi EAT8",
     year: 2023, year_note: null, km: 200000, fuel: "Diésel", power_cv: 130, price_eur: 8990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -163,6 +184,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-016", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Peugeot", model: "5008", version: "Allure 1.6 BlueHDi EAT6",
     year: 2016, year_note: null, km: 280000, fuel: "Diésel", power_cv: 120, price_eur: 4990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -172,6 +194,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-017", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Porsche", model: "Cayenne", version: "4.1 S Diesel Tiptronic",
     year: 2013, year_note: null, km: 270000, fuel: "Diésel", power_cv: 382, price_eur: 24890,
     stock_status: "unknown", validation_status: "conflict",
@@ -181,6 +204,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-018", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Renault", model: "Grand Scénic", version: "Dynamique dCi EDC",
     year: null, year_note: "Año en conflicto: 2013 en el campo de año, 2012 en el título, 2011 en la URL. Pendiente de documentación.",
     km: 320000, fuel: "Diésel", power_cv: 110, price_eur: 3490,
@@ -191,6 +215,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-019", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Renault", model: "Scénic", version: "Zen Energy dCi",
     year: 2018, year_note: null, km: 259000, fuel: "Diésel", power_cv: 110, price_eur: 7990,
     stock_status: "unknown", validation_status: "conflict",
@@ -200,6 +225,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-020", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Seat", model: "Altea XL", version: "1.6 TDI ITech",
     year: 2014, year_note: null, km: 248000, fuel: "Diésel", power_cv: 105, price_eur: 4490,
     stock_status: "unknown", validation_status: "conflict",
@@ -209,6 +235,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-021", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Seat", model: "Ibiza", version: "1.9 TDI Sport",
     year: 2008, year_note: null, km: 290000, fuel: "Diésel", power_cv: 105, price_eur: 3490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -217,6 +244,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-022", ref_cochesnet: null, ref_wallapop: null,
+    category: "Urbano",
     make: "Toyota", model: "Aygo", version: "1.4D Blue",
     year: 2009, year_note: null, km: 290000, fuel: "Diésel", power_cv: 54, price_eur: 2490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -225,6 +253,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-023", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Toyota", model: "Yaris", version: "1.5 Hybrid Active",
     year: 2017, year_note: null, km: 229000, fuel: "Híbrido", power_cv: 100, price_eur: 8490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -233,6 +262,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-024", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Volkswagen", model: "Golf VI", version: "2.0 TDI Sport",
     year: 2009, year_note: null, km: 350000, fuel: "Diésel", power_cv: 140, price_eur: 3900,
     stock_status: "unknown", validation_status: "observed_public",
@@ -241,6 +271,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-025", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Volkswagen", model: "Golf VI", version: "GTD",
     year: 2009, year_note: null, km: 340000, fuel: "Diésel", power_cv: 170, price_eur: 4990,
     stock_status: "unknown", validation_status: "conflict",
@@ -250,6 +281,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-026", ref_cochesnet: null, ref_wallapop: null,
+    category: "Familiar",
     make: "Volkswagen", model: "Passat Variant", version: "Business DSG",
     year: 2022, year_note: null, km: 197000, fuel: "Diésel", power_cv: 122, price_eur: 11990,
     stock_status: "unknown", validation_status: "conflict",
@@ -263,6 +295,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-027", ref_cochesnet: null, ref_wallapop: null,
+    category: "Compacto",
     make: "Volkswagen", model: "Polo", version: "1.4 Advance",
     year: 2012, year_note: null, km: 210000, fuel: "Gasolina", power_cv: 85, price_eur: 4990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -271,6 +304,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-028", ref_cochesnet: null, ref_wallapop: null,
+    category: "SUV",
     make: "Volkswagen", model: "Tiguan", version: "R-Line DSG 4M",
     year: 2010, year_note: null, km: 350000, fuel: "Diésel", power_cv: 140, price_eur: 6490,
     stock_status: "unknown", validation_status: "conflict",
@@ -280,6 +314,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-029", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Fiat", model: "Doblò Panorama", version: "Dynamic 1.6 Multijet",
     year: 2012, year_note: null, km: 270000, fuel: "Diésel", power_cv: 90, price_eur: 1990,
     stock_status: "not_roadworthy", validation_status: "conflict",
@@ -290,6 +325,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-030", ref_cochesnet: null, ref_wallapop: null,
+    category: "Monovolumen",
     make: "Fiat", model: "Doblò Panorama", version: "Lounge 1.6 Multijet",
     year: 2016, year_note: null, km: 290000, fuel: "Diésel", power_cv: 105, price_eur: 5990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -299,6 +335,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-031", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Fiat", model: "Talento", version: "M1 SX Corto 1.6 EcoJet",
     year: 2017, year_note: null, km: 230000, fuel: "Diésel", power_cv: 145, price_eur: 14990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -307,6 +344,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-032", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Ford", model: "Transit", version: "350 L3H2",
     year: 2024, year_note: null, km: 237000, fuel: "Diésel", power_cv: 130, price_eur: 13990,
     stock_status: "unknown", validation_status: "conflict",
@@ -316,6 +354,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-033", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Iveco", model: "Daily", version: "2.3 TD 35C12",
     year: 2021, year_note: null, km: 240000, fuel: "Diésel", power_cv: 116, price_eur: 13490,
     stock_status: "unknown", validation_status: "observed_public",
@@ -324,6 +363,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-034", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Peugeot", model: "Boxer", version: "335 L3",
     year: 2022, year_note: null, km: 190000, fuel: "Diésel", power_cv: 140, price_eur: 26900,
     stock_status: "unknown", validation_status: "observed_public",
@@ -333,6 +373,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-035", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Peugeot", model: "Expert", version: "Asphalt 1.5 BlueHDi Standard",
     year: 2020, year_note: null, km: 240000, fuel: "Diésel", power_cv: 120, price_eur: 8990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -342,6 +383,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-036", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Peugeot", model: "Expert", version: "BlueHDi Long",
     year: 2023, year_note: null, km: 200000, fuel: "Diésel", power_cv: 102, price_eur: 9990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -351,6 +393,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-037", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Peugeot", model: "Expert", version: "Pro 1.5 BlueHDi Long",
     year: 2022, year_note: null, km: 220000, fuel: "Diésel", power_cv: 102, price_eur: 9990,
     stock_status: "unknown", validation_status: "observed_public",
@@ -360,6 +403,7 @@ export const vehiclesSeed: Vehicle[] = [
   },
   {
     id: "lucero-038", ref_cochesnet: null, ref_wallapop: null,
+    category: "Furgoneta",
     make: "Volkswagen", model: "Transporter", version: "Caja Plataforma Doble Cabina",
     year: 2014, year_note: null, km: 428000, fuel: "Diésel", power_cv: 114, price_eur: 7990,
     stock_status: "unknown", validation_status: "observed_public",

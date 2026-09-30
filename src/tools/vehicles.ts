@@ -13,6 +13,7 @@ export function searchVehicles(args: {
   query?: string;
   make?: string;
   model?: string;
+  category?: string;
   max_price_eur?: number;
   min_price_eur?: number;
   max_km?: number;
@@ -29,6 +30,11 @@ export function searchVehicles(args: {
   }
   if (args.make) results = results.filter((v) => normalize(v.make) === normalize(args.make!));
   if (args.model) results = results.filter((v) => normalize(v.model).includes(normalize(args.model!)));
+  // category (SUV/Berlina/Compacto/Monovolumen/Familiar/Urbano/Furgoneta) es
+  // un filtro real por tipo de carrocería -- antes no existía y el agente
+  // podía ofrecer un Serie 3 o un Clase B como si fueran SUV al no tener
+  // forma de comprobarlo.
+  if (args.category) results = results.filter((v) => normalize(v.category) === normalize(args.category!));
   if (args.fuel) results = results.filter((v) => normalize(v.fuel) === normalize(args.fuel!));
   if (typeof args.max_price_eur === "number") results = results.filter((v) => v.price_eur <= args.max_price_eur!);
   if (typeof args.min_price_eur === "number") results = results.filter((v) => v.price_eur >= args.min_price_eur!);
@@ -116,7 +122,11 @@ export function findSimilarVehicles(args: { vehicle_id: string }) {
   if (!base) return envelope({ status: "not_found", error_code: "vehicle_id_not_found" });
 
   const range = businessInfo.similar_vehicles_match;
-  const sameCategory = (v: Vehicle) => v.make === base.make || v.model === base.model;
+  // Antes usaba make/model como proxy de "categoría" (mal: un BMW Serie 3
+  // nunca es similar a un Tiguan solo por no compartir marca, y sí lo sería
+  // un Tiguan y un Q3 aunque sean marcas distintas). Ahora usa la carrocería
+  // real (Vehicle.category).
+  const sameCategory = (v: Vehicle) => v.category === base.category;
 
   const candidates = vehiclesSeed
     .filter((v) => v.id !== base.id)
