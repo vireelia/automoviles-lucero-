@@ -30,6 +30,12 @@ export function renderPanel(): string {
   const purchaseRequests = readCollection<any>("purchase_requests", []);
   const reservations = readCollection<any>("reservations", []);
   const callAnalyses = readCollection<any>("call_analyses", []);
+  // Registro de incidencias (Sección "memoria/aprendizaje", 01/10/2026): el
+  // propio análisis post-llamada/chat de Retell detecta fallos del agente
+  // (pronunciación, repeticiones, quejas del cliente...) sin que nadie tenga
+  // que acordarse de reportarlos -- esto es lo que convierte eso en algo
+  // revisable sin abrir el JSON completo.
+  const issues = callAnalyses.filter((c) => c.issues_detected && c.issues_detected !== "ninguno");
 
   return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -44,10 +50,14 @@ export function renderPanel(): string {
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
   th { background: #f0f0f0; position: sticky; top: 0; }
   .empty { color: #999; font-size: 0.85rem; }
+  .issues-table td:nth-child(3) { color: #a33; font-weight: 600; white-space: normal; }
 </style></head>
 <body>
 <h1>Automóviles Lucero -- Panel interno</h1>
 <p class="sub">Solo lectura. Se actualiza al recargar la página. No es el CRM final, es una vista provisional de lo que el agente ya registró.</p>
+<div class="issues-table">
+${table("Incidencias detectadas por el agente (revisar y corregir)", issues, ["channel", "from_number", "issues_detected", "summary", "created_at"])}
+</div>
 ${table("Leads", leads, ["name", "phone", "vehicle_interest", "temperature", "intent", "updated_at"])}
 ${table("Citas", appointments, ["vehicle_id", "appointment_type", "requested_date", "requested_time", "status"])}
 ${table("Solicitudes de atención (handoffs)", handoffs, ["lead_phone", "reason", "urgency", "status", "created_at"])}

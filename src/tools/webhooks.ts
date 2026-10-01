@@ -24,6 +24,10 @@ export function handleRetellWebhook(payload: any) {
     duration_ms: call.duration_ms ?? null,
     call_successful: analysis.call_successful ?? null,
     summary: analysis.call_summary ?? null,
+    // issues_detected (Sección "registro de incidencias", 01/10/2026): campo
+    // aplanado desde custom_analysis_data para que el panel lo pueda filtrar
+    // directamente, sin que Ramón/José tengan que abrir el JSON completo.
+    issues_detected: analysis.custom_analysis_data?.issues_detected ?? null,
     custom_analysis_data: analysis.custom_analysis_data ?? {},
     created_at: new Date().toISOString(),
   };

@@ -41,6 +41,10 @@ const POST_CALL_ANALYSIS_DATA = [
     type: "enum", name: "lead_temperature", description: "Temperatura del lead según la conversación (coincide con score_lead si se usó).",
     choices: ["COLD", "WARM", "HOT"],
   },
+  {
+    type: "string", name: "issues_detected",
+    description: "Registro de incidencias (Sección de memoria/aprendizaje, 01/10/2026): detecta cualquier fallo real del agente IA en ESTA conversación -- pronunciación incorrecta o rara, información inventada o incorrecta, repeticiones molestas de la misma frase, quejas explícitas del cliente sobre el agente (ej. 'no me entiendes', 'ya me lo dijiste'), confusión o malentendidos, silencios largos sin respuesta. Resume cada fallo encontrado en una frase corta y concreta, separados por ' | ' si hay varios. Si no detectas ningún fallo real, responde EXACTAMENTE la palabra 'ninguno' -- no inventes un fallo que no esté en la conversación.",
+  },
 ];
 
 const STATE_PATH = path.join(ROOT, ".retell-state.json");
