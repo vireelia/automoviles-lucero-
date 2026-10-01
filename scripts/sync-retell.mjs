@@ -209,7 +209,7 @@ async function syncVoice(state) {
       type: "transfer_call",
       name: "transfer_to_jose",
       description: "Transfiere la llamada a José (responsable, hermano de Ramón). Usar cuando el cliente elige hablar con José, o como segundo intento si Ramón no contestó.",
-      transfer_destination: { type: "predefined", number: "+34624807069" },
+      transfer_destination: { type: "predefined", number: "+34624807067" },
       transfer_option: warmTransferOption("José"),
     },
   ];
