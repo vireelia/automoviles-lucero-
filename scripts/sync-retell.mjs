@@ -253,11 +253,16 @@ async function syncVoice(state) {
   // que esto debería aplicar directo. Sin garantía de que Cartesia soporte
   // IPA -- solo se confirma probando con audio real.
   await api("PATCH", `/update-agent/${agentId}`, {
+    // agent_name originalmente se dejó como "...(demo, sin CRM conectado)"
+    // al crear el agente -- quedó desactualizado en cuanto se conectó el
+    // backend real (01/10/2026). Se fija aquí para que no vuelva a quedar
+    // obsoleto en publicaciones futuras.
+    agent_name: "Agente Miguel - Automóviles Lucero",
     pronunciation_dictionary: [{ word: "Carabanchel", alphabet: "ipa", phoneme: "kaɾaβanˈtʃel" }],
     webhook_url: WEBHOOK_URL,
     post_call_analysis_data: POST_CALL_ANALYSIS_DATA,
   });
-  console.log("Diccionario de pronunciación + webhook + análisis post-llamada actualizados.");
+  console.log("Nombre del agente + diccionario de pronunciación + webhook + análisis post-llamada actualizados.");
 
   const agent = await api("GET", `/get-agent/${agentId}`);
   console.log(`Draft del agente de voz ahora en version ${agent.version} (is_published=${agent.is_published})`);
