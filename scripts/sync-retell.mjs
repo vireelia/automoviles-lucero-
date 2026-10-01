@@ -183,10 +183,13 @@ async function syncVoice(state) {
   const llmId = state.voice_llm_id ?? "llm_1160238e920c112c159f5a6768db";
   const agentId = state.voice_agent_id ?? "agent_283e9ab2882dc0e65b85db9945";
 
-  // Transferencia real de llamada, SOLO en voz (no aplica a chat). Orden
-  // confirmado por el usuario 30/09/2026: Ramón primero, José si no
-  // contesta -- son dos tools de transfer_call separadas porque Retell no
-  // encadena varios destinos en una sola; el prompt decide cuál probar.
+  // Transferencia real de llamada, SOLO en voz (no aplica a chat). Decisión
+  // del usuario 01/10/2026: ya no hay un orden fijo Ramón->José -- el agente
+  // PREGUNTA al cliente con cuál de los dos prefiere hablar y transfiere a
+  // ese primero; si no contesta, prueba automáticamente con el otro. Son dos
+  // tools de transfer_call separadas porque Retell no encadena varios
+  // destinos en una sola; el prompt decide cuál probar según la respuesta
+  // del cliente.
   function warmTransferOption(name) {
     return {
       type: "warm_transfer",
@@ -198,14 +201,14 @@ async function syncVoice(state) {
     {
       type: "transfer_call",
       name: "transfer_to_ramon",
-      description: "Transfiere la llamada a Ramón (responsable principal). Probar siempre primero para cualquier transferencia a una persona.",
+      description: "Transfiere la llamada a Ramón (responsable). Usar cuando el cliente elige hablar con Ramón, cuando no tiene preferencia, o como segundo intento si José no contestó.",
       transfer_destination: { type: "predefined", number: "+34622177052" },
       transfer_option: warmTransferOption("Ramón"),
     },
     {
       type: "transfer_call",
       name: "transfer_to_jose",
-      description: "Transfiere la llamada a José (hermano de Ramón). Usar SOLO si ya se intentó transfer_to_ramon y no contestó.",
+      description: "Transfiere la llamada a José (responsable, hermano de Ramón). Usar cuando el cliente elige hablar con José, o como segundo intento si Ramón no contestó.",
       transfer_destination: { type: "predefined", number: "+34624807069" },
       transfer_option: warmTransferOption("José"),
     },

@@ -38,8 +38,8 @@ export const businessInfo = {
   responsables: {
     ramon: { role: "Responsable. Gestiona financiación internamente. Confirma reservas/ventas.", transfer_number: "+34622177052", validation_status: "owner_confirmed" },
     jose: { role: "Responsable (hermano de Ramón).", transfer_number: "+34624807069", validation_status: "owner_confirmed" },
-    transfer_priority: "Ramón primero; si no contesta, José.",
-    note: "Ambos números confirmados 30/09/2026. transfer_call en vivo activado en el agente de voz con este orden.",
+    transfer_priority: "Preguntar al cliente con cuál de los dos prefiere hablar (Ramón o José); se transfiere primero a ese, y si no contesta, automáticamente al otro sin volver a preguntar.",
+    note: "Ambos números confirmados 30/09/2026. transfer_call en vivo activado en el agente de voz. Desde 01/10/2026 (decisión del cliente), ya no hay un orden fijo Ramón->José: el responsable se elige preguntando antes de transferir.",
   },
   hours: {
     weekdays: { visits: ["09:30-14:00", "16:30-19:00"] },
