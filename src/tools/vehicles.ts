@@ -9,6 +9,23 @@ function normalize(s: string) {
   return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+// El cliente dice "SUV", "todoterreno", "furgoneta", "coche familiar", etc.
+// -- el feed real de Coches.net PRO usa solo 5 valores de carrocería. Este
+// mapa traduce el lenguaje natural a esos 5 valores reales.
+const CATEGORY_SYNONYMS: Record<string, string> = {
+  suv: normalize("4x4"),
+  todoterreno: normalize("4x4"),
+  "todo terreno": normalize("4x4"),
+  furgoneta: normalize("Industriales"),
+  furgon: normalize("Industriales"),
+  comercial: normalize("Industriales"),
+  compacto: normalize("Berlina"),
+  urbano: normalize("Berlina"),
+  sedan: normalize("Berlina"),
+  familiar: normalize("Familiar"),
+  monovolumen: normalize("Monovolumen"),
+};
+
 export function searchVehicles(args: {
   query?: string;
   make?: string;
@@ -30,11 +47,14 @@ export function searchVehicles(args: {
   }
   if (args.make) results = results.filter((v) => normalize(v.make) === normalize(args.make!));
   if (args.model) results = results.filter((v) => normalize(v.model).includes(normalize(args.model!)));
-  // category (SUV/Berlina/Compacto/Monovolumen/Familiar/Urbano/Furgoneta) es
-  // un filtro real por tipo de carrocería -- antes no existía y el agente
-  // podía ofrecer un Serie 3 o un Clase B como si fueran SUV al no tener
-  // forma de comprobarlo.
-  if (args.category) results = results.filter((v) => normalize(v.category) === normalize(args.category!));
+  // category es la carrocería real del feed de Coches.net PRO: Monovolumen,
+  // Berlina, Industriales, 4x4, Familiar. "SUV"/"todoterreno" (lenguaje
+  // natural del cliente) se normaliza a "4x4" antes de llegar aquí -- ver
+  // CATEGORY_SYNONYMS.
+  if (args.category) {
+    const wanted = CATEGORY_SYNONYMS[normalize(args.category)] ?? normalize(args.category);
+    results = results.filter((v) => normalize(v.category) === wanted);
+  }
   if (args.fuel) results = results.filter((v) => normalize(v.fuel) === normalize(args.fuel!));
   if (typeof args.max_price_eur === "number") results = results.filter((v) => v.price_eur <= args.max_price_eur!);
   if (typeof args.min_price_eur === "number") results = results.filter((v) => v.price_eur >= args.min_price_eur!);
@@ -62,8 +82,8 @@ export function searchVehicles(args: {
       total_pages: Math.max(1, Math.ceil(results.length / PAGE_SIZE)),
       results: pageResultsWithStatus,
     },
-    source: "Catálogo interno cargado desde observación de coches.net 22/09/2026 -- NO es un feed en vivo.",
-    source_updated_at: "2026-09-22",
+    source: "Coches.net PRO (exportación oficial del negocio, feed XML) -- importado 01/10/2026. NO es un feed en vivo todavía.",
+    source_updated_at: "2026-10-01",
     conflicts: pageResults.flatMap((v) => (v.conflicts.length ? [`${v.make} ${v.model} (${v.id}): ${v.conflicts.join(" / ")}`] : [])),
   });
 }
@@ -77,8 +97,8 @@ export function syncInventory() {
   return envelope({
     status: "denied",
     error_code: "no_authorized_source_connected",
-    data: { provider: "static_seed", vehicle_count: vehiclesSeed.length, last_observed_at: "2026-09-22" },
-    source: "INVENTORY_PROVIDER -- Coches.net/Wallapop marcados PENDING_INTEGRATION (Sección 49). No hay sincronización diaria real todavía.",
+    data: { provider: "cochesnet_pro_export_manual", vehicle_count: vehiclesSeed.length, last_observed_at: "2026-10-01" },
+    source: "INVENTORY_PROVIDER -- import manual del feed XML de Coches.net PRO (sin API en vivo todavía). Wallapop sigue PENDING_INTEGRATION (Sección 49).",
   });
 }
 
@@ -147,7 +167,7 @@ export function findSimilarVehicles(args: { vehicle_id: string }) {
   return envelope({
     status: candidates.length === 0 ? "not_found" : "ok",
     data: { base_vehicle_id: base.id, results: candidates },
-    source: "Catálogo interno cargado desde observación de coches.net 22/09/2026 -- NO es un feed en vivo.",
+    source: "Coches.net PRO (exportación oficial del negocio, feed XML) -- importado 01/10/2026. NO es un feed en vivo todavía.",
     conflicts: candidates.flatMap((v) => (v.conflicts.length ? [`${v.make} ${v.model} (${v.id}): ${v.conflicts.join(" / ")}`] : [])),
   });
 }

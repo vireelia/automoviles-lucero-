@@ -119,7 +119,13 @@ const AGENT_TOOLS = [
   tool("get_business_info", "Devuelve políticas confirmadas del negocio (horarios, financiación, garantía, reserva, ubicación, WhatsApp).", {}, []),
   tool("search_vehicle", "Busca vehículos por texto libre, marca, modelo, tipo de carrocería, combustible o rango de precio/km.", {
     query: S, make: S, model: S,
-    category: { type: "string", enum: ["SUV", "Berlina", "Compacto", "Monovolumen", "Familiar", "Urbano", "Furgoneta"] },
+    // Carrocería real del feed de Coches.net PRO: Monovolumen/Berlina/
+    // Industriales/4x4/Familiar. Se incluyen también sinónimos de lenguaje
+    // natural ("SUV", "furgoneta"...) porque el backend los traduce a la
+    // carrocería real (ver CATEGORY_SYNONYMS en vehicles.ts) -- así el
+    // agente puede usar la palabra que diga el cliente sin tener que
+    // conocer la taxonomía interna.
+    category: { type: "string", enum: ["Monovolumen", "Berlina", "Industriales", "4x4", "Familiar", "SUV", "Furgoneta", "Compacto", "Todoterreno"] },
     fuel: S, max_price_eur: N, min_price_eur: N, max_km: N, page: N,
   }),
   tool("get_vehicle", "Devuelve la ficha completa de una unidad por su id interno.", { id: S }, ["id"]),
