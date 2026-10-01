@@ -53,10 +53,11 @@ export function sendLocation() {
     data: {
       address: businessInfo.location.address.value,
       zone: businessInfo.location.zone,
-      references: businessInfo.location.references,
+      how_to_arrive: businessInfo.location.how_to_arrive,
+      transport: businessInfo.location.transport,
     },
-    source: "Dirección confirmada por el negocio.",
-    conflicts: [businessInfo.location.references_note],
+    source: businessInfo.location.source,
+    conflicts: [],
   });
 }
 

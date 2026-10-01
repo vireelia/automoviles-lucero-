@@ -11,8 +11,14 @@ export const businessInfo = {
   location: {
     address: { value: "Calle Cayetano Pando, 3, 28047 Madrid", validation_status: "owner_confirmed" },
     zone: "Carabanchel / Lucero, Madrid",
-    references: ["Metro Lucero", "Metro/Renfe Laguna"],
-    references_note: "Aproximadamente 300 metros según información proporcionada por el negocio -- no dar la distancia como medición exacta.",
+    how_to_arrive: "Metro L6 (Laguna) · Cercanías C-5 (Laguna) · Autobuses 31, 119 y 138",
+    transport: {
+      metro: "Línea 6, parada Laguna",
+      cercanias: "Línea C-5, parada Laguna",
+      bus: ["31", "119", "138"],
+    },
+    validation_status: "owner_confirmed",
+    source: "Confirmado por el negocio 01/10/2026, contrastado contra datos de líneas del Ayuntamiento de Madrid.",
   },
   timezone: "Europe/Madrid",
   language: {
