@@ -202,7 +202,7 @@ async function syncVoice(state) {
       type: "transfer_call",
       name: "transfer_to_ramon",
       description: "Transfiere la llamada a Ramón (responsable). Usar cuando el cliente elige hablar con Ramón, cuando no tiene preferencia, o como segundo intento si José no contestó.",
-      transfer_destination: { type: "predefined", number: "+34622177052" },
+      transfer_destination: { type: "predefined", number: "+34622188213" },
       transfer_option: warmTransferOption("Ramón"),
     },
     {
