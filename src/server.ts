@@ -11,6 +11,7 @@ import { requestFinancing } from "./tools/financing.js";
 import { handleRetellWebhook } from "./tools/webhooks.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
+import { appendToCollection } from "./store.js";
 
 const app = express();
 app.use(cors());
@@ -30,19 +31,45 @@ app.use(express.json());
 // formas (envuelta o plana) para no depender de que Retell no cambie el
 // comportamiento por defecto, y para que las llamadas directas (admin,
 // scripts de prueba) sigan funcionando igual que antes.
+// Logging de auditoría por tool call (Sección "LOGS PARA PRUEBAS" del
+// endurecimiento de seguridad, 01/10/2026): cada invocación real de una
+// tool queda registrada -- timestamp, nombre de la tool, argumentos de
+// entrada, resultado y latencia -- para poder revisar después exactamente
+// qué pasó en una llamada/chat real sin depender de leer el transcript a
+// mano. No es telemetría de producto, es trazabilidad para pruebas.
 function route(fn: (args: any) => unknown) {
   return (req: express.Request, res: express.Response) => {
+    const startedAt = Date.now();
+    const toolName = req.path.replace(/^\/tools\//, "");
     try {
       const body = req.body ?? {};
       const args = body && typeof body === "object" && "args" in body && body.args && typeof body.args === "object" ? body.args : body;
-      res.json(fn(args));
+      const result = fn(args);
+      appendToCollection("tool_call_logs", {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        tool: toolName,
+        input: args,
+        result,
+        latency_ms: Date.now() - startedAt,
+      });
+      res.json(result);
     } catch (err) {
-      res.status(200).json({
+      const errorResult = {
         status: "error",
         request_id: crypto.randomUUID(),
         data: null,
         error_code: err instanceof Error ? err.message : "unknown_error",
+      };
+      appendToCollection("tool_call_logs", {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        tool: toolName,
+        input: req.body,
+        result: errorResult,
+        latency_ms: Date.now() - startedAt,
       });
+      res.status(200).json(errorResult);
     }
   };
 }

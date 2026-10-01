@@ -36,6 +36,7 @@ export function renderPanel(): string {
   // que acordarse de reportarlos -- esto es lo que convierte eso en algo
   // revisable sin abrir el JSON completo.
   const issues = callAnalyses.filter((c) => c.issues_detected && c.issues_detected !== "ninguno");
+  const securityEvents = callAnalyses.filter((c) => c.security_event && c.security_event !== "ninguno");
 
   return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -51,10 +52,14 @@ export function renderPanel(): string {
   th { background: #f0f0f0; position: sticky; top: 0; }
   .empty { color: #999; font-size: 0.85rem; }
   .issues-table td:nth-child(3) { color: #a33; font-weight: 600; white-space: normal; }
+  .security-table td:nth-child(3) { color: #fff; background: #a33; font-weight: 600; white-space: normal; }
 </style></head>
 <body>
 <h1>Automóviles Lucero -- Panel interno</h1>
 <p class="sub">Solo lectura. Se actualiza al recargar la página. No es el CRM final, es una vista provisional de lo que el agente ya registró.</p>
+<div class="security-table">
+${table("Eventos de seguridad detectados (ataques/abusos intentados)", securityEvents, ["channel", "from_number", "security_event", "summary", "created_at"])}
+</div>
 <div class="issues-table">
 ${table("Incidencias detectadas por el agente (revisar y corregir)", issues, ["channel", "from_number", "issues_detected", "summary", "created_at"])}
 </div>

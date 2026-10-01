@@ -28,6 +28,10 @@ export function handleRetellWebhook(payload: any) {
     // aplanado desde custom_analysis_data para que el panel lo pueda filtrar
     // directamente, sin que Ramón/José tengan que abrir el JSON completo.
     issues_detected: analysis.custom_analysis_data?.issues_detected ?? null,
+    // security_event (endurecimiento de seguridad, 01/10/2026): igual que
+    // arriba pero para intentos de ataque/abuso (prompt injection, falsa
+    // autoridad, etc.) -- aplanado para el panel.
+    security_event: analysis.custom_analysis_data?.security_event ?? null,
     custom_analysis_data: analysis.custom_analysis_data ?? {},
     created_at: new Date().toISOString(),
   };
