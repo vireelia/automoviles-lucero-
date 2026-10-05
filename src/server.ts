@@ -18,6 +18,7 @@ import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
 import { bootstrapAdmin } from "./crm/auth.js";
+import { startDailySummary } from "./crm/daily.js";
 
 const app = express();
 app.use(cors());
@@ -261,4 +262,5 @@ app.listen(port, () => {
   console.log(`Automóviles Lucero backend escuchando en :${port}`);
   startScheduler();
   startEmailPoller();
+  startDailySummary();
 });

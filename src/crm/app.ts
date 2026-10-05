@@ -142,6 +142,22 @@ function phoneLink(contact: string | null | undefined): string {
 function option(value: string, label: string, selected: string | undefined) {
   return `<option value="${esc(value)}"${selected === value ? " selected" : ""}>${esc(label)}</option>`;
 }
+// Número listo para WhatsApp (España por defecto): solo cifras, con 34 delante si hace falta.
+function waNumber(contact: string | null | undefined): string | null {
+  if (!contact || contact.includes("@")) return null;
+  let digits = contact.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length === 9) digits = `34${digits}`;
+  return digits.length >= 11 ? digits : null;
+}
+function waButton(contact: string | null | undefined, message: string): string {
+  const num = waNumber(contact);
+  if (!num) return "";
+  return `<a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/${num}?text=${encodeURIComponent(message)}">Escribir por WhatsApp</a>`;
+}
+function confirmButton(label: string, action: string, extra: string, question: string): string {
+  return `<button class="btn ${extra}" name="accion" value="${esc(action)}" onclick="return confirm('${esc(question)}')">${esc(label)}</button>`;
+}
 function button(label: string, action: string, extra = "") {
   return `<button class="btn ${extra}" name="accion" value="${esc(action)}">${esc(label)}</button>`;
 }
@@ -160,6 +176,8 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   const menu = [...MENU, ...(user.role === "admin" ? [["/crm/equipo", "Equipo"] as [string, string]] : [])];
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(section)} · Lucero</title>
+<link rel="manifest" href="/crm/manifest.json"><meta name="theme-color" content="#1d2b44">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Lucero"><link rel="apple-touch-icon" href="/crm/icono.svg">
 <style>
 *{box-sizing:border-box}
 body{margin:0;font:20px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f3f4f6;color:#1d1f24}
@@ -203,6 +221,8 @@ label{font-size:20px;font-weight:700}
 .t-cold{background:#2563eb;color:#fff;font-weight:700}
 .legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
 a.link{color:#1d4ed8;font-weight:700;font-size:20px}
+.search{display:flex;gap:10px;margin:0 0 16px}.search input{margin:0}
+@media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
 <header><strong>Automóviles Lucero</strong>
 <nav>${menu.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}">${label}</a>`).join("")}</nav>
@@ -260,6 +280,22 @@ crm.post("/salir", (req, res) => {
   res.redirect("/crm/entrar");
 });
 
+crm.get("/manifest.json", (_req, res) => {
+  res.type("application/manifest+json").send(JSON.stringify({
+    name: "Lucero: clientes y reservas",
+    short_name: "Lucero",
+    start_url: "/crm",
+    scope: "/crm",
+    display: "standalone",
+    background_color: "#1d2b44",
+    theme_color: "#1d2b44",
+    icons: [{ src: "/crm/icono.svg", sizes: "any", type: "image/svg+xml" }],
+  }));
+});
+crm.get("/icono.svg", (_req, res) => {
+  res.type("image/svg+xml").send('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#1d2b44"/><text x="256" y="350" font-family="Arial,sans-serif" font-size="300" font-weight="700" fill="#f0b429" text-anchor="middle">L</text></svg>');
+});
+
 crm.use((req, res, next) => {
   if (req.path === "/entrar") return next();
   const user = userForSession(cookieValue(req, "crm_session"));
@@ -285,18 +321,20 @@ function msgOf(req: express.Request): string | undefined {
 function apptCard(a: Appointment): string {
   const d = dayLabel(a.requested_date);
   const tone = a.status === "requested" ? "pending" : a.status === "confirmed" ? "done" : "off";
+  const veh = vehicleName(a.vehicle_id);
+  const whatsapp = waButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
   const actions = [
     a.status === "requested" ? button("Confirmar la visita", "confirmar", "ok") : "",
-    a.status !== "cancelled" ? button("Cancelar la visita", "cancelar", "danger") : "",
+    a.status !== "cancelled" ? confirmButton("Cancelar la visita", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
   ].join("");
-  return `<div class="card ${tone}">
+  return `<div class="card ${tone}" id="c-${esc(a.id)}">
 <div class="when"><span>${esc(d.weekday)}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span><em>${esc(a.requested_time ?? "")}</em></div>
-<div class="info"><h3>${esc(vehicleName(a.vehicle_id))}</h3>
+<div class="info"><h3>${esc(veh)}</h3>
 <p><span class="tag">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""}</p>
 <p>Cliente: <b>${esc(a.lead_phone ?? "sin contacto")}</b></p>
 ${a.notes ? `<p>${esc(a.notes)}</p>` : ""}
 <form method="post" action="/crm/citas/${esc(a.id)}">${actions}
-${phoneLink(a.lead_phone)}
+${phoneLink(a.lead_phone)}${whatsapp}
 <div class="row"><div><label>Otro día</label><input type="date" name="fecha" value="${esc(a.requested_date ?? "")}"></div>
 <div><label>Otra hora</label><input type="time" name="hora" value="${esc(a.requested_time ?? "")}"></div></div>
 <button class="btn light" type="submit" name="accion" value="cambiar">Cambiar día y hora</button>
@@ -306,36 +344,48 @@ ${phoneLink(a.lead_phone)}
 function reservationCard(r: Reservation, user: CrmUser): string {
   const sold = getOfficialStatus(r.vehicle_id) === "SOLD";
   const tone = sold ? "off" : r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
+  const veh = vehicleName(r.vehicle_id);
   const actions: string[] = [];
   if (r.status === "pending_payment") actions.push(button("Ha pagado", "pagado", "warn"));
   if (r.status === "pending_verification") {
-    if (canConfirmPayments(user)) actions.push(button("Confirmar la reserva", "confirmar", "ok"));
+    if (canConfirmPayments(user)) actions.push(confirmButton("Confirmar la reserva", "confirmar", "ok", "¿Has comprobado el justificante de los 500 €?"));
     else actions.push(`<span class="tag">El pago lo confirma el comercial</span>`);
   }
-  if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(button("Coche vendido y entregado", "vendido", "ok"));
+  if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(confirmButton("Coche vendido y entregado", "vendido", "ok", "¿Seguro que el coche ya está vendido y entregado?"));
   if (sold) actions.unshift(`<span class="tag" style="background:#e5e7eb">Coche vendido y entregado</span>`);
-  if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(button("Cancelar la reserva", "cancelar", "danger"));
+  if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(confirmButton("Cancelar la reserva", "cancelar", "danger", "¿Seguro que quieres cancelar esta reserva?"));
+  const whatsapp = r.status === "pending_payment"
+    ? waButton(r.lead_phone, `Hola, le escribe Automóviles Lucero. Para apartar el ${veh} necesitamos 500 €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.`)
+    : "";
   return `<div class="card ${tone}" id="r-${esc(r.id)}"><div class="info">
-<h3>${esc(vehicleName(r.vehicle_id))}</h3>
+<h3>${esc(veh)}</h3>
 <p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span></p>
 <p>Cliente: <b>${esc(r.lead_phone ?? "sin contacto")}</b></p>
 <p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
-<form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}</form>
+<form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}</form>
 </div></div>`;
 }
 
 function leadCard(l: Lead): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
+  const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
   return `<div class="card"><div class="info">
 <h3>${esc(l.name || l.phone || "Sin nombre")}</h3>
 <p><span class="tag ${t.cls}">${esc(t.label)}</span>${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}</p>
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">Ver ficha</a>${phoneLink(l.phone)}
+<a class="btn" href="/crm/clientes/${esc(l.id)}">Ver ficha</a>${phoneLink(l.phone)}${whatsapp}
 </div></div>`;
 }
 
 // ---------- Hoy ----------
+function todaySummary(today: string): string {
+  const list2 = list<Appointment>("appointments").filter((a) => a.status !== "cancelled" && a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
+  if (list2.length === 0) return "Hoy no tienes visitas.";
+  const parts = list2.map((a) => `a las ${a.requested_time ?? "?"} ${vehicleName(a.vehicle_id)} (${a.lead_phone ?? "sin contacto"})`);
+  return `Hoy tienes ${list2.length} ${list2.length === 1 ? "visita" : "visitas"}: ${parts.join("; ")}.`;
+}
+
 crm.get("/", (req, res) => {
   const today = todayMadrid();
   const appts = list<Appointment>("appointments").filter((a) => a.status !== "cancelled");
@@ -356,6 +406,8 @@ crm.get("/", (req, res) => {
     ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${t.href}">→ ${esc(t.text)}</a>`).join("")}</div>`
     : `<div class="allok">Todo hecho. No hay nada pendiente.</div>`;
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
+<form class="search noprint" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit">Buscar</button></form>
+<div class="box"><p style="margin:0;font-size:22px"><b>${esc(todaySummary(today))}</b></p></div>
 <div class="stats">
 <a class="stat" href="/crm/citas"><b>${todayAppts.length}</b><span>visitas hoy</span></a>
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
@@ -368,6 +420,42 @@ ${todoBlock}
   res.type("html").send(page("Hoy", me(res), body, msgOf(req)));
 });
 
+// ---------- Buscar ----------
+crm.get("/buscar", (req, res) => {
+  const q = String(req.query.q ?? "").trim().toLowerCase();
+  const digits = q.replace(/\D/g, "");
+  const match = (...values: (string | null | undefined)[]) => values.some((v) => v && v.toLowerCase().includes(q));
+  const leads = q ? list<Lead>("leads").filter((l) => match(l.name, l.phone, l.vehicle_interest) || (digits.length >= 4 && (l.phone ?? "").replace(/\D/g, "").includes(digits))) : [];
+  const appts = q ? list<Appointment>("appointments").filter((a) => match(a.lead_phone, vehicleName(a.vehicle_id))) : [];
+  const resv = q ? list<Reservation>("reservations").filter((r) => match(r.lead_phone, vehicleName(r.vehicle_id))) : [];
+  const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
+  const found = leads.length + appts.length + resv.length + cars.length;
+  const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
+${leads.map(leadCard).join("")}
+${appts.map(apptCard).join("")}
+${resv.map((r) => reservationCard(r, me(res))).join("")}
+${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
+${q && found === 0 ? `<div class="empty">No encuentro nada con eso.</div>` : ""}`;
+  res.type("html").send(page("Hoy", me(res), body));
+});
+
+// ---------- Semana para imprimir ----------
+crm.get("/semana", (req, res) => {
+  const start = new Date(`${todayMadrid()}T12:00:00`);
+  const days: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    days.push(d.toLocaleDateString("sv-SE"));
+  }
+  const appts = list<Appointment>("appointments").filter((a) => a.status !== "cancelled" && days.includes(a.requested_date ?? ""))
+    .sort((x, y) => `${x.requested_date}${x.requested_time}`.localeCompare(`${y.requested_date}${y.requested_time}`));
+  const body = `<div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h1 style="margin:0">Visitas de esta semana</h1><button class="btn ok" onclick="window.print()">Imprimir</button></div>
+<p class="sub">Próximos siete días.</p>
+${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : appts.map(apptCard).join("")}`;
+  res.type("html").send(page("Visitas", me(res), body));
+});
+
 // ---------- Visitas ----------
 crm.get("/citas", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "todas";
@@ -378,7 +466,7 @@ crm.get("/citas", (req, res) => {
   const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Visitas</h1>
 <p class="sub">Aquí ves los días y las horas en que vendrán los clientes a ver un coche.</p>
-<p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")}</p>
+<p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
 ${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : items.map(apptCard).join("")}`;
   res.type("html").send(page("Visitas", me(res), body, msgOf(req)));
 });
