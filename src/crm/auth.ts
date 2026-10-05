@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
 
-export type CrmRole = "admin" | "equipo";
+export type CrmRole = "admin" | "comercial" | "equipo";
 export type CrmUser = {
   id: string;
   name: string;

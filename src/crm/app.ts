@@ -68,12 +68,35 @@ const VEHICLE_TEXT: Record<OfficialVehicleStatus, string> = {
   SOLD: "Vendido",
 };
 const TEMP: Record<string, { label: string; cls: string; help: string }> = {
-  HOT: { label: "Caliente", cls: "t-hot", help: "quiere comprar ya" },
-  WARM: { label: "Templado", cls: "t-warm", help: "pregunta, pero sin prisa" },
-  COLD: { label: "Frío", cls: "t-cold", help: "solo mira" },
+  HOT: { label: "Quiere comprar ya", cls: "t-hot", help: "caliente" },
+  WARM: { label: "Interesado, sin prisa", cls: "t-warm", help: "templado" },
+  COLD: { label: "Solo está mirando", cls: "t-cold", help: "frío" },
 };
+
+// Frase con lo que quiere el cliente, sacada de sus visitas y reservas reales.
+function situation(l: Lead): string {
+  const key = l.phone ?? "";
+  const car = (id?: string) => vehicleName(id);
+  const appt = list<Appointment>("appointments").filter((a) => a.lead_phone === key && a.status !== "cancelled").sort((x, y) => (x.requested_date ?? "").localeCompare(y.requested_date ?? ""))[0];
+  if (appt) {
+    const d = dayLabel(appt.requested_date);
+    return `Quiere ir ${d.weekday === "Día por fijar" ? "a una fecha por fijar" : `el ${d.weekday} ${d.day} de ${d.month}`} a las ${appt.requested_time ?? "?"} a ver ${car(appt.vehicle_id)}`;
+  }
+  const res = list<Reservation>("reservations").find((r) => r.lead_phone === key && r.status !== "cancelled" && r.status !== "expired");
+  if (res) {
+    return res.status === "confirmed" ? `Tiene reservado ${car(res.vehicle_id)}` : `Quiere reservar ${car(res.vehicle_id)}: espera el pago de 500 €`;
+  }
+  if (l.vehicle_interest) return `Pregunta por ${l.vehicle_interest}`;
+  return l.temperature === "HOT" ? "Quiere comprar ya" : "Todavía está informándose";
+}
 const DAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+// Solo el comercial (y el administrador) confirma pagos y marca ventas.
+function canConfirmPayments(user: CrmUser): boolean {
+  return user.role === "admin" || user.role === "comercial";
+}
+const ROLE_NAME: Record<string, string> = { admin: "Puede todo", comercial: "Confirma pagos y ventas", equipo: "Ver y trabajar" };
 
 function list<T>(name: string): T[] {
   return readCollection<T>(name);
@@ -280,12 +303,15 @@ ${phoneLink(a.lead_phone)}
 </form></div></div>`;
 }
 
-function reservationCard(r: Reservation): string {
+function reservationCard(r: Reservation, user: CrmUser): string {
   const tone = r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
   const actions: string[] = [];
   if (r.status === "pending_payment") actions.push(button("Ha pagado", "pagado", "warn"));
-  if (r.status === "pending_verification") actions.push(button("Confirmar la reserva", "confirmar", "ok"));
-  if (r.status === "confirmed") actions.push(button("Coche vendido y entregado", "vendido", "ok"));
+  if (r.status === "pending_verification") {
+    if (canConfirmPayments(user)) actions.push(button("Confirmar la reserva", "confirmar", "ok"));
+    else actions.push(`<span class="tag">El pago lo confirma el comercial</span>`);
+  }
+  if (r.status === "confirmed" && canConfirmPayments(user)) actions.push(button("Coche vendido y entregado", "vendido", "ok"));
   if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(button("Cancelar la reserva", "cancelar", "danger"));
   return `<div class="card ${tone}"><div class="info">
 <h3>${esc(vehicleName(r.vehicle_id))}</h3>
@@ -301,7 +327,7 @@ function leadCard(l: Lead): string {
   return `<div class="card"><div class="info">
 <h3>${esc(l.name || l.phone || "Sin nombre")}</h3>
 <p><span class="tag ${t.cls}">${esc(t.label)}</span>${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}</p>
-<p>Quiere: <b>${esc(l.vehicle_interest ?? "todavía no lo sabemos")}</b></p>
+<p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
 <a class="btn" href="/crm/clientes/${esc(l.id)}">Ver ficha</a>${phoneLink(l.phone)}
 </div></div>`;
@@ -336,7 +362,7 @@ crm.get("/", (req, res) => {
 ${todoBlock}
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : todayAppts.map(apptCard).join("")}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : upcoming.map(apptCard).join("")}
-<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : toAttend.map(reservationCard).join("")}`;
+<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : toAttend.map((r) => reservationCard(r, me(res))).join("")}`;
   res.type("html").send(page("Hoy", me(res), body, msgOf(req)));
 });
 
@@ -383,7 +409,7 @@ crm.get("/reservas", (req, res) => {
 <label>Coche</label><select name="vehicle_id">${available.map((v) => option(v.id, `${vehicleName(v.id)} · ${priceOf(v.id)} €`, "")).join("")}</select>
 <label>Teléfono o correo del cliente</label><input name="contacto" required>
 <button class="btn ok" type="submit">Crear la reserva</button></form></div>
-${reservations.length === 0 ? `<div class="empty">Todavía no hay reservas.</div>` : reservations.map(reservationCard).join("")}`;
+${reservations.length === 0 ? `<div class="empty">Todavía no hay reservas.</div>` : reservations.map((r) => reservationCard(r, me(res))).join("")}`;
   res.type("html").send(page("Reservas", me(res), body, msgOf(req)));
 });
 
@@ -405,6 +431,9 @@ crm.post("/reservas/:id", (req, res) => {
     r.status = "pending_verification";
     save("reservations", reservations);
     return back(res, "/crm/reservas", "Anotado: falta comprobar el justificante");
+  }
+  if ((accion === "confirmar" || accion === "vendido") && !canConfirmPayments(me(res))) {
+    return back(res, "/crm/reservas", "Solo el comercial puede confirmar pagos y ventas");
   }
   if (accion === "confirmar") {
     confirmReservation({ reservation_id: r.id, verified_by: me(res).name });
@@ -488,8 +517,8 @@ crm.get("/clientes", (req, res) => {
   const leads = list<Lead>("leads").filter((l) => t === "todos" || l.temperature === t).sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
   const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
   const body = `<h1>Clientes</h1>
-<p class="sub">Miguel clasifica a cada cliente solo: lo ves aquí y no hace falta cambiarlo.</p>
-<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente: quiere comprar ya", "t-hot")} ${pill("WARM", "Templado: pregunta, sin prisa", "t-warm")} ${pill("COLD", "Frío: solo mira", "t-cold")}</div>
+<p class="sub">Miguel anota solo lo que quiere cada cliente. Tú solo lo lees y llamas si hace falta.</p>
+<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Quieren comprar ya", "t-hot")} ${pill("WARM", "Interesados, sin prisa", "t-warm")} ${pill("COLD", "Solo miran", "t-cold")}</div>
 ${leads.length === 0 ? `<div class="empty">Todavía no hay clientes en esta lista.</div>` : leads.map(leadCard).join("")}`;
   res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
 });
@@ -503,8 +532,8 @@ crm.get("/clientes/:id", (req, res) => {
   const t = TEMP[lead.temperature] ?? TEMP.COLD;
   const body = `<p><a class="link" href="/crm/clientes">← Volver a clientes</a></p>
 <h1>${esc(lead.name || lead.phone || "Cliente")}</h1>
-<p><span class="tag ${t.cls}">${esc(t.label)}: ${esc(t.help)}</span></p>
-<div class="box"><p><b>Quiere:</b> ${esc(lead.vehicle_interest ?? "todavía no lo sabemos")}</p>
+<p><span class="tag ${t.cls}">${esc(t.label)}</span></p>
+<div class="box"><p><b>Lo que quiere:</b> ${esc(situation(lead))}</p>
 <p><b>Contacto:</b> ${esc(lead.phone ?? "—")}</p>
 <p><b>Visitas:</b> ${appts.length === 0 ? "ninguna" : appts.map((a) => `${esc(a.requested_date ?? "")} ${esc(a.requested_time ?? "")} (${esc(APPOINTMENT_TEXT[a.status] ?? a.status)})`).join(" · ")}</p>
 <p><b>Reservas:</b> ${resv.length === 0 ? "ninguna" : resv.map((r) => `${esc(vehicleName(r.vehicle_id))}: ${esc(RESERVATION_TEXT[r.status] ?? r.status)}`).join(" · ")}</p>
@@ -592,9 +621,9 @@ crm.get("/equipo", (req, res) => {
 <div class="row"><div><label>Nombre</label><input name="nombre" required></div>
 <div><label>Correo para entrar</label><input name="correo" type="email" required></div>
 <div><label>Contraseña (mínimo 8)</label><input name="clave" type="password" minlength="8" required></div>
-<div><label>Puede…</label><select name="rol"><option value="equipo">Ver y trabajar</option><option value="admin">Todo, incluido el equipo</option></select></div></div>
+<div><label>Puede…</label><select name="rol"><option value="equipo">Ver y trabajar (no confirma pagos)</option><option value="comercial">Comercial: confirma pagos y ventas</option><option value="admin">Todo, incluido el equipo</option></select></div></div>
 <button class="btn ok" type="submit">Dar de alta</button></form></div>
-${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${u.role === "admin" ? "Puede todo" : "Ver y trabajar"}</p>
+${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}</p>
 <form method="post" action="/crm/equipo/${esc(u.id)}">
 <label>Nueva contraseña</label><input name="clave" type="password" minlength="8">
 <button class="btn light" type="submit" name="accion" value="clave">Cambiar contraseña</button>
@@ -615,7 +644,7 @@ crm.post("/equipo", (req, res) => {
     name: String(req.body.nombre ?? "").trim(),
     email,
     password_hash: hashPassword(clave),
-    role: req.body.rol === "admin" ? "admin" : "equipo",
+    role: req.body.rol === "admin" ? "admin" : req.body.rol === "comercial" ? "comercial" : "equipo",
     created_at: now(),
   });
   saveUsers(users);
