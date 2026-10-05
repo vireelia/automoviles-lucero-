@@ -1,4 +1,5 @@
-import { vehiclesSeed, type Vehicle } from "../data/vehicles-seed.js";
+import { type Vehicle } from "../data/vehicles-seed.js";
+import { currentVehicles } from "../data/vehicles-current.js";
 import { businessInfo } from "../data/business-info.js";
 import { envelope } from "../response.js";
 import { getOfficialStatus } from "./vehicle-state.js";
@@ -37,7 +38,7 @@ export function searchVehicles(args: {
   fuel?: string;
   page?: number;
 }) {
-  let results: Vehicle[] = vehiclesSeed;
+  let results: Vehicle[] = currentVehicles();
 
   const q = args.query ? normalize(args.query) : null;
   if (q) {
@@ -97,13 +98,13 @@ export function syncInventory() {
   return envelope({
     status: "denied",
     error_code: "no_authorized_source_connected",
-    data: { provider: "cochesnet_pro_export_manual", vehicle_count: vehiclesSeed.length, last_observed_at: "2026-10-01" },
+    data: { provider: "cochesnet_pro_export_manual", vehicle_count: currentVehicles().length, last_observed_at: "2026-10-01" },
     source: "INVENTORY_PROVIDER -- import manual del feed XML de Coches.net PRO (sin API en vivo todavía). Wallapop sigue PENDING_INTEGRATION (Sección 49).",
   });
 }
 
 export function getVehicle(args: { id: string }) {
-  const vehicle = vehiclesSeed.find((v) => v.id === args.id);
+  const vehicle = currentVehicles().find((v) => v.id === args.id);
   if (!vehicle) {
     return envelope({ status: "not_found", error_code: "vehicle_id_not_found" });
   }
@@ -120,7 +121,7 @@ export function getVehicle(args: { id: string }) {
 // nosotros mismos controlamos (reservas propias) -- nunca inventa
 // disponibilidad en vivo del portal, que sigue sin integración (Sección 49).
 export function getVehicleStatus(args: { id: string }) {
-  const vehicle = vehiclesSeed.find((v) => v.id === args.id);
+  const vehicle = currentVehicles().find((v) => v.id === args.id);
   if (!vehicle) return envelope({ status: "not_found", error_code: "vehicle_id_not_found" });
   return envelope({
     status: "ok",
@@ -138,7 +139,7 @@ export function getVehicleStatus(args: { id: string }) {
 // esté RESERVED/SOLD en nuestro estado interno. Nunca ofrece fuera del
 // presupuesto aproximado del original.
 export function findSimilarVehicles(args: { vehicle_id: string }) {
-  const base = vehiclesSeed.find((v) => v.id === args.vehicle_id);
+  const base = currentVehicles().find((v) => v.id === args.vehicle_id);
   if (!base) return envelope({ status: "not_found", error_code: "vehicle_id_not_found" });
 
   const range = businessInfo.similar_vehicles_match;
@@ -148,7 +149,7 @@ export function findSimilarVehicles(args: { vehicle_id: string }) {
   // real (Vehicle.category).
   const sameCategory = (v: Vehicle) => v.category === base.category;
 
-  const candidates = vehiclesSeed
+  const candidates = currentVehicles()
     .filter((v) => v.id !== base.id)
     .filter((v) => getOfficialStatus(v.id) === "AVAILABLE")
     .filter((v) => v.price_eur >= base.price_eur - range.price_range_eur && v.price_eur <= base.price_eur + range.price_range_eur)

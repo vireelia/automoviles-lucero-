@@ -1,7 +1,7 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
-import { vehiclesSeed } from "../data/vehicles-seed.js";
+import { currentVehicles } from "../data/vehicles-current.js";
 
 function now() {
   return new Date().toISOString();
@@ -33,7 +33,7 @@ export function sendInternalSummary(args: { summary_text: string; structured_fie
 // "enviarle también un enlace con nuestra página de venta para que pueda
 // ver todo"). Nunca inventamos una URL individual que no exista.
 export function sendVehicleLink(args: { lead_phone?: string; vehicle_id?: string; channel?: string }) {
-  const vehicle = args.vehicle_id ? vehiclesSeed.find((v) => v.id === args.vehicle_id) : undefined;
+  const vehicle = args.vehicle_id ? currentVehicles().find((v) => v.id === args.vehicle_id) : undefined;
   const url = vehicle?.ref_cochesnet ?? businessInfo.profiles.cochesnet;
   const isIndividual = Boolean(vehicle?.ref_cochesnet);
   const record = { id: crypto.randomUUID(), ...args, url, is_individual_url: isIndividual, delivery_status: "queued" as const, created_at: now() };

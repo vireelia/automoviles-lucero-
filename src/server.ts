@@ -16,6 +16,8 @@ import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus } from 
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
+import { crm } from "./crm/app.js";
+import { bootstrapAdmin } from "./crm/auth.js";
 
 const app = express();
 app.use(cors());
@@ -133,6 +135,10 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 }
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
+
+// CRM sencillo para el equipo del concesionario.
+bootstrapAdmin();
+app.use("/crm", crm);
 
 // Correo: entrada manual o desde n8n. El sondeo de Gmail usa la misma función.
 app.post("/email/inbound", requireAdminToken, async (req, res) => {
