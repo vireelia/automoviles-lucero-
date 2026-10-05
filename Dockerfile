@@ -12,6 +12,8 @@ ENV NODE_ENV=production
 COPY package.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
+COPY src/data ./src/data
+COPY src/chat/tool-schemas.json ./src/chat/tool-schemas.json
 # Volumen de datos: sin esto, cada redeploy borraría leads/citas/solicitudes
 # ya registrados. Es un almacén JSON de validación (Sección 25.2), no la
 # fuente maestra definitiva.

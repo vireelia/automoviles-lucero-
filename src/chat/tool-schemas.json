@@ -1,0 +1,673 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_business_info",
+      "description": "Devuelve políticas confirmadas del negocio (horarios, financiación, garantía, reserva, ubicación, WhatsApp).",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_vehicle",
+      "description": "Busca vehículos por texto libre, marca, modelo, tipo de carrocería, combustible o rango de precio/km.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Monovolumen",
+              "Berlina",
+              "Industriales",
+              "4x4",
+              "Familiar",
+              "SUV",
+              "Furgoneta",
+              "Compacto",
+              "Todoterreno"
+            ]
+          },
+          "fuel": {
+            "type": "string"
+          },
+          "max_price_eur": {
+            "type": "number"
+          },
+          "min_price_eur": {
+            "type": "number"
+          },
+          "max_km": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_vehicle",
+      "description": "Devuelve la ficha completa de una unidad por su id interno.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_vehicle_status",
+      "description": "Consulta el estado oficial interno de un vehículo (AVAILABLE/RESERVATION_PENDING/RESERVED/SOLD).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_similar_vehicles",
+      "description": "Busca alternativas similares a un vehículo (mismo rango de precio/km, prioridad misma categoría). Máximo 3.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "vehicle_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicle_id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_lead",
+      "description": "Crea el registro del interesado si no existe (teléfono, nombre, intención, vehículo de interés, presupuesto, momento de compra).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "vehicle_interest": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "string"
+          },
+          "purchase_timing": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_lead",
+      "description": "Actualiza el registro de un interesado ya existente.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "vehicle_interest": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "string"
+          },
+          "purchase_timing": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_contact_preferences",
+      "description": "Guarda preferencias de contacto (ej. no volver a contactar, canal preferido).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "do_not_contact": {
+            "type": "boolean"
+          },
+          "preferred_channel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_customer_history",
+      "description": "Recupera el historial de un cliente que ya contactó antes, para no repetirle preguntas.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "score_lead",
+      "description": "Clasifica internamente al lead (COLD/WARM/HOT) según la conversación. Nunca reveles la clasificación al cliente.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "string",
+            "enum": [
+              "COLD",
+              "WARM",
+              "HOT"
+            ]
+          },
+          "objection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone",
+          "temperature"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_followup",
+      "description": "Registra un seguimiento programado para el lead (máximo 3 automáticos).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "stop_followups",
+      "description": "Detiene los seguimientos de un lead (ej. pidió no ser contactado más).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_appointment_slots",
+      "description": "Comprueba huecos reales de agenda (hoy siempre confirma que no hay agenda conectada -- no inventes huecos).",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_appointment",
+      "description": "Registra una solicitud de cita (visita, prueba, tasación o reserva comercial). Nunca queda confirmada automáticamente.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "vehicle_id": {
+            "type": "string"
+          },
+          "appointment_type": {
+            "type": "string",
+            "enum": [
+              "visita",
+              "prueba",
+              "tasacion",
+              "reserva_comercial"
+            ]
+          },
+          "requested_date": {
+            "type": "string"
+          },
+          "requested_time": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_appointment",
+      "description": "Modifica fecha/hora de una cita ya solicitada.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "appointment_id": {
+            "type": "string"
+          },
+          "requested_date": {
+            "type": "string"
+          },
+          "requested_time": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "appointment_id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "cancel_appointment",
+      "description": "Cancela una cita ya solicitada.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "appointment_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "appointment_id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "request_financing",
+      "description": "Registra una solicitud de financiación y comprueba los criterios orientativos confirmados. Nunca aprueba ni calcula cuota.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "vehicle_id": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_vehicle_valuation",
+      "description": "Registra una solicitud de tasación/compra de un vehículo que trae el cliente (venta a particular). Nunca tasa automáticamente.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "year": {
+            "type": "number"
+          },
+          "km": {
+            "type": "number"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "known_issues": {
+            "type": "string"
+          },
+          "expected_price_eur": {
+            "type": "number"
+          },
+          "trade_in_vehicle_id": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_service_request",
+      "description": "Registra una solicitud de trámite (transferencia, cambio de titularidad, baja, informe DGT) sin dar precios no confirmados.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "procedure_type": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_handoff",
+      "description": "Registra una solicitud de atención humana o devolución de llamada. Úsalo para escalar cualquier caso de la Sección 40.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "urgency": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "alta"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_vehicle_link",
+      "description": "Registra el envío del enlace individual de un vehículo (coches.net) a un canal del cliente. Nunca inventes la URL.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "vehicle_id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_location",
+      "description": "Devuelve la dirección y referencias de metro confirmadas del concesionario.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_whatsapp",
+      "description": "Registra el envío de un mensaje de WhatsApp al cliente (queda en cola, sin integración de envío real todavía).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lead_phone": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "notify_salesperson",
+      "description": "Notifica al vendedor (Ramón/José) de un lead caliente o incidencia urgente. Queda en cola hasta conectar el destino real.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "vehicle": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "VOICE",
+              "CHAT"
+            ]
+          },
+          "intent": {
+            "type": "string"
+          },
+          "objection": {
+            "type": "string"
+          },
+          "last_action": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "urgency": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "alta"
+            ]
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_conversation",
+      "description": "Guarda la conversación (transcripción/resumen/intención/vehículo/resultado) al terminar la gestión.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "VOICE",
+              "CHAT"
+            ]
+          },
+          "transcript": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "vehicle_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_conversation_summary",
+      "description": "Guarda un resumen corto de la conversación para el historial del lead.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ]
+      }
+    }
+  }
+]

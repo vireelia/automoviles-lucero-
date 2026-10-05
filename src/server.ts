@@ -13,6 +13,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { appendToCollection } from "./store.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus } from "./integrations/google.js";
+import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 
 const app = express();
 app.use(cors());
@@ -130,6 +131,26 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 }
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
+
+// Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
+// o cualquier web que conecte el negocio. Solo con el token de admin.
+app.post("/chat/message", requireAdminToken, async (req, res) => {
+  const { session_id, text } = req.body ?? {};
+  if (typeof session_id !== "string" || typeof text !== "string" || !session_id.trim() || !text.trim() || text.length > 2000) {
+    res.status(400).json({ error: "bad_request" });
+    return;
+  }
+  try {
+    res.json(await handleChatMessage(session_id.trim().slice(0, 120), text.trim()));
+  } catch (err) {
+    if (err instanceof LlmNotConfigured) {
+      res.status(503).json({ error: "llm_not_configured" });
+      return;
+    }
+    console.error("[chat] error:", err);
+    res.status(502).json({ error: "llm_error" });
+  }
+});
 
 // Conexión de la cuenta de Google del negocio (Gmail + Calendar). El dueño
 // abre /oauth/google/start con el usuario y contraseña del panel una sola vez.
