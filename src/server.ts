@@ -4,7 +4,7 @@ import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups } from "./tools/leads.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
-import { getAppointmentSlots, createAppointment, updateAppointment, cancelAppointment } from "./tools/appointments.js";
+import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
 import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation } from "./tools/reservations.js";
 import { requestFinancing } from "./tools/financing.js";
@@ -12,6 +12,7 @@ import { handleRetellWebhook } from "./tools/webhooks.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { appendToCollection } from "./store.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus } from "./integrations/google.js";
 
 const app = express();
 app.use(cors());
@@ -38,13 +39,13 @@ app.use(express.json());
 // qué pasó en una llamada/chat real sin depender de leer el transcript a
 // mano. No es telemetría de producto, es trazabilidad para pruebas.
 function route(fn: (args: any) => unknown) {
-  return (req: express.Request, res: express.Response) => {
+  return async (req: express.Request, res: express.Response) => {
     const startedAt = Date.now();
     const toolName = req.path.replace(/^\/tools\//, "");
     try {
       const body = req.body ?? {};
       const args = body && typeof body === "object" && "args" in body && body.args && typeof body.args === "object" ? body.args : body;
-      const result = fn(args);
+      const result = await fn(args);
       appendToCollection("tool_call_logs", {
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
@@ -100,7 +101,7 @@ app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
 app.post("/tools/create_handoff", route((a) => createHandoff(a)));
 app.post("/tools/get_appointment_slots", route(() => getAppointmentSlots()));
-app.post("/tools/create_appointment", route((a) => createAppointment(a)));
+app.post("/tools/create_appointment", route((a) => createAppointmentWithCalendar(a)));
 app.post("/tools/update_appointment", route((a) => updateAppointment(a)));
 app.post("/tools/cancel_appointment", route((a) => cancelAppointment(a)));
 app.post("/tools/create_reservation_pending", requireAdminToken, route((a) => createReservationPending(a)));
@@ -129,6 +130,37 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 }
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
+
+// Conexión de la cuenta de Google del negocio (Gmail + Calendar). El dueño
+// abre /oauth/google/start con el usuario y contraseña del panel una sola vez.
+app.get("/oauth/google/start", requireBasicAuth, (_req, res) => {
+  try {
+    res.redirect(createAuthUrl());
+  } catch (err) {
+    res.status(500).send(err instanceof Error ? err.message : "error");
+  }
+});
+
+app.get("/oauth/google/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error) {
+    res.status(400).send(`Google canceló la conexión: ${String(error)}`);
+    return;
+  }
+  if (typeof code !== "string" || typeof state !== "string" || !consumeState(state)) {
+    res.status(400).send("Estado de autorización inválido o caducado. Vuelve a empezar desde /oauth/google/start.");
+    return;
+  }
+  try {
+    await exchangeCodeAndStore(code);
+    res.type("html").send("<h2>Google conectado. Ya puedes cerrar esta pestaña.</h2>");
+  } catch (err) {
+    console.error("[google] callback:", err);
+    res.status(500).send("No se pudo completar la conexión con Google.");
+  }
+});
+
+app.get("/oauth/google/status", requireAdminToken, (_req, res) => res.json(googleStatus()));
 
 // Webhook de Retell (call_analyzed / chat_analyzed) -- guarda el análisis
 // automático configurado en el agente. No requiere auth propia: Retell no
