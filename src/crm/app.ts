@@ -301,9 +301,9 @@ ${todoBlock}
 // ---------- Clientes ----------
 const FILTERS: Record<string, { label: string; test: (l: Lead) => boolean }> = {
   todos: { label: "Todos", test: () => true },
-  muy: { label: "Muy interesados", test: (l) => l.temperature === "HOT" },
-  interesado: { label: "Interesados", test: (l) => l.temperature === "WARM" },
-  poco: { label: "Poco interesados", test: (l) => l.temperature === "COLD" },
+  muy: { label: "Calientes (muy interesados)", test: (l) => l.temperature === "HOT" },
+  interesado: { label: "Templados (interesados)", test: (l) => l.temperature === "WARM" },
+  poco: { label: "Fríos (poco interesados)", test: (l) => l.temperature === "COLD" },
   nuevo: { label: "Nuevos", test: (l) => leadStatus(l) === "nuevo" },
   sin_contestar: { label: "Sin contestar en 3 días", test: (l) => ["nuevo", "en_contacto"].includes(leadStatus(l)) && daysSince(l.updated_at ?? l.created_at) >= 3 },
   cita: { label: "Con cita", test: (l) => leadStatus(l) === "cita" },
@@ -316,6 +316,15 @@ crm.get("/clientes", (req, res) => {
   const leads = list<Lead>("leads").filter(FILTERS[f].test).sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
   const body = `<h1>Clientes</h1>
 <p class="sub">Elige un grupo para ver solo esos clientes. Toca "Abrir" para cambiar sus datos o su estado.</p>
+<div class="box"><h3>Añadir un cliente nuevo</h3>
+<form method="post" action="/crm/clientes">
+<div class="row"><div><label>Nombre</label><input name="nombre"></div>
+<div><label>Teléfono o correo (obligatorio)</label><input name="contacto" required></div>
+<div><label>Qué le interesa</label><input name="vehicle_interest"></div>
+<div><label>Cómo de interesado está</label><select name="temperature">
+<option value="HOT">Caliente (muy interesado)</option><option value="WARM" selected>Templado (interesado)</option><option value="COLD">Frío (poco interesado)</option></select></div></div>
+<label>Notas</label><textarea name="notes" rows="2"></textarea>
+<button class="btn ok" type="submit">Añadir cliente</button></form></div>
 <div class="filters">${Object.entries(FILTERS).map(([k, v]) => `<a href="/crm/clientes?f=${k}" class="${k === f ? "on" : ""}">${esc(v.label)}</a>`).join("")}</div>
 ${leads.length === 0 ? `<div class="empty">No hay clientes en este grupo.</div>` : leads.map((l) => {
   const t = TEMPERATURE[l.temperature] ?? TEMPERATURE.COLD;
@@ -330,6 +339,32 @@ ${!isEmail(l.phone) && l.phone ? `<a class="btn light" href="tel:${esc(l.phone)}
 </div>`;
 }).join("")}`;
   res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
+});
+
+crm.post("/clientes", (req, res) => {
+  const contacto = String(req.body.contacto ?? "").trim();
+  if (!contacto) return back(res, "/crm/clientes", "Escribe el teléfono o el correo del cliente");
+  const leads = list<Lead>("leads");
+  const existing = leads.find((l) => l.phone === contacto);
+  if (existing) return back(res, `/crm/clientes/${existing.id}`, "Ese cliente ya existe: lo tienes abierto aquí");
+  const temp = ["HOT", "WARM", "COLD"].includes(String(req.body.temperature)) ? String(req.body.temperature) : "WARM";
+  const lead: Lead = {
+    id: crypto.randomUUID(),
+    phone: contacto,
+    name: String(req.body.nombre ?? "").trim() || null,
+    notes: String(req.body.notes ?? "").trim() || null,
+    channel: "CRM",
+    vehicle_interest: String(req.body.vehicle_interest ?? "").trim() || null,
+    temperature: temp,
+    followup_count: 0,
+    do_not_contact: false,
+    crm_status: "nuevo",
+    created_at: now(),
+    updated_at: now(),
+  };
+  leads.push(lead);
+  save("leads", leads);
+  back(res, `/crm/clientes/${lead.id}`, "Cliente añadido");
 });
 
 crm.get("/clientes/:id", (req, res) => {
