@@ -89,13 +89,13 @@ app.post("/tools/update_lead", route((a) => upsertLead(a)));
 app.post("/tools/get_vehicle", route((a) => getVehicle(a)));
 app.post("/tools/get_vehicle_status", route((a) => getVehicleStatus(a)));
 app.post("/tools/find_similar_vehicles", route((a) => findSimilarVehicles(a)));
-app.post("/tools/upsert_lead", route((a) => upsertLead(a)));
+app.post("/tools/upsert_lead", requireAdminToken, route((a) => upsertLead(a)));
 app.post("/tools/update_contact_preferences", route((a) => updateContactPreferences(a)));
 app.post("/tools/get_customer_history", route((a) => getCustomerHistory(a)));
 app.post("/tools/score_lead", route((a) => scoreLead(a)));
 app.post("/tools/create_followup", route((a) => createFollowup(a)));
 app.post("/tools/stop_followups", route((a) => stopFollowups(a)));
-app.post("/tools/create_purchase_request", route((a) => createPurchaseRequest(a)));
+app.post("/tools/create_purchase_request", requireAdminToken, route((a) => createPurchaseRequest(a)));
 app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(a)));
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
 app.post("/tools/create_handoff", route((a) => createHandoff(a)));
@@ -103,17 +103,17 @@ app.post("/tools/get_appointment_slots", route(() => getAppointmentSlots()));
 app.post("/tools/create_appointment", route((a) => createAppointment(a)));
 app.post("/tools/update_appointment", route((a) => updateAppointment(a)));
 app.post("/tools/cancel_appointment", route((a) => cancelAppointment(a)));
-app.post("/tools/create_reservation_pending", route((a) => createReservationPending(a)));
-app.post("/tools/submit_payment_receipt", route((a) => submitPaymentReceipt(a)));
+app.post("/tools/create_reservation_pending", requireAdminToken, route((a) => createReservationPending(a)));
+app.post("/tools/submit_payment_receipt", requireAdminToken, route((a) => submitPaymentReceipt(a)));
 app.post("/tools/request_financing", route((a) => requestFinancing(a)));
-app.post("/tools/send_internal_summary", route((a) => sendInternalSummary(a)));
+app.post("/tools/send_internal_summary", requireAdminToken, route((a) => sendInternalSummary(a)));
 app.post("/tools/send_vehicle_link", route((a) => sendVehicleLink(a)));
 app.post("/tools/send_location", route(() => sendLocation()));
 app.post("/tools/send_whatsapp", route((a) => sendWhatsapp(a)));
 app.post("/tools/notify_salesperson", route((a) => notifySalesperson(a)));
 app.post("/tools/save_conversation", route((a) => saveConversation(a)));
 app.post("/tools/create_conversation_summary", route((a) => createConversationSummary(a)));
-app.post("/tools/sync_inventory", route(() => syncInventory()));
+app.post("/tools/sync_inventory", requireAdminToken, route(() => syncInventory()));
 
 // -- Rutas administrativas: SOLO para el equipo humano (Ramón/José/Virelia),
 // nunca declaradas como tool de Retell. confirm/cancel de una reserva
