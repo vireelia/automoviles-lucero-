@@ -79,17 +79,25 @@ function saveConversation(record: ConversationRecord) {
   writeCollection("chat_conversations", [...others, record]);
 }
 
-export async function handleChatMessage(sessionId: string, userText: string): Promise<{ reply: string; tool_runs: number }> {
+export type Channel = "CHAT" | "EMAIL";
+
+export async function handleChatMessage(
+  sessionId: string,
+  userText: string,
+  channel: Channel = "CHAT",
+  contact: string = sessionId,
+): Promise<{ reply: string; tool_runs: number }> {
   const conversation = loadConversation(sessionId);
   // El identificador de sesión del canal es el teléfono del cliente. Se registra
   // el lead en el primer contacto: sin él no se pueden hacer seguimientos ni
   // consultar el historial del cliente.
-  if (/^\+?\d{6,15}$/.test(sessionId)) {
-    await dispatchTool("create_lead", { phone: sessionId, channel: "CHAT" });
-  }
+  // En email el identificador de contacto es la dirección del remitente, que se
+  // guarda en el campo phone del lead (es la clave de contacto del CRM).
+  await dispatchTool("create_lead", { phone: contact, channel });
   const history = trimToTurns(conversation.messages);
   const turn: ChatMessage[] = [{ role: "user", content: userText }];
-  const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() }, ...history, ...turn];
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${channel === "EMAIL" ? "correo electrónico" : "chat"}. Identificador de contacto (úsalo como phone en las herramientas): ${contact}.`;
+  const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() + context }, ...history, ...turn];
 
   let toolRuns = 0;
   let reply: string | null = null;
@@ -113,7 +121,7 @@ export async function handleChatMessage(sessionId: string, userText: string): Pr
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
           tool: call.function.name,
-          channel: "chat-propio",
+          channel: channel === "EMAIL" ? "email" : "chat",
           session_id: sessionId,
           input: args,
           result,

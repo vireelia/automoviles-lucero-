@@ -2,6 +2,7 @@ import { readCollection, writeCollection } from "./store.js";
 import { sendWhatsapp } from "./tools/delivery.js";
 import { createFollowup } from "./tools/leads.js";
 import { businessInfo } from "./data/business-info.js";
+import { deliverEmail } from "./email/agent.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -80,7 +81,12 @@ function checkStaleFollowups() {
     if (daysSinceUpdate >= STALE_DAYS) {
       const result = createFollowup({ phone: lead.phone, reason: "seguimiento automático (sin compra tras contacto inicial)" });
       if (result.status === "ok") {
-        sendWhatsapp({ lead_phone: lead.phone, message: "Hola, nos han entrado coches nuevos -- si sigues buscando, échale un ojo a nuestro catálogo." });
+        const message = "Hola, nos han entrado coches nuevos -- si sigues buscando, échale un ojo a nuestro catálogo.";
+        if (lead.phone.includes("@")) {
+          void deliverEmail(lead.phone, "Novedades en Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+        } else {
+          sendWhatsapp({ lead_phone: lead.phone, message });
+        }
         console.log(`[scheduler] seguimiento automático encolado para lead ${lead.id}`);
       }
     }

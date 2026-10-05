@@ -11,9 +11,11 @@ import { requestFinancing } from "./tools/financing.js";
 import { handleRetellWebhook } from "./tools/webhooks.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
-import { appendToCollection } from "./store.js";
+import { appendToCollection, readCollection } from "./store.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus } from "./integrations/google.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
+import { processInboundEmail } from "./email/agent.js";
+import { startEmailPoller } from "./email/poller.js";
 
 const app = express();
 app.use(cors());
@@ -132,6 +134,39 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 
+// Correo: entrada manual o desde n8n. El sondeo de Gmail usa la misma función.
+app.post("/email/inbound", requireAdminToken, async (req, res) => {
+  const b = req.body ?? {};
+  if (typeof b.from !== "string" || typeof b.text !== "string" || !b.from.includes("@")) {
+    res.status(400).json({ error: "bad_request" });
+    return;
+  }
+  try {
+    const result = await processInboundEmail({
+      messageKey: typeof b.message_id === "string" ? b.message_id : crypto.randomUUID(),
+      from: b.from.trim().toLowerCase(),
+      fromName: typeof b.from_name === "string" ? b.from_name : "",
+      subject: typeof b.subject === "string" ? b.subject : "",
+      text: b.text.slice(0, 4000),
+      threadId: typeof b.thread_id === "string" ? b.thread_id : undefined,
+      inReplyTo: typeof b.in_reply_to === "string" ? b.in_reply_to : undefined,
+      automated: Boolean(b.automated),
+    });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof LlmNotConfigured) {
+      res.status(503).json({ error: "llm_not_configured" });
+      return;
+    }
+    console.error("[email] inbound:", err);
+    res.status(502).json({ error: "email_processing_error" });
+  }
+});
+
+app.get("/email/outbox", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("email_outbox").slice(-50));
+});
+
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
 // o cualquier web que conecte el negocio. Solo con el token de admin.
 app.post("/chat/message", requireAdminToken, async (req, res) => {
@@ -219,4 +254,5 @@ const port = Number(process.env.PORT ?? 8080);
 app.listen(port, () => {
   console.log(`Automóviles Lucero backend escuchando en :${port}`);
   startScheduler();
+  startEmailPoller();
 });

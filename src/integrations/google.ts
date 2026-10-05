@@ -116,16 +116,83 @@ async function googleFetch(url: string, init: RequestInit = {}) {
   return data;
 }
 
-export async function sendGmail(to: string, subject: string, text: string) {
+export async function sendGmail(
+  to: string,
+  subject: string,
+  text: string,
+  reply?: { threadId: string; inReplyTo: string },
+) {
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
-  const raw = Buffer.from(
-    `To: ${to}\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${text}`,
-    "utf8",
-  ).toString("base64url");
+  const headers = [`To: ${to}`, `Subject: ${encodedSubject}`, "Content-Type: text/plain; charset=UTF-8"];
+  if (reply) {
+    headers.push(`In-Reply-To: ${reply.inReplyTo}`, `References: ${reply.inReplyTo}`);
+  }
+  const raw = Buffer.from(`${headers.join("\r\n")}\r\n\r\n${text}`, "utf8").toString("base64url");
   return googleFetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST",
-    body: JSON.stringify({ raw }),
+    body: JSON.stringify(reply ? { raw, threadId: reply.threadId } : { raw }),
   }) as Promise<{ id: string; threadId: string }>;
+}
+
+export async function gmailListUnread(): Promise<{ id: string; threadId: string }[]> {
+  const data = (await googleFetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + encodeURIComponent("is:unread in:inbox") + "&maxResults=20",
+  )) as { messages?: { id: string; threadId: string }[] };
+  return data.messages ?? [];
+}
+
+export type GmailMessage = {
+  id: string;
+  threadId: string;
+  from: string;
+  fromName: string;
+  subject: string;
+  messageId: string;
+  automated: boolean;
+  text: string;
+};
+
+function header(headers: { name: string; value: string }[], name: string): string {
+  return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+function plainText(payload: any): string {
+  if (!payload) return "";
+  if (payload.mimeType === "text/plain" && payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64url").toString("utf8");
+  }
+  for (const part of payload.parts ?? []) {
+    const t = plainText(part);
+    if (t) return t;
+  }
+  return "";
+}
+
+export async function gmailGet(id: string): Promise<GmailMessage> {
+  const m = (await googleFetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`)) as any;
+  const headers: { name: string; value: string }[] = m.payload?.headers ?? [];
+  const fromRaw = header(headers, "From");
+  const match = /^(?:"?([^"<]*?)"?\s*)?<?([^<>\s]+@[^<>\s]+)>?$/.exec(fromRaw.trim());
+  const from = (match?.[2] ?? fromRaw).toLowerCase();
+  const automated =
+    /no-?reply|mailer-daemon|postmaster|do-?not-?reply/i.test(from) ||
+    Boolean(header(headers, "List-Unsubscribe")) ||
+    /auto/i.test(header(headers, "Auto-Submitted"));
+  return {
+    id: m.id,
+    threadId: m.threadId,
+    from,
+    fromName: match?.[1]?.trim() ?? "",
+    subject: header(headers, "Subject"),
+    messageId: header(headers, "Message-ID"),
+    automated,
+    text: plainText(m.payload).slice(0, 4000),
+  };
+}
+
+export async function gmailAccountEmail(): Promise<string> {
+  const p = (await googleFetch("https://gmail.googleapis.com/gmail/v1/users/me/profile")) as { emailAddress: string };
+  return p.emailAddress.toLowerCase();
 }
 
 export async function calendarBusy(timeMin: string, timeMax: string): Promise<{ start: string; end: string }[]> {
