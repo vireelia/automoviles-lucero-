@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
 import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail } from "../integrations/google.js";
+import { decideInterest } from "./interest.js";
 
 export type InboundEmail = {
   messageKey: string;
@@ -73,8 +74,18 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     return { outcome: "skipped_automated" };
   }
   const processed = readCollection<Processed>("email_processed");
-  if (processed.some((p) => p.key === email.messageKey)) {
+  if (processed.some((p) => p.key === `${email.from}|${email.messageKey}`)) {
     return { outcome: "duplicate" };
+  }
+
+  const priorThread = processed.some((p) => p.key.startsWith(`${email.from}|`) && p.outcome !== "not_interested");
+  const decision = decideInterest({ subject: email.subject, text: email.text, hasPriorThread: priorThread });
+  if (!decision.interested) {
+    const review = readCollection<{ id: string; from: string; subject: string; reason: string; created_at: string }>("email_review");
+    review.push({ id: crypto.randomUUID(), from: email.from, subject: email.subject, reason: decision.reason, created_at: new Date().toISOString() });
+    writeCollection("email_review", review.slice(-500));
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "not_interested" }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "not_interested" };
   }
 
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
@@ -92,7 +103,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   const error = delivery.error;
 
   const outcome = status === "failed" ? "send_failed" : status === "sent" ? "sent" : "queued_no_google";
-  writeCollection("email_processed", [...processed, { key: email.messageKey, at: new Date().toISOString(), outcome }].slice(-MAX_PROCESSED_KEPT));
+  writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome }].slice(-MAX_PROCESSED_KEPT));
 
   return { outcome, reply: body, error };
 }
