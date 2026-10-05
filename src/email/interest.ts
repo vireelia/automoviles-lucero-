@@ -2,11 +2,11 @@
 // Reglas explícitas y auditables: lo que no encaja no recibe respuesta
 // automática y pasa a revisión humana.
 
-const NOT_INTERESTED = [
+// Solo correo automático o masivo: no hay una persona al otro lado que
+// pueda recibir una respuesta. Cualquier correo escrito por alguien se atiende.
+const AUTOMATED_ONLY = [
   /\b(darse de baja|baja de (la )?lista|unsubscribe|dar de baja)\b/i,
-  /\b(curr[ií]culum|\bcv\b|solicitud de empleo|oferta de empleo|vacante|busco trabajo)\b/i,
   /\b(newsletter|boletín|webinar|promoci[oó]n de (lanzamiento|oferta)|descuento exclusivo)\b/i,
-  /\b(factura pendiente|reclamaci[oó]n|demanda|abogado|burofax)\b/i,
 ];
 
 const INTERESTED = [
@@ -24,8 +24,8 @@ export type InterestDecision = { interested: boolean; reason: string };
 
 export function decideInterest(input: { subject: string; text: string; hasPriorThread: boolean }): InterestDecision {
   const body = `${input.subject}\n${input.text}`;
-  if (NOT_INTERESTED.some((r) => r.test(body))) {
-    return { interested: false, reason: "no_interes_explicito" };
+  if (AUTOMATED_ONLY.some((r) => r.test(body))) {
+    return { interested: false, reason: "correo_masivo_o_baja" };
   }
   if (input.hasPriorThread) {
     return { interested: true, reason: "conversacion_previa" };
@@ -33,5 +33,5 @@ export function decideInterest(input: { subject: string; text: string; hasPriorT
   if (INTERESTED.some((r) => r.test(body))) {
     return { interested: true, reason: "pregunta_sobre_vehiculos_o_servicios" };
   }
-  return { interested: false, reason: "sin_senal_clara" };
+  return { interested: true, reason: "persona_sin_tema_claro" };
 }

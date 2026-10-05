@@ -84,8 +84,8 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     const review = readCollection<{ id: string; from: string; subject: string; reason: string; created_at: string }>("email_review");
     review.push({ id: crypto.randomUUID(), from: email.from, subject: email.subject, reason: decision.reason, created_at: new Date().toISOString() });
     writeCollection("email_review", review.slice(-500));
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "not_interested" }].slice(-MAX_PROCESSED_KEPT));
-    return { outcome: "not_interested" };
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "automated_no_reply" }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "automated_no_reply" };
   }
 
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
