@@ -78,7 +78,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     return { outcome: "duplicate" };
   }
 
-  const priorThread = processed.some((p) => p.key.startsWith(`${email.from}|`) && p.outcome !== "not_interested");
+  const priorThread = processed.some((p) => p.key.startsWith(`${email.from}|`) && p.outcome !== "automated_no_reply");
   const decision = decideInterest({ subject: email.subject, text: email.text, hasPriorThread: priorThread });
   if (!decision.interested) {
     const review = readCollection<{ id: string; from: string; subject: string; reason: string; created_at: string }>("email_review");
