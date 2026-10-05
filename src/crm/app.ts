@@ -136,7 +136,7 @@ function dayLabel(isoDate: string | undefined): { weekday: string; day: string; 
   return { weekday: DAYS[d.getDay()], day: String(d.getDate()).padStart(2, "0"), month: MONTHS[d.getMonth()] };
 }
 function phoneLink(contact: string | null | undefined): string {
-  if (!contact || contact.includes("@")) return "";
+  if (!contact || contact.includes("@") || !/\d{6,}/.test(contact)) return "";
   return `<a class="btn light" href="tel:${esc(contact)}">Llamar</a>`;
 }
 function option(value: string, label: string, selected: string | undefined) {
@@ -304,18 +304,20 @@ ${phoneLink(a.lead_phone)}
 }
 
 function reservationCard(r: Reservation, user: CrmUser): string {
-  const tone = r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
+  const sold = getOfficialStatus(r.vehicle_id) === "SOLD";
+  const tone = sold ? "off" : r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
   const actions: string[] = [];
   if (r.status === "pending_payment") actions.push(button("Ha pagado", "pagado", "warn"));
   if (r.status === "pending_verification") {
     if (canConfirmPayments(user)) actions.push(button("Confirmar la reserva", "confirmar", "ok"));
     else actions.push(`<span class="tag">El pago lo confirma el comercial</span>`);
   }
-  if (r.status === "confirmed" && canConfirmPayments(user)) actions.push(button("Coche vendido y entregado", "vendido", "ok"));
+  if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(button("Coche vendido y entregado", "vendido", "ok"));
+  if (sold) actions.unshift(`<span class="tag" style="background:#e5e7eb">Coche vendido y entregado</span>`);
   if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(button("Cancelar la reserva", "cancelar", "danger"));
-  return `<div class="card ${tone}"><div class="info">
+  return `<div class="card ${tone}" id="r-${esc(r.id)}"><div class="info">
 <h3>${esc(vehicleName(r.vehicle_id))}</h3>
-<p><span class="tag">${esc(RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span></p>
+<p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span></p>
 <p>Cliente: <b>${esc(r.lead_phone ?? "sin contacto")}</b></p>
 <p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
 <form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}</form>
@@ -445,7 +447,7 @@ crm.post("/reservas/:id", (req, res) => {
   }
   if (accion === "vendido") {
     setOfficialStatus(r.vehicle_id, "SOLD", r.id);
-    return back(res, "/crm/reservas", "Anotado: coche vendido");
+    return res.redirect(`/crm/reservas?msg=${encodeURIComponent("Anotado: coche vendido")}#r-${r.id}`);
   }
   back(res, "/crm/reservas", "No entendí esa acción");
 });
