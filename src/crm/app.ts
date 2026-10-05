@@ -178,6 +178,11 @@ form.inline{display:inline}
 .empty{background:#fff;border-radius:14px;padding:22px;color:#555}
 a.link{color:#1d4ed8;font-weight:600}
 .box{background:#fff;border-radius:14px;padding:18px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card.urgent{border-left:8px solid #b3261e}.card.pending{border-left:8px solid #d9a22b}.card.done{border-left:8px solid #2e9e55;opacity:.85}.card.off{border-left:8px solid #9aa1ad;opacity:.7}
+.stat.urgent{border-left-color:#b3261e}.stat.pending{border-left-color:#d9a22b}.stat.done{border-left-color:#2e9e55}
+.todo{background:#fff8e6;border:2px solid #d9a22b;border-radius:14px;padding:16px 18px;margin-bottom:22px}
+.todo h2{margin:0 0 8px;font-size:22px}.todo a{display:block;font-size:19px;padding:8px 0;color:#1d2b44;font-weight:600}
+.allok{background:#e3f6e8;border:2px solid #2e9e55;border-radius:14px;padding:16px 18px;margin-bottom:22px;font-size:20px;font-weight:600}
 </style></head><body>
 <header><strong>Automóviles Lucero</strong>
 <nav>${nav.map(([href, label]) => `<a href="${href}"${href === "/crm" ? "" : ""} class="${(title === label || (label === "Inicio" && title === "Inicio")) ? "on" : ""}">${label}</a>`).join("")}</nav>
@@ -263,16 +268,33 @@ crm.get("/", (req, res) => {
   const appointments = list<Appointment>("appointments");
   const handoffs = list<Handoff>("handoffs");
   const inbox = list<InboxMail>("email_inbox");
+  const hot = leads.filter((l) => l.temperature === "HOT" && leadStatus(l) !== "cliente");
+  const newLeads = leads.filter((l) => leadStatus(l) === "nuevo");
+  const resToDo = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification");
+  const apptToDo = appointments.filter((a) => a.status === "requested");
+  const handToDo = handoffs.filter((h) => h.status === "requested");
+  const mailToDo = inbox.filter((m) => m.outcome !== "automated_no_reply" && !m.answered);
   const stats = [
-    { href: "/crm/clientes?f=muy", label: "Clientes muy interesados", n: leads.filter((l) => l.temperature === "HOT" && leadStatus(l) !== "cliente").length },
-    { href: "/crm/clientes?f=nuevo", label: "Clientes nuevos sin atender", n: leads.filter((l) => leadStatus(l) === "nuevo").length },
-    { href: "/crm/reservas", label: "Reservas por resolver", n: reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification").length },
-    { href: "/crm/citas", label: "Citas por confirmar", n: appointments.filter((a) => a.status === "requested").length },
-    { href: "/crm/avisos", label: "Avisos sin hacer", n: handoffs.filter((h) => h.status === "requested").length },
-    { href: "/crm/correos", label: "Correos de personas sin contestar", n: inbox.filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length },
+    { href: "/crm/clientes?f=muy", label: "Clientes muy interesados", n: hot.length, tone: hot.length ? "urgent" : "done" },
+    { href: "/crm/clientes?f=nuevo", label: "Clientes nuevos sin atender", n: newLeads.length, tone: newLeads.length ? "pending" : "done" },
+    { href: "/crm/reservas", label: "Reservas por resolver", n: resToDo.length, tone: resToDo.some((r) => r.status === "pending_verification") ? "urgent" : resToDo.length ? "pending" : "done" },
+    { href: "/crm/citas", label: "Citas por confirmar", n: apptToDo.length, tone: apptToDo.length ? "pending" : "done" },
+    { href: "/crm/avisos", label: "Avisos sin hacer", n: handToDo.length, tone: handToDo.length ? "urgent" : "done" },
+    { href: "/crm/correos", label: "Correos de personas sin contestar", n: mailToDo.length, tone: mailToDo.length ? "pending" : "done" },
   ];
-  const body = `<h1>Inicio</h1><p class="sub">Toca un cuadro para ver lo que hay que hacer.</p>
-<div class="grid">${stats.map((s) => `<a class="stat" href="${s.href}"><b>${s.n}</b>${esc(s.label)}</a>`).join("")}</div>`;
+  const todo: { href: string; text: string }[] = [
+    ...handToDo.slice(0, 3).map((h) => ({ href: "/crm/avisos", text: `Atender aviso: ${h.reason ?? "cliente"} (${h.lead_phone ?? "sin contacto"})` })),
+    ...resToDo.filter((r) => r.status === "pending_verification").slice(0, 3).map((r) => ({ href: "/crm/reservas", text: `Comprobar el justificante de ${vehicleName(r.vehicle_id)}` })),
+    ...apptToDo.slice(0, 3).map((a) => ({ href: "/crm/citas", text: `Confirmar cita del ${a.requested_date ?? "día por fijar"} a las ${a.requested_time ?? "?"}` })),
+    ...hot.slice(0, 3).map((l) => ({ href: `/crm/clientes/${l.id}`, text: `Llamar a ${l.name || l.phone || "cliente muy interesado"}` })),
+    ...mailToDo.slice(0, 3).map((m) => ({ href: "/crm/correos", text: `Contestar a ${m.from}` })),
+  ];
+  const todoBlock = todo.length
+    ? `<div class="todo"><h2>Lo primero que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${t.href}">→ ${esc(t.text)}</a>`).join("")}</div>`
+    : `<div class="allok">Todo al día. No hay nada urgente.</div>`;
+  const body = `<h1>Inicio</h1><p class="sub">Toca un cuadro para ver lo que hay que hacer. El color te dice la prioridad: rojo urgente, amarillo pendiente, verde al día.</p>
+${todoBlock}
+<div class="grid">${stats.map((s2) => `<a class="stat ${s2.tone}" href="${s2.href}"><b>${s2.n}</b>${esc(s2.label)}</a>`).join("")}</div>`;
   res.type("html").send(page("Inicio", me(res), body, msgOf(req)));
 });
 
@@ -297,7 +319,8 @@ crm.get("/clientes", (req, res) => {
 <div class="filters">${Object.entries(FILTERS).map(([k, v]) => `<a href="/crm/clientes?f=${k}" class="${k === f ? "on" : ""}">${esc(v.label)}</a>`).join("")}</div>
 ${leads.length === 0 ? `<div class="empty">No hay clientes en este grupo.</div>` : leads.map((l) => {
   const t = TEMPERATURE[l.temperature] ?? TEMPERATURE.COLD;
-  return `<div class="card"><h3>${esc(l.name || l.phone || "Sin nombre")}</h3>
+  const tone = l.temperature === "HOT" && leadStatus(l) !== "cliente" ? "urgent" : leadStatus(l) === "cliente" ? "done" : leadStatus(l) === "perdido" ? "off" : "pending";
+  return `<div class="card ${tone}"><h3>${esc(l.name || l.phone || "Sin nombre")}</h3>
 <p><span class="tag ${t.cls}">${esc(t.label)}</span><span class="tag">${esc(CRM_STATUS[leadStatus(l)])}</span></p>
 <p>Contacto: ${esc(l.phone ?? "—")} · Llegó por: ${esc(l.channel ?? "—")}</p>
 <p>Le interesa: ${esc(l.vehicle_interest ?? "todavía no lo sabemos")}</p>
@@ -388,7 +411,8 @@ ${reservations.length === 0 ? `<div class="empty">Todavía no hay reservas.</div
     actions.unshift(r.status === "pending_verification" ? button("Confirmar: el justificante está bien", "confirmar", "ok") : "");
     actions.push(button("Cancelar la reserva", "cancelar", "danger"));
   }
-  return `<div class="card"><h3>${esc(vehicleName(r.vehicle_id))}</h3>
+  const tone = r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
+  return `<div class="card ${tone}"><h3>${esc(vehicleName(r.vehicle_id))}</h3>
 <p><span class="tag">${esc(RESERVATION_STATUS[r.status] ?? r.status)}</span></p>
 <p>Cliente: ${esc(r.lead_phone ?? "sin contacto")} · Importe: ${r.amount_eur} €</p>
 <p>Fecha: ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · Confirmada por ${esc(r.verified_by)}` : ""}</p>
@@ -432,7 +456,7 @@ crm.get("/citas", (req, res) => {
   const appts = list<Appointment>("appointments").sort((a, b) => `${a.requested_date ?? ""}${a.requested_time ?? ""}`.localeCompare(`${b.requested_date ?? ""}${b.requested_time ?? ""}`));
   const body = `<h1>Citas</h1>
 <p class="sub">Miguel ha apuntado estas citas. Confírmalas cuando hables con el cliente, o cámbiales la hora.</p>
-${appts.length === 0 ? `<div class="empty">Todavía no hay citas.</div>` : appts.map((a) => `<div class="card"><h3>${esc(vehicleName(a.vehicle_id))}</h3>
+${appts.length === 0 ? `<div class="empty">Todavía no hay citas.</div>` : appts.map((a) => `<div class="card ${a.status === "requested" ? "pending" : a.status === "confirmed" ? "done" : "off"}"><h3>${esc(vehicleName(a.vehicle_id))}</h3>
 <p><span class="tag">${esc(APPOINTMENT_STATUS[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""}</p>
 <p>Día: <b>${esc(a.requested_date ?? "sin día")}</b> · Hora: <b>${esc(a.requested_time ?? "sin hora")}</b></p>
 <p>Cliente: ${esc(a.lead_phone ?? "sin contacto")}</p>${a.notes ? `<p>Notas: ${esc(a.notes)}</p>` : ""}
@@ -468,7 +492,7 @@ crm.get("/avisos", (req, res) => {
   const items = list<Handoff>("handoffs").sort((a, b) => b.created_at.localeCompare(a.created_at));
   const body = `<h1>Avisos</h1>
 <p class="sub">Miguel te avisa aquí cuando un cliente necesita a una persona. Cuando lo hayas atendido, pulsa "Hecho".</p>
-${items.length === 0 ? `<div class="empty">No hay avisos.</div>` : items.map((h) => `<div class="card"><h3>${esc(h.reason ?? "Aviso")}</h3>
+${items.length === 0 ? `<div class="empty">No hay avisos.</div>` : items.map((h) => `<div class="card ${h.status !== "requested" ? "done" : h.urgency === "alta" ? "urgent" : "pending"}"><h3>${esc(h.reason ?? "Aviso")}</h3>
 <p><span class="tag ${h.urgency === "alta" ? "hot" : ""}">${h.urgency === "alta" ? "Urgente" : "Normal"}</span><span class="tag">${h.status === "requested" ? "Pendiente" : "Hecho"}</span></p>
 <p>Cliente: ${esc(h.lead_phone ?? "sin contacto")} · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
 ${h.status === "requested" ? `<form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Hecho: ya lo he atendido</button></form>` : ""}
@@ -497,7 +521,7 @@ crm.get("/correos", (req, res) => {
   const inbox = list<InboxMail>("email_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 60);
   const body = `<h1>Correos</h1>
 <p class="sub">Aquí ves los correos que han llegado al negocio y lo que hizo Miguel con cada uno. Si quieres contestar tú, escribe abajo.</p>
-${inbox.length === 0 ? `<div class="empty">Todavía no ha llegado ningún correo.</div>` : inbox.map((m) => `<div class="card"><h3>${esc(m.subject || "(sin asunto)")}</h3>
+${inbox.length === 0 ? `<div class="empty">Todavía no ha llegado ningún correo.</div>` : inbox.map((m) => `<div class="card ${m.outcome === "automated_no_reply" ? "off" : m.answered ? "done" : "pending"}"><h3>${esc(m.subject || "(sin asunto)")}</h3>
 <p>De: <b>${esc(m.from)}</b> · ${esc(fmtDate(m.created_at))}</p>
 <p><span class="tag">${esc(OUTCOME_LABEL[m.outcome] ?? m.outcome)}</span>${m.answered ? `<span class="tag">Contestado por el equipo</span>` : ""}</p>
 <div class="box" style="background:#f7f8fa;white-space:pre-wrap">${esc(m.text)}</div>
