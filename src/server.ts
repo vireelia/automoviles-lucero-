@@ -9,6 +9,7 @@ import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notif
 import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation } from "./tools/reservations.js";
 import { requestFinancing } from "./tools/financing.js";
 import { handleRetellWebhook } from "./tools/webhooks.js";
+import { verifyRetellSignature } from "./integrations/retell-signature.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { appendToCollection, readCollection } from "./store.js";
@@ -22,7 +23,14 @@ import { startDailySummary } from "./crm/daily.js";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Guardamos el cuerpo sin procesar: la firma de Retell se calcula sobre esos bytes exactos.
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: string }).rawBody = buf.toString("utf8");
+    },
+  }),
+);
 
 // BUG REAL encontrado 30/09/2026 en producción: el comentario de abajo
 // decía que Retell manda los argumentos sueltos en la raíz del body -- FALSO.
@@ -237,10 +245,21 @@ app.get("/oauth/google/callback", async (req, res) => {
 app.get("/oauth/google/status", requireAdminToken, (_req, res) => res.json(googleStatus()));
 
 // Webhook de Retell (call_analyzed / chat_analyzed) -- guarda el análisis
-// automático configurado en el agente. No requiere auth propia: Retell no
-// manda nuestro ADMIN_TOKEN; si hace falta verificar la firma más adelante,
-// añadir aquí (Sección "secure-webhook" de su documentación).
+// automático configurado en el agente. Retell no manda nuestro ADMIN_TOKEN:
+// se autentica con la firma X-Retell-Signature. Sin RETELL_API_KEY se rechaza todo.
 app.post("/webhooks/retell", (req, res) => {
+  const apiKey = process.env.RETELL_API_KEY;
+  const rawBody = (req as express.Request & { rawBody?: string }).rawBody;
+  if (!apiKey) {
+    console.error("[webhook] RETELL_API_KEY no configurado: webhook de Retell rechazado");
+    res.status(401).json({ error: "retell_key_missing" });
+    return;
+  }
+  if (!rawBody || !verifyRetellSignature(rawBody, req.header("x-retell-signature"), apiKey)) {
+    console.warn("[webhook] firma de Retell no válida, petición rechazada");
+    res.status(401).json({ error: "invalid_signature" });
+    return;
+  }
   try {
     res.json(handleRetellWebhook(req.body ?? {}));
   } catch (err) {
