@@ -7,6 +7,16 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending, confirmReservation, cancelReservation } from "../tools/reservations.js";
 import { getOfficialStatus, setOfficialStatus, type OfficialVehicleStatus } from "../tools/vehicle-state.js";
 import { deliverEmail } from "../email/agent.js";
+import {
+  googleStatus,
+  googleConfigMissing,
+  createAuthUrl,
+  disconnectGoogle,
+  sendGmail,
+  calendarCreateEvent,
+  calendarDeleteEvent,
+  describeGoogleError,
+} from "../integrations/google.js";
 
 export const crm = express.Router();
 crm.use(express.urlencoded({ extended: false, limit: "100kb" }));
@@ -173,7 +183,10 @@ const MENU: [string, string][] = [
 ];
 
 function page(section: string, user: CrmUser, body: string, msg?: string): string {
-  const menu = [...MENU, ...(user.role === "admin" ? [["/crm/equipo", "Equipo"] as [string, string]] : [])];
+  const menu: [string, string][] = [
+    ...MENU,
+    ...(user.role === "admin" ? ([["/crm/integraciones", "Integraciones"], ["/crm/equipo", "Equipo"]] as [string, string][]) : []),
+  ];
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(section)} · Lucero</title>
 <link rel="manifest" href="/crm/manifest.json"><meta name="theme-color" content="#1d2b44">
@@ -756,4 +769,129 @@ crm.post("/equipo/:id", (req, res) => {
   u.password_hash = hashPassword(clave);
   saveUsers(users);
   back(res, "/crm/equipo", "Contraseña cambiada");
+});
+
+// ---------- Integraciones: Google (solo administrador) ----------
+const GOOGLE_SCOPE_NAMES: Record<string, string> = {
+  "https://www.googleapis.com/auth/gmail.send": "Enviar correo",
+  "https://www.googleapis.com/auth/gmail.readonly": "Leer correo",
+  "https://www.googleapis.com/auth/calendar": "Calendario completo",
+};
+type GoogleTest = { id: string; event_id: string; link: string; created_at: string };
+
+// Hora local de Madrid de mañana, sin desfase: Google recibe la zona horaria aparte.
+function tomorrowAt(hour: number, minutes: number): string {
+  const day = new Date(Date.now() + 24 * 3600 * 1000).toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+  return `${day}T${String(hour).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
+}
+function onlyAdmin(res: express.Response): boolean {
+  return me(res).role === "admin";
+}
+
+crm.get("/integraciones", (req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
+  const st = googleStatus();
+  const missing = googleConfigMissing();
+  const test = readCollection<GoogleTest>("google_test_events")[0];
+  const scopes = (st.scopes ?? "").split(" ").filter(Boolean);
+  const scopesHtml = scopes.length
+    ? `<ul>${scopes.map((s) => `<li>${esc(GOOGLE_SCOPE_NAMES[s] ?? s)}</li>`).join("")}</ul>`
+    : "<p>Todavía no hay permisos concedidos.</p>";
+  const config = missing.length
+    ? `<div class="msg" style="background:#fdecea;border-color:#c62828">Falta en EasyPanel: ${esc(missing.join(", "))}. Añádelo y pulsa Implementar.</div>`
+    : "";
+  const connectButton = st.connected
+    ? `<a class="btn light" href="/crm/integraciones/google/conectar">Reconectar Google</a>`
+    : `<a class="btn ok" href="/crm/integraciones/google/conectar">Conectar Google</a>`;
+  const disconnectButton = st.connected
+    ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Miguel dejará de enviar correos y crear citas.')">Desconectar Google</button></form>`
+    : "";
+  const tests = st.connected
+    ? `<div class="box"><h3 style="margin-top:0">Pruebas</h3>
+<form method="post" action="/crm/integraciones/google/probar-gmail" style="display:inline"><button class="btn light" type="submit">Probar Gmail</button></form>
+<form method="post" action="/crm/integraciones/google/probar-calendar" style="display:inline"><button class="btn light" type="submit">Probar Calendar</button></form>
+${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank" rel="noopener">abrir en Google Calendar</a></p>
+<form method="post" action="/crm/integraciones/google/borrar-prueba" style="display:inline"><button class="btn danger" type="submit">Borrar evento de prueba</button></form>` : ""}
+</div>`
+    : "";
+  const body = `<h1>Integraciones</h1>
+<p class="sub">Conexión con la cuenta de Google del negocio: correo y calendario de citas.</p>
+${config}
+<div class="box"><h3 style="margin-top:0">Google</h3>
+<p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
+<p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
+${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
+<p>Permisos concedidos:</p>${scopesHtml}
+<p>${connectButton} ${disconnectButton}</p>
+</div>
+${tests}`;
+  res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
+});
+
+// Inicia el consentimiento de Google desde el propio CRM (sin cabeceras ni curl).
+crm.get("/integraciones/google/conectar", (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  try {
+    res.redirect(createAuthUrl());
+  } catch (err) {
+    back(res, "/crm/integraciones", describeGoogleError(err));
+  }
+});
+
+crm.post("/integraciones/google/desconectar", async (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  try {
+    await disconnectGoogle();
+    writeCollection("google_test_events", []);
+    back(res, "/crm/integraciones", "Google desconectado");
+  } catch (err) {
+    back(res, "/crm/integraciones", describeGoogleError(err));
+  }
+});
+
+crm.post("/integraciones/google/probar-gmail", async (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const to = googleStatus().connected_email;
+  if (!to) return back(res, "/crm/integraciones", "No sé a qué cuenta enviar la prueba. Reconecta Google.");
+  try {
+    await sendGmail(to, "Prueba de conexión del CRM", `Este correo confirma que el CRM de Automóviles Lucero puede enviar correo desde ${to}. Puedes borrarlo.`);
+    back(res, "/crm/integraciones", `Correo de prueba enviado a ${to}`);
+  } catch (err) {
+    console.error("[google] prueba gmail:", err);
+    back(res, "/crm/integraciones", `Gmail: ${describeGoogleError(err)}`);
+  }
+});
+
+crm.post("/integraciones/google/probar-calendar", async (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  try {
+    const event = await calendarCreateEvent({
+      summary: "PRUEBA CRM - borrar",
+      description: "Evento de prueba creado desde el CRM para comprobar Google Calendar. Se borra con el botón del CRM.",
+      startLocal: tomorrowAt(10, 0),
+      endLocal: tomorrowAt(10, 30),
+    });
+    writeCollection<GoogleTest>("google_test_events", [
+      { id: crypto.randomUUID(), event_id: event.id, link: event.htmlLink, created_at: now() },
+    ]);
+    back(res, "/crm/integraciones", "Evento de prueba creado para mañana a las 10:00");
+  } catch (err) {
+    console.error("[google] prueba calendar:", err);
+    back(res, "/crm/integraciones", `Calendar: ${describeGoogleError(err)}`);
+  }
+});
+
+crm.post("/integraciones/google/borrar-prueba", async (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const test = readCollection<GoogleTest>("google_test_events")[0];
+  if (!test) return back(res, "/crm/integraciones", "No hay evento de prueba que borrar");
+  try {
+    await calendarDeleteEvent(test.event_id);
+  } catch (err) {
+    // Si alguien ya lo borró a mano en Google, no hay nada que hacer: limpiamos el registro.
+    const gone = err instanceof Error && /google_api_(404|410)/.test(err.message);
+    if (!gone) return back(res, "/crm/integraciones", `Calendar: ${describeGoogleError(err)}`);
+  }
+  writeCollection("google_test_events", []);
+  back(res, "/crm/integraciones", "Evento de prueba borrado");
 });

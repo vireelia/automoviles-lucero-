@@ -12,7 +12,7 @@ import { handleRetellWebhook } from "./tools/webhooks.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { appendToCollection, readCollection } from "./store.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
@@ -204,22 +204,33 @@ app.get("/oauth/google/start", requireBasicAuth, (_req, res) => {
   }
 });
 
+// Vuelta de Google. Muestra el resultado y un enlace de vuelta al CRM.
+const googlePage = (title: string, body: string) =>
+  `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>` +
+  `<body style="font-family:system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;line-height:1.5"><h2>${title}</h2>${body}` +
+  `<p><a href="/crm/integraciones">Volver al CRM</a></p></body></html>`;
+
 app.get("/oauth/google/callback", async (req, res) => {
   const { code, state, error } = req.query;
   if (error) {
-    res.status(400).send(`Google canceló la conexión: ${String(error)}`);
+    res.status(400).type("html").send(googlePage("Conexión cancelada", `<p>Google devolvió: ${String(error)}</p>`));
     return;
   }
   if (typeof code !== "string" || typeof state !== "string" || !consumeState(state)) {
-    res.status(400).send("Estado de autorización inválido o caducado. Vuelve a empezar desde /oauth/google/start.");
+    res.status(400).type("html").send(
+      googlePage("Enlace caducado", "<p>La autorización no es válida o ha caducado. Vuelve al CRM y pulsa Conectar Google otra vez.</p>"),
+    );
     return;
   }
   try {
-    await exchangeCodeAndStore(code);
-    res.type("html").send("<h2>Google conectado. Ya puedes cerrar esta pestaña.</h2>");
+    const { missingScopes } = await exchangeCodeAndStore(code);
+    const warning = missingScopes.length
+      ? `<p style="color:#b45309">Google no concedió estos permisos: ${missingScopes.join(", ")}. Pulsa Reconectar Google y acepta todos.</p>`
+      : "";
+    res.type("html").send(googlePage("Google conectado", `<p>La cuenta ya está conectada.</p>${warning}`));
   } catch (err) {
     console.error("[google] callback:", err);
-    res.status(500).send("No se pudo completar la conexión con Google.");
+    res.status(500).type("html").send(googlePage("No se pudo conectar Google", `<p>${describeGoogleError(err)}</p>`));
   }
 });
 
