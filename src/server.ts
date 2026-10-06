@@ -10,6 +10,7 @@ import { createReservationPending, submitPaymentReceipt, confirmReservation, can
 import { requestFinancing } from "./tools/financing.js";
 import { handleRetellWebhook } from "./tools/webhooks.js";
 import { verifyRetellSignature } from "./integrations/retell-signature.js";
+import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { appendToCollection, readCollection } from "./store.js";
@@ -270,6 +271,7 @@ app.post("/webhooks/retell", (req, res) => {
     return;
   }
   try {
+    forwardVoiceAnalysis(req.body ?? {});
     res.json(handleRetellWebhook(req.body ?? {}));
   } catch (err) {
     console.error("[webhook] error:", err);
