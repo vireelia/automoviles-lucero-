@@ -249,6 +249,11 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}${body}</main></body></html>`;
 }
 
+// Campo de contraseña con un botón para ver u ocultar el texto.
+function pwInput(attrs: string, id: string): string {
+  return `<div style="position:relative"><input id="${id}" type="password" ${attrs} style="padding-right:72px"><button type="button" onclick="var i=document.getElementById('${id}');var s=i.type==='password';i.type=s?'text':'password';this.textContent=s?'Ocultar':'Ver'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 10px;font-size:15px;background:none;color:#1d2b44;font-weight:600;cursor:pointer;border:0">Ver</button></div>`;
+}
+
 function loginPage(error?: string): string {
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar · Lucero</title>
 <style>body{margin:0;font:18px system-ui;background:#1d2b44;display:flex;min-height:100vh;align-items:center;justify-content:center}
@@ -259,7 +264,7 @@ button{font:inherit;font-size:20px;padding:14px;width:100%;border:0;border-radiu
 <body><form class="box" method="post" action="/crm/entrar"><h1>Entrar</h1>
 ${error ? `<div class="err">${esc(error)}</div>` : ""}
 <label>Correo</label><input name="email" type="email" required autofocus>
-<label>Contraseña</label><input name="password" type="password" required>
+<label>Contraseña</label>${pwInput('name="password" required', 'pw-entrar')}
 <button type="submit">Entrar</button></form></body></html>`;
 }
 
@@ -752,12 +757,12 @@ crm.get("/equipo", (req, res) => {
 <form method="post" action="/crm/equipo">
 <div class="row"><div><label>Nombre</label><input name="nombre" required></div>
 <div><label>Correo para entrar</label><input name="correo" type="email" required></div>
-<div><label>Contraseña (mínimo 8)</label><input name="clave" type="password" minlength="8" required></div>
+<div><label>Contraseña (mínimo 8)</label>${pwInput('name="clave" minlength="8" required', 'pw-alta')}</div>
 <div><label>Puede…</label><select name="rol"><option value="equipo">Ver y trabajar (no confirma pagos)</option><option value="comercial">Comercial: confirma pagos y ventas</option><option value="admin">Todo, incluido el equipo</option></select></div></div>
 <button class="btn ok" type="submit">Dar de alta</button></form></div>
 ${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}</p>
 <form method="post" action="/crm/equipo/${esc(u.id)}">
-<label>Nueva contraseña</label><input name="clave" type="password" minlength="8">
+<label>Nueva contraseña</label>${pwInput('name="clave" minlength="8"', `pw-${esc(u.id)}`)}
 <button class="btn light" type="submit" name="accion" value="clave">Cambiar contraseña</button>
 ${u.id !== me(res).id ? button("Quitar el acceso", "quitar", "danger") : ""}
 </form></div></div>`).join("")}`;
