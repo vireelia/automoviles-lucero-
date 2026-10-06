@@ -1,5 +1,6 @@
-import { appendToCollection } from "../store.js";
+import { appendToCollection, readCollection } from "../store.js";
 import { envelope } from "../response.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 function now() {
   return new Date().toISOString();
@@ -61,6 +62,16 @@ export function createHandoff(args: { lead_phone?: string; reason?: string; urge
     created_at: now(),
   };
   appendToCollection("handoffs", handoff);
+  // Una derivación urgente (reserva de 500 € o compra inmediata) avisa a Ramón y José.
+  if (args.urgency === "alta") {
+    const lead = readCollection<{ phone: string | null; name: string | null }>("leads").find((l) => l.phone === args.lead_phone);
+    raiseAlert({
+      kind: "handoff_urgente",
+      lead_phone: args.lead_phone ?? null,
+      name: lead?.name ?? null,
+      reason: args.reason ?? "Atención urgente",
+    });
+  }
   return envelope({
     status: "ok",
     data: handoff,

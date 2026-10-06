@@ -1,6 +1,7 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 type Temperature = "COLD" | "WARM" | "HOT";
 
@@ -118,10 +119,20 @@ export function scoreLead(args: { phone: string; temperature: Temperature; objec
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
 
+  const previous = lead.temperature;
   lead.temperature = args.temperature;
   if (args.objection) lead.objection = args.objection;
   lead.updated_at = now();
   writeCollection("leads", leads);
+  // Aviso solo cuando el cliente pasa a caliente (no en cada actualización).
+  if (args.temperature === "HOT" && previous !== "HOT") {
+    raiseAlert({
+      kind: "lead_caliente",
+      lead_phone: lead.phone,
+      name: lead.name,
+      reason: [lead.vehicle_interest, lead.intent].filter(Boolean).join(" · ") || "Quiere comprar ya",
+    });
+  }
 
   return envelope({
     status: "ok",

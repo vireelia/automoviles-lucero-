@@ -7,6 +7,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending, confirmReservation, cancelReservation } from "../tools/reservations.js";
 import { getOfficialStatus, setOfficialStatus, type OfficialVehicleStatus } from "../tools/vehicle-state.js";
 import { deliverEmail } from "../email/agent.js";
+import { pendingAlerts, markAlertDone } from "../alerts/alerts.js";
 import {
   googleStatus,
   googleConfigMissing,
@@ -420,6 +421,28 @@ crm.get("/", (req, res) => {
     ...mails.map((m) => ({ href: "/crm/pendientes", text: `Contestar a ${m.from}` })),
   ];
   const d = dayLabel(today);
+  const alerts = pendingAlerts();
+  const emailLabels: Record<string, string> = {
+    enviado: "sí",
+    pendiente: "en curso",
+    sin_correo_conectado: "no, falta conectar Google",
+    sin_destinatarios: "no hay destinatarios",
+    error: "error al enviar",
+  };
+  const alertBlock = alerts.length
+    ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>Llamar ya (${alerts.length})</b></div>` +
+      alerts
+        .map(
+          (a) => `<div class="card"><div class="info">
+<h3>${esc(a.name || a.lead_phone || "Cliente sin nombre")}</h3>
+<p><span class="tletra t-hot">${a.kind === "lead_caliente" ? "C" : "!"}</span><span class="tag t-hot">${a.kind === "lead_caliente" ? "Caliente" : "Urgente"}</span> ${esc(a.reason)}</p>
+<p>Aviso por correo: ${esc(emailLabels[a.email_status] ?? a.email_status)}</p>
+${phoneLink(a.lead_phone)}
+<form method="post" action="/crm/alertas/${esc(a.id)}" style="display:inline"><button class="btn ok" type="submit">Ya le he llamado</button></form>
+</div></div>`,
+        )
+        .join("")
+    : "";
   const todoBlock = todo.length
     ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${t.href}">→ ${esc(t.text)}</a>`).join("")}</div>`
     : `<div class="allok">Todo hecho. No hay nada pendiente.</div>`;
@@ -431,6 +454,7 @@ crm.get("/", (req, res) => {
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
 <a class="stat" href="/crm/pendientes"><b>${handoffs.length + mails.length}</b><span>pendientes</span></a>
 </div>
+${alertBlock}
 ${todoBlock}
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : todayAppts.map(apptCard).join("")}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : upcoming.map(apptCard).join("")}
@@ -899,4 +923,10 @@ crm.post("/integraciones/google/borrar-prueba", async (_req, res) => {
   }
   writeCollection("google_test_events", []);
   back(res, "/crm/integraciones", "Evento de prueba borrado");
+});
+
+// ---------- Avisos para llamar (cualquier usuario del CRM) ----------
+crm.post("/alertas/:id", (req, res) => {
+  if (!markAlertDone(req.params.id)) return back(res, "/crm", "No encuentro ese aviso");
+  back(res, "/crm", "Aviso marcado como atendido");
 });
