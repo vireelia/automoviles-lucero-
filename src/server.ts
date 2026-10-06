@@ -99,8 +99,17 @@ app.post("/tools/search_vehicles", route((a) => searchVehicles(a)));
 // lógica, solo para que el nombre de tool declarado a Retell coincida con
 // el encargo confirmado.
 app.post("/tools/search_vehicle", route((a) => searchVehicles(a)));
-app.post("/tools/create_lead", route((a) => upsertLead(a)));
-app.post("/tools/update_lead", route((a) => upsertLead(a)));
+// Si la petición viene de una llamada de Retell (trae `call`) y el agente no ha
+// indicado canal, el lead entra marcado como VOZ.
+function markVoiceOrigin(req: express.Request, _res: express.Response, next: express.NextFunction) {
+  const body = req.body ?? {};
+  if (body.call && body.args && typeof body.args === "object" && !body.args.channel) {
+    body.args.channel = "VOICE";
+  }
+  next();
+}
+app.post("/tools/create_lead", markVoiceOrigin, route((a) => upsertLead(a)));
+app.post("/tools/update_lead", markVoiceOrigin, route((a) => upsertLead(a)));
 app.post("/tools/get_vehicle", route((a) => getVehicle(a)));
 app.post("/tools/get_vehicle_status", route((a) => getVehicleStatus(a)));
 app.post("/tools/find_similar_vehicles", route((a) => findSimilarVehicles(a)));

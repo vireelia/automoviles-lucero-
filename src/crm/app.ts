@@ -28,6 +28,7 @@ type Lead = {
   name: string | null;
   notes: string | null;
   channel: string | null;
+  origin?: string | null;
   vehicle_interest: string | null;
   temperature: string;
   followup_count: number;
@@ -77,11 +78,13 @@ const VEHICLE_TEXT: Record<OfficialVehicleStatus, string> = {
   RESERVED: "Reservado",
   SOLD: "Vendido",
 };
-const TEMP: Record<string, { label: string; cls: string; help: string }> = {
-  HOT: { label: "Quiere comprar ya", cls: "t-hot", help: "caliente" },
-  WARM: { label: "Interesado, sin prisa", cls: "t-warm", help: "templado" },
-  COLD: { label: "Solo está mirando", cls: "t-cold", help: "frío" },
+const TEMP: Record<string, { label: string; cls: string; help: string; letter: string }> = {
+  HOT: { label: "Caliente · quiere comprar ya", cls: "t-hot", help: "caliente", letter: "C" },
+  WARM: { label: "Tibio · interesado, sin prisa", cls: "t-warm", help: "tibio", letter: "T" },
+  COLD: { label: "Frío · solo está mirando", cls: "t-cold", help: "frío", letter: "F" },
 };
+// Agente por el que entró el cliente. El texto va en la tarjeta; la letra solo indica temperatura.
+const ORIGIN: Record<string, string> = { VOICE: "Voz", CHAT: "Chat", EMAIL: "Correo" };
 
 // Frase con lo que quiere el cliente, sacada de sus visitas y reservas reales.
 function situation(l: Lead): string {
@@ -232,6 +235,8 @@ label{font-size:20px;font-weight:700}
 .t-hot{background:#dc2626;color:#fff;font-weight:700}
 .t-warm{background:#f97316;color:#fff;font-weight:700}
 .t-cold{background:#2563eb;color:#fff;font-weight:700}
+.tletra{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;font-weight:800;margin-right:8px;flex-shrink:0}
+.origen{display:inline-block;background:#e2e8f0;color:#1e293b;font-size:15px;font-weight:600;padding:4px 10px;border-radius:999px;margin-right:6px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
 a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .search{display:flex;gap:10px;margin:0 0 16px}.search input{margin:0}
@@ -384,7 +389,7 @@ function leadCard(l: Lead): string {
   const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
   return `<div class="card"><div class="info">
 <h3>${esc(l.name || l.phone || "Sin nombre")}</h3>
-<p><span class="tag ${t.cls}">${esc(t.label)}</span>${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}</p>
+<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="origen">${esc(ORIGIN[l.origin ?? l.channel ?? ""] ?? "Origen sin registrar")}</span>${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}</p>
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
 <a class="btn" href="/crm/clientes/${esc(l.id)}">Ver ficha</a>${phoneLink(l.phone)}${whatsapp}
@@ -621,7 +626,7 @@ crm.get("/clientes", (req, res) => {
   const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
   const body = `<h1>Clientes</h1>
 <p class="sub">Miguel anota solo lo que quiere cada cliente. Tú solo lo lees y llamas si hace falta.</p>
-<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Quieren comprar ya", "t-hot")} ${pill("WARM", "Interesados, sin prisa", "t-warm")} ${pill("COLD", "Solo miran", "t-cold")}</div>
+<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")}</div>
 ${leads.length === 0 ? `<div class="empty">Todavía no hay clientes en esta lista.</div>` : leads.map(leadCard).join("")}`;
   res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
 });

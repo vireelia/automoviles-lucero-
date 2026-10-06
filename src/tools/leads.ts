@@ -11,6 +11,9 @@ type Lead = {
   intent: string | null;
   notes: string | null;
   channel: string | null;
+  // Agente por el que entró el cliente (VOICE, CHAT o EMAIL). Se fija una vez,
+  // aunque después el cliente hable por otro canal.
+  origin?: string | null;
   vehicle_interest: string | null;
   budget: string | null;
   purchase_timing: string | null;
@@ -50,6 +53,7 @@ export function upsertLead(args: {
     lead.intent = args.intent ?? lead.intent;
     lead.notes = args.notes ? `${lead.notes ? lead.notes + " | " : ""}${args.notes}` : lead.notes;
     lead.channel = args.channel ?? lead.channel;
+    lead.origin = lead.origin ?? args.channel ?? null;
     lead.vehicle_interest = args.vehicle_interest ?? lead.vehicle_interest;
     lead.budget = args.budget ?? lead.budget;
     lead.purchase_timing = args.purchase_timing ?? lead.purchase_timing;
@@ -64,6 +68,7 @@ export function upsertLead(args: {
       intent: args.intent ?? null,
       notes: args.notes ?? null,
       channel: args.channel ?? null,
+      origin: args.channel ?? null,
       vehicle_interest: args.vehicle_interest ?? null,
       budget: args.budget ?? null,
       purchase_timing: args.purchase_timing ?? null,
