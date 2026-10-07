@@ -166,7 +166,7 @@ const AGENT_TOOLS = [
   }, ["phone", "temperature"]),
   tool("create_followup", "Registra un seguimiento programado para el lead (máximo 3 automáticos).", { phone: S, reason: S }, ["phone"]),
   tool("stop_followups", "Detiene los seguimientos de un lead (ej. pidió no ser contactado más).", { phone: S }, ["phone"]),
-  tool("get_appointment_slots", "Comprueba huecos reales de agenda (hoy siempre confirma que no hay agenda conectada -- no inventes huecos).", {}, []),
+  tool("get_appointment_slots", "Comprueba huecos reales de la agenda del negocio (Google Calendar) en los próximos días laborables, dentro del horario comercial. Si no hay agenda conectada o no quedan huecos libres, lo dice honestamente -- no inventes huecos.", {}, []),
   tool("create_appointment", "Registra una solicitud de cita (visita, prueba, tasación o reserva comercial). Nunca queda confirmada automáticamente.", {
     lead_phone: S, vehicle_id: S,
     appointment_type: { type: "string", enum: ["visita", "prueba", "tasacion", "reserva_comercial"] },

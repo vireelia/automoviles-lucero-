@@ -6,19 +6,6 @@ function now() {
   return new Date().toISOString();
 }
 
-// No hay agenda real conectada (punto pendiente del cuestionario: "agenda y
-// autoridad para confirmar citas"). Devuelve honestamente "denied" para que
-// el prompt recoja la preferencia del cliente en vez de inventar huecos
-// libres.
-export function getAppointmentSlots() {
-  return envelope({
-    status: "denied",
-    error_code: "no_calendar_connected",
-    data: null,
-    source: null,
-  });
-}
-
 // Horario confirmado por el negocio 29/09/2026 (Sección 21): L-V 09:30-14:00
 // y 16:30-19:00; S-D solo con cita previa y confirmación.
 const WEEKDAY_WINDOWS = [
@@ -153,6 +140,53 @@ function madridLocalToUtcMs(date: string, minutes: number): number {
 }
 
 const APPOINTMENT_MINUTES = 60;
+
+// Máximo de huecos que se ofrecen y hasta cuántos días laborables se mira.
+const MAX_SLOTS = 6;
+const MAX_DAYS_AHEAD = 10;
+
+// Huecos reales de la agenda del negocio (Google Calendar), dentro del horario
+// confirmado. Sin Google conectado, sigue devolviendo honestamente "denied"
+// para que el prompt recoja la preferencia del cliente en vez de inventar.
+export async function getAppointmentSlots() {
+  if (!isGoogleConnected()) {
+    return envelope({ status: "denied", error_code: "no_calendar_connected", data: null, source: null });
+  }
+  const slots: { date: string; time: string }[] = [];
+  const today = new Date();
+  for (let dayOffset = 0; dayOffset <= MAX_DAYS_AHEAD && slots.length < MAX_SLOTS; dayOffset++) {
+    const day = new Date(today);
+    day.setUTCDate(day.getUTCDate() + dayOffset);
+    const dateStr = day.toISOString().slice(0, 10);
+    if (isWeekend(dateStr)) continue;
+
+    const dayStartMs = madridLocalToUtcMs(dateStr, WEEKDAY_WINDOWS[0].start);
+    const dayEndMs = madridLocalToUtcMs(dateStr, WEEKDAY_WINDOWS[WEEKDAY_WINDOWS.length - 1].end);
+    let busy: { start: string; end: string }[] = [];
+    try {
+      busy = await calendarBusy(new Date(dayStartMs).toISOString(), new Date(dayEndMs).toISOString());
+    } catch {
+      continue; // si falla la consulta de un día, se prueba con el siguiente
+    }
+
+    for (const window of WEEKDAY_WINDOWS) {
+      for (let m = window.start; m + APPOINTMENT_MINUTES <= window.end && slots.length < MAX_SLOTS; m += APPOINTMENT_MINUTES) {
+        const slotStart = madridLocalToUtcMs(dateStr, m);
+        if (dayOffset === 0 && slotStart < Date.now() + 60 * 60000) continue; // hoy, con al menos 1h de margen
+        const slotEnd = slotStart + APPOINTMENT_MINUTES * 60000;
+        const overlaps = busy.some((b) => Date.parse(b.start) < slotEnd && Date.parse(b.end) > slotStart);
+        if (overlaps) continue;
+        slots.push({ date: dateStr, time: `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}` });
+      }
+    }
+  }
+  return envelope({
+    status: "ok",
+    data: { slots },
+    source: "agenda del negocio (Google Calendar)",
+    conflicts: slots.length === 0 ? ["No hay huecos libres en los próximos días dentro del horario -- recoge la preferencia del cliente."] : [],
+  });
+}
 
 // Con Google Calendar conectado: se comprueba que el hueco esté libre antes
 // de registrar la cita, y si lo está se crea el evento en la agenda real del
