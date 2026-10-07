@@ -38,12 +38,24 @@ export function saveUsers(users: CrmUser[]) {
 
 // Primer administrador: se crea la primera vez que arranca el sistema, con las
 // variables CRM_ADMIN_EMAIL y CRM_ADMIN_PASSWORD configuradas en EasyPanel.
+// Como los datos ahora persisten entre despliegues, cambiar esas variables ya
+// no actualiza la cuenta si ya existe. Para recuperar el acceso a propósito,
+// se puede poner además CRM_FORCE_ADMIN_RESET=true: entonces sí se
+// sobrescribe la contraseña del administrador. Hay que quitar esa variable
+// otra vez después de usarla -- no debe quedar puesta de forma permanente.
 export function bootstrapAdmin() {
   const email = process.env.CRM_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.CRM_ADMIN_PASSWORD;
   if (!email || !password) return;
   const users = listUsers();
-  if (users.some((u) => u.email === email)) return;
+  const existing = users.find((u) => u.email === email);
+  if (existing) {
+    if (process.env.CRM_FORCE_ADMIN_RESET === "true") {
+      existing.password_hash = hashPassword(password);
+      saveUsers(users);
+    }
+    return;
+  }
   users.push({
     id: crypto.randomUUID(),
     name: "Administrador",
