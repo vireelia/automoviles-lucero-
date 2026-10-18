@@ -13,8 +13,9 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled } from "../tools/agent-toggle.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
-import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, type StudioJob } from "../studio/jobs.js";
+import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
+import { isZernioConnected, listZernioAccounts, publishZernioPost, type ZernioAccount } from "../integrations/zernio.js";
 import { existsSync as fileExists } from "fs";
 import path from "path";
 import {
@@ -2090,7 +2091,7 @@ const STUDIO_RIBBON_COLOR: Record<string, string> = {
   rejected_concurrency: "#b3261e",
 };
 
-function studioJobCard(j: StudioJob): string {
+function studioJobCard(j: StudioJob, zernioAccounts: ZernioAccount[] = []): string {
   const template = findTemplate(j.template_id);
   const tone = j.status === "completed" ? "done" : j.status === "submitted" || j.status === "in_progress" ? "pending" : j.status === "canceled" ? "off" : "urgent";
   const outputs = j.output_paths
@@ -2102,6 +2103,16 @@ function studioJobCard(j: StudioJob): string {
       return `<div style="margin:8px 0">${media}<a class="btn light" href="${src}" download style="margin-top:6px;width:100%;text-align:center">⬇️ Descargar</a></div>`;
     })
     .join("");
+  const publishBlock =
+    j.status === "completed" && j.output_paths.length > 0 && zernioAccounts.length > 0
+      ? `<form method="post" action="/crm/studio/publicar" style="margin-top:10px">
+<input type="hidden" name="job_id" value="${esc(j.id)}">
+<label>Publicar en</label>
+<select name="account_id">${zernioAccounts.map((a) => `<option value="${esc(a.id)}">${esc(String(a.platform))} (${esc(a.id)})</option>`).join("")}</select>
+<input name="caption" placeholder="Texto de la publicación" value="${esc(j.vehicle_label)}">
+<button class="btn ok" type="submit">📣 Publicar en redes</button>
+</form>`
+      : "";
   const engine = j.engine_id ? (template?.kind === "image" ? findImageEngine(j.engine_id) : findVideoEngine(j.engine_id)) : undefined;
   const style = j.style_id ? findVideoStyle(j.style_id) : undefined;
   const detailTags = [
@@ -2119,6 +2130,7 @@ function studioJobCard(j: StudioJob): string {
 ${j.manual_prompt ? `<p>Pedido extra: "${esc(j.manual_prompt)}"</p>` : ""}
 ${j.error && j.status !== "completed" ? `<p>${esc(j.error)}</p>` : ""}
 ${outputs}
+${publishBlock}
 </div></div>`;
 }
 
@@ -2165,6 +2177,16 @@ crm.get("/studio", async (req, res) => {
   const doneJobs = fresh.filter((j) => j.status !== "submitted" && j.status !== "in_progress");
   const spentRatio = budget.monthlyBudgetEur > 0 ? budget.spentEur / budget.monthlyBudgetEur : 0;
   const spentColor = spentRatio >= 1 ? "#b3261e" : spentRatio >= 0.8 ? "#d9822b" : "#2e9e55";
+
+  const zernioAccounts = isZernioConnected() ? await listZernioAccounts() : { ok: false as const, error: "zernio_no_configurado" };
+  const accounts = zernioAccounts.ok ? zernioAccounts.accounts : [];
+  const zernioNotice = isZernioConnected()
+    ? !zernioAccounts.ok
+      ? `<p class="sub">⚠️ No se pudo conectar con Zernio: ${esc(zernioAccounts.error)}</p>`
+      : accounts.length === 0
+        ? `<p class="sub">⚠️ Zernio está conectado pero no hay ninguna cuenta de red social enlazada todavía (hazlo desde el panel de Zernio).</p>`
+        : ""
+    : "";
 
   const body = `<h1>Studio IA</h1>
 <p class="sub">Genera vídeos e imágenes publicitarias de los coches con IA (Higgsfield). Los resultados aparecen abajo del todo, en "Resultados" -- ahí se ven y se descargan.</p>
@@ -2217,8 +2239,9 @@ crm.get("/studio", async (req, res) => {
 <button class="btn ok" type="submit" style="font-size:24px;padding:18px 28px">✨ Generar</button>
 </form>
 
-<h2>⏳ En curso</h2>${pendingJobs.length === 0 ? `<div class="empty">Nada generándose ahora mismo.</div>` : `<div class="gallery">${pendingJobs.map(studioJobCard).join("")}</div>`}
-<h2>🎞️ Resultados</h2>${doneJobs.length === 0 ? `<div class="empty">Todavía no has generado nada. En cuanto generes algo, aparecerá aquí -- se puede ver y descargar directamente desde esta página.</div>` : `<div class="gallery">${doneJobs.map(studioJobCard).join("")}</div>`}`;
+${zernioNotice}
+<h2>⏳ En curso</h2>${pendingJobs.length === 0 ? `<div class="empty">Nada generándose ahora mismo.</div>` : `<div class="gallery">${pendingJobs.map((j) => studioJobCard(j, accounts)).join("")}</div>`}
+<h2>🎞️ Resultados</h2>${doneJobs.length === 0 ? `<div class="empty">Todavía no has generado nada. En cuanto generes algo, aparecerá aquí -- se puede ver y descargar directamente desde esta página.</div>` : `<div class="gallery">${doneJobs.map((j) => studioJobCard(j, accounts)).join("")}</div>`}`;
   res.type("html").send(page("Studio IA", me(res), body, msgOf(req)));
 });
 
@@ -2246,6 +2269,35 @@ crm.post("/studio/generar", studioUpload.single("foto"), async (req, res) => {
     return back(res, "/crm/studio", result.job.error ?? "No se pudo enviar el encargo");
   }
   back(res, "/crm/studio", "Encargo enviado a Higgsfield. Tardará un rato -- vuelve a esta página para ver el resultado.");
+});
+
+// Publica un resultado ya generado del Studio en una red social conectada
+// vía Zernio. Solo admin, igual que el resto del Studio -- gasta cuota de
+// publicación real y queda visible en público, nunca se expone al agente.
+crm.post("/studio/publicar", async (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para administradores");
+  if (!isZernioConnected()) return back(res, "/crm/studio", "Zernio no está configurado en el servidor");
+  const jobId = String(req.body.job_id ?? "");
+  const job = getStudioJob(jobId);
+  if (!job) return back(res, "/crm/studio", "Encargo no encontrado");
+  if (job.status !== "completed" || job.output_paths.length === 0) return back(res, "/crm/studio", "Este encargo todavía no tiene resultado para publicar");
+
+  const accountId = String(req.body.account_id ?? "").trim();
+  if (!accountId) return back(res, "/crm/studio", "Elige una cuenta de destino");
+  const accountsResult = await listZernioAccounts();
+  const account = accountsResult.ok ? accountsResult.accounts.find((a) => a.id === accountId) : undefined;
+  if (!account) return back(res, "/crm/studio", "Esa cuenta ya no está disponible en Zernio");
+
+  const caption = String(req.body.caption ?? "").trim() || job.vehicle_label;
+  const mediaUrls = job.output_paths.map((p) => `${PUBLIC_BASE_URL}/crm/studio/archivo/${p}`);
+  const result = await publishZernioPost({
+    content: caption,
+    mediaUrls,
+    platforms: [{ platform: String(account.platform), accountId }],
+    publishNow: true,
+  });
+  if (!result.ok) return back(res, "/crm/studio", `No se pudo publicar: ${result.error}`);
+  back(res, "/crm/studio", `Publicado en ${String(account.platform)} (estado: ${result.status}).`);
 });
 
 // Ruta pública (sin sesión, ver excepción más arriba): Higgsfield descarga

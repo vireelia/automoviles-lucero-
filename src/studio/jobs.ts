@@ -23,7 +23,7 @@ const UPLOADS_DIR = path.join(DATA_DIR, "studio_uploads");
 const OUTPUTS_DIR = path.join(DATA_DIR, "studio_outputs");
 for (const dir of [UPLOADS_DIR, OUTPUTS_DIR]) if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-const PUBLIC_BASE_URL =
+export const PUBLIC_BASE_URL =
   process.env.PUBLIC_BASE_URL ?? "https://virelia-hub-lucero.lzc0bh.easypanel.host";
 
 const MONTHLY_BUDGET_EUR = Number(process.env.HIGGSFIELD_MONTHLY_BUDGET_EUR ?? 60);
