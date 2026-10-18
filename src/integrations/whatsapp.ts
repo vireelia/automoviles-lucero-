@@ -1,16 +1,24 @@
-// Envío real por WhatsApp Cloud API (Meta), mismo patrón honesto que
-// integrations/google.ts: si no hay credenciales no se intenta nada, y si la
-// API devuelve error (p. ej. han pasado más de 24h desde el último mensaje
-// del cliente -- regla de Meta para texto libre fuera de plantilla) se
-// propaga el error tal cual, nunca se asume entregado.
+// Envío real por WhatsApp. Dos backends posibles, elegidos automáticamente
+// sin tocar quien llama a sendWhatsappText/isWhatsappConnected (delivery.ts,
+// server.ts):
 //
-// Credenciales ya están puestas en .env (WHATSAPP_ACCESS_TOKEN,
-// WHATSAPP_PHONE_NUMBER_ID) -- esta pieza solo faltaba por escribirse.
+// 1) Zernio (ZERNIO_API_KEY + ZERNIO_WHATSAPP_ACCOUNT_ID puestos): mismo
+//    número de WhatsApp Business, pero conectado vía Embedded Signup de
+//    Zernio -- evita el proceso de verificación de negocio de Meta.
+// 2) WhatsApp Cloud API directa (WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID):
+//    integración original, se mantiene por si algún día se conecta directo.
+//
+// Mismo patrón honesto en los dos casos: si no hay credenciales no se
+// intenta nada, y si la API devuelve error (p. ej. más de 24h desde el
+// último mensaje del cliente, o -- en Zernio -- no hay conversación abierta
+// y haría falta una plantilla) se propaga el error tal cual, nunca se
+// asume entregado.
+import { isZernioWhatsappConfigured, sendZernioWhatsappText } from "./zernio.js";
 
 const GRAPH_VERSION = "v21.0";
 
 export function isWhatsappConnected(): boolean {
-  return Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+  return isZernioWhatsappConfigured() || Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
 function normalizePhone(phone: string): string {
@@ -20,6 +28,8 @@ function normalizePhone(phone: string): string {
 export type WhatsappSendResult = { ok: true; messageId: string } | { ok: false; error: string };
 
 export async function sendWhatsappText(to: string, body: string): Promise<WhatsappSendResult> {
+  if (isZernioWhatsappConfigured()) return sendZernioWhatsappText(to, body);
+
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   if (!token || !phoneNumberId) return { ok: false, error: "whatsapp_not_connected" };

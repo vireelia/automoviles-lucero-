@@ -48,16 +48,34 @@ Backend único (Node.js + TypeScript, Express) que da servicio a un concesionari
 | `GMAIL_DAILY_SEND_CAP` | Tope diario de envíos de email automáticos |
 | `ALERT_EMAILS` | Destinatarios extra de alertas urgentes |
 | `HIGGSFIELD_API_KEY_ID`, `HIGGSFIELD_API_KEY_SECRET`, `HIGGSFIELD_MONTHLY_BUDGET_EUR`, `HIGGSFIELD_MAX_CONCURRENT`, `PUBLIC_BASE_URL` | Studio de generación de imagen/vídeo |
-| `ZERNIO_API_KEY` | Publicación/programación de contenido en redes sociales (ver abajo) |
+| `ZERNIO_API_KEY` | Zernio: publicación en redes + WhatsApp (ver abajo) |
+| `ZERNIO_PROFILE_ID` | Workspace de Zernio, necesario para el Embedded Signup de WhatsApp |
+| `ZERNIO_WHATSAPP_ACCOUNT_ID` | Cuenta de WhatsApp conectada en Zernio; si está puesta, WhatsApp usa Zernio en vez de la Cloud API directa de Meta |
+| `ZERNIO_WEBHOOK_SECRET` | Secreto para verificar la firma del webhook de Zernio (`X-Zernio-Signature`) |
 
 ## Integración con Zernio
 
-[Zernio](https://zernio.com) es una API para programar publicaciones y mensajería unificada en redes sociales (Facebook, Instagram, WhatsApp, X, LinkedIn, etc.) y gestionar anuncios. Se usa aquí para publicar automáticamente el contenido de imagen/vídeo que genera el **Studio** (Higgsfield) en las redes del concesionario, sin salir del CRM.
+[Zernio](https://zernio.com) es una API para programar publicaciones y mensajería unificada en redes sociales (Facebook, Instagram, WhatsApp, X, LinkedIn, etc.) y gestionar anuncios. Cliente en `src/integrations/zernio.ts` (`@zernio/node`), configurado sólo por variables de entorno (nunca credenciales hardcodeadas). Dos usos reales en este proyecto:
 
-- SDK: `@zernio/node`, cliente en `src/integrations/zernio.ts`.
-- Config: sólo `ZERNIO_API_KEY` en `.env` (nunca hardcodeada).
-- Tool: `publishToSocial` en `src/tools/social.ts` — sólo accesible desde el CRM (rol `admin`), igual que el resto del Studio; **no** se expone como tool del agente de voz/chat.
-- Endpoint CRM: `POST /crm/studio/publicar` lista cuentas conectadas y publica/programa un resultado del Studio.
+### 1. Publicar contenido del Studio en redes
+
+Publica automáticamente el contenido de imagen/vídeo que genera el **Studio** (Higgsfield) en las redes del concesionario, sin salir del CRM.
+
+- Sólo necesita `ZERNIO_API_KEY`.
+- Botón "📣 Publicar en redes" en cada resultado completado de `/crm/studio` (rol `admin`), que llama a `POST /crm/studio/publicar`.
+- **No** se expone como tool del agente de voz/chat.
+
+### 2. WhatsApp Business sin verificación de negocio de Meta
+
+`src/integrations/whatsapp.ts` (`isWhatsappConnected`/`sendWhatsappText`, usado por todas las tools de envío en `tools/delivery.ts` y por los canales en `server.ts`) elige backend automáticamente:
+
+- Si `ZERNIO_API_KEY` + `ZERNIO_WHATSAPP_ACCOUNT_ID` están puestos → usa Zernio (Embedded Signup, sin el proceso de verificación de negocio de Meta ni revisión de app).
+- Si no, y están `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` → usa la WhatsApp Cloud API directa de Meta (integración original, Fase 1).
+
+Piezas:
+- **Conectar el número**: `/crm/integraciones` → caja "WhatsApp -- vía Zernio" → botón que abre el Embedded Signup. Al volver, Zernio da un `accountId` que hay que copiar a `ZERNIO_WHATSAPP_ACCOUNT_ID` (variable de entorno, no hay sitio en disco para guardarlo) y redesplegar.
+- **Webhook de mensajes entrantes**: `POST /webhooks/zernio-whatsapp` — hay que darle esta URL a Zernio (panel de webhooks) suscrita al evento `message.received`, con un secreto que va también en `ZERNIO_WEBHOOK_SECRET`. Verifica la firma HMAC-SHA256 sobre el cuerpo crudo, guarda qué `conversationId` corresponde a cada teléfono (`zernio_whatsapp_conversations`, en `zernio.ts`) y responde con el mismo agente de chat (`handleChatMessage`) que WhatsApp directo/Facebook/email.
+- **Limitación real de WhatsApp (de Meta, no de Zernio)**: sólo se puede responder con texto libre dentro de las 24h desde el último mensaje del cliente, y sólo si ya hay una conversación conocida (el cliente escribió primero). Para iniciar una conversación nueva haría falta una plantilla aprobada por Meta — no implementado, por ahora `sendZernioWhatsappText` devuelve error controlado (`sin_conversacion_abierta`) en ese caso, nunca finge un envío.
 
 ## Comandos útiles
 

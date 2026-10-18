@@ -16,6 +16,7 @@ import { startScheduler } from "./scheduler.js";
 import { appendToCollection, readCollection, writeCollection } from "./store.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
+import { verifyZernioSignature, rememberWhatsappConversation } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
@@ -372,6 +373,57 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
     }
   } catch (err) {
     console.error("[whatsapp] inbound:", err instanceof Error ? err.message : err);
+  }
+});
+
+// WhatsApp vía Zernio (18/10/2026, alternativa a la Fase 1 de arriba para
+// evitar la verificación de negocio de Meta): Zernio llama directo a este
+// webhook con eventos de su inbox unificado -- no pasa por n8n, la firma se
+// verifica aquí mismo (HMAC-SHA256 sobre el cuerpo crudo, igual patrón que
+// Retell/Twilio/Facebook). Solo procesamos "message.received" de la cuenta
+// de WhatsApp configurada (ZERNIO_WHATSAPP_ACCOUNT_ID) -- cualquier otro
+// evento o cuenta se ignora con 200 (Zernio reintenta si no hay 2xx rápido).
+// Guardamos el conversationId del remitente para poder responder después
+// (whatsapp.ts/zernio.ts lo necesita: en WhatsApp solo se puede enviar texto
+// libre dentro de una conversación ya abierta).
+const MAX_ZERNIO_WHATSAPP_PROCESSED_KEPT = 500;
+app.post("/webhooks/zernio-whatsapp", async (req, res) => {
+  const raw = (req as express.Request & { rawBody?: string }).rawBody ?? "";
+  if (!verifyZernioSignature(raw, req.header("X-Zernio-Signature"), process.env.ZERNIO_WEBHOOK_SECRET)) {
+    res.status(403).send("forbidden");
+    return;
+  }
+  res.status(200).json({ ok: true });
+
+  try {
+    const body = req.body ?? {};
+    if (body.event !== "message.received") return;
+    if (process.env.ZERNIO_WHATSAPP_ACCOUNT_ID && body.account?.accountId !== process.env.ZERNIO_WHATSAPP_ACCOUNT_ID) return;
+
+    const eventId = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
+    const processed = readCollection<{ key: string; at: string }>("zernio_whatsapp_processed");
+    if (processed.some((p) => p.key === eventId)) return;
+    writeCollection(
+      "zernio_whatsapp_processed",
+      [...processed, { key: eventId, at: new Date().toISOString() }].slice(-MAX_ZERNIO_WHATSAPP_PROCESSED_KEPT),
+    );
+
+    const conversationId: string | undefined = body.conversation?.id;
+    const phone: string | undefined = body.message?.sender?.participantId ?? body.message?.sender?.id ?? body.message?.sender?.phone;
+    const text: string | undefined = body.message?.text;
+    const accountId: string | undefined = body.account?.accountId;
+    if (!conversationId || !phone || !text || !accountId) {
+      console.warn("[zernio-whatsapp] evento message.received con campos inesperados, se ignora:", JSON.stringify(body).slice(0, 500));
+      return;
+    }
+
+    rememberWhatsappConversation(phone, conversationId, accountId);
+
+    const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone);
+    const sent = await sendWhatsappText(phone, result.reply);
+    if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta:", sent.error);
+  } catch (err) {
+    console.error("[zernio-whatsapp] inbound:", err instanceof Error ? err.message : err);
   }
 });
 

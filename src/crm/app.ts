@@ -15,7 +15,7 @@ import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setE
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
-import { isZernioConnected, listZernioAccounts, publishZernioPost, type ZernioAccount } from "../integrations/zernio.js";
+import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
 import { existsSync as fileExists } from "fs";
 import path from "path";
 import {
@@ -1863,6 +1863,7 @@ ${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` :
 </div>
 ${tests}
 ${emailModeBox}
+${whatsappZernioBox(req)}
 ${voiceBox}
 ${qualityBox}`;
   res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
@@ -1888,6 +1889,48 @@ crm.post("/integraciones/correo/desactivar-envio", (_req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setEmailAutoSendEnabled(false, me(res).email);
   back(res, "/crm/integraciones", "Modo de prueba activado -- el correo ya no envía respuestas reales.");
+});
+
+// WhatsApp vía Zernio (18/10/2026, para no depender de la verificación de
+// negocio de Meta): el accountId que devuelve el Embedded Signup se muestra
+// aquí para copiarlo a ZERNIO_WHATSAPP_ACCOUNT_ID en EasyPanel -- es config
+// estática, igual de sitio que el resto de variables ZERNIO_*, no un token
+// que cambie solo como los de Google.
+function whatsappZernioBox(req: express.Request): string {
+  const configured = isZernioWhatsappConfigured();
+  const callbackAccountId = typeof req.query.wa_account_id === "string" ? req.query.wa_account_id : null;
+  const callbackError = typeof req.query.error === "string" ? req.query.error : null;
+  const result = callbackAccountId
+    ? `<div class="msg" style="background:#eaf6ea;border-color:#2e9e55">Cuenta conectada en Zernio: <code>${esc(callbackAccountId)}</code>. Copia este valor en <code>ZERNIO_WHATSAPP_ACCOUNT_ID</code> (EasyPanel) y vuelve a implementar para activarlo.</div>`
+    : callbackError
+      ? `<div class="msg" style="background:#fdecea;border-color:#c62828">Zernio no pudo conectar el número: ${esc(callbackError)}</div>`
+      : "";
+  return `<div class="box"><h3 style="margin-top:0">WhatsApp -- vía Zernio</h3>
+<p>Estado: <strong>${configured ? "Configurado" : "No configurado"}</strong></p>
+<p class="sub">Alternativa a la WhatsApp Cloud API directa de Meta: conecta el número con un clic (Embedded Signup gestionado por Zernio), sin el proceso de verificación de negocio de Meta.</p>
+${result}
+<p><a class="btn ${configured ? "light" : "ok"}" href="/crm/integraciones/whatsapp/conectar">${configured ? "Reconectar" : "Conectar"} WhatsApp con Zernio</a></p>
+<p class="sub">Requiere <code>ZERNIO_API_KEY</code> y <code>ZERNIO_PROFILE_ID</code> ya puestos en el servidor.</p>
+</div>`;
+}
+
+crm.get("/integraciones/whatsapp/conectar", async (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const redirectUrl = `${PUBLIC_BASE_URL}/crm/integraciones/whatsapp/callback`;
+  const result = await getWhatsappConnectUrl(redirectUrl);
+  if (!result.ok) return back(res, "/crm/integraciones", `No se pudo iniciar la conexión con Zernio: ${result.error}`);
+  res.redirect(result.authUrl);
+});
+
+// Zernio vuelve aquí tras el Embedded Signup con accountId (éxito) o error
+// en la query string -- lo mostramos para que el admin lo copie a la
+// variable de entorno, no hay sitio en disco donde guardarlo solo.
+crm.get("/integraciones/whatsapp/callback", (req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+  const error = typeof req.query.error === "string" ? req.query.error : null;
+  const qs = accountId ? `wa_account_id=${encodeURIComponent(accountId)}` : error ? `error=${encodeURIComponent(error)}` : "";
+  res.redirect(`/crm/integraciones${qs ? `?${qs}` : ""}`);
 });
 
 crm.post("/integraciones/telefono/activar", (_req, res) => {
