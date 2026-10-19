@@ -16,11 +16,23 @@ type ChatMessage = {
   tool_call_id?: string;
 };
 
-type ConversationRecord = { id: string; messages: ChatMessage[]; updated_at: string };
+type ConversationRecord = { id: string; messages: ChatMessage[]; updated_at: string; user_turn_count?: number };
 
 const MODEL = process.env.LUCERO_CHAT_MODEL ?? "gpt-4.1-mini";
 const BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
 const MAX_TURNS_KEPT = 20;
+// Tope real de turnos por conversación (19/10/2026, "seguridad de baneos" +
+// "seguridad de no gastar tantos créditos y no excedernos de ellos" --
+// nunca basta con pedírselo solo al prompt: eso ya está en prompt-core.md,
+// pero aquí hay un límite duro que no depende de que el modelo lo respete).
+// Se cuenta por mensaje de USUARIO (no por ronda de herramientas, que ya
+// tiene su propio tope en MAX_TOOL_ROUNDS_BY_CHANNEL), independiente del
+// recorte de historial (trimToTurns) -- así sigue contando bien aunque la
+// conversación ya se haya recortado. Al llegar al tope, se deriva a una
+// persona UNA vez y se deja de contestar sola -- nunca se corta en
+// silencio sin que el cliente sepa qué pasa.
+const MAX_USER_TURNS_BEFORE_HANDOFF = Number(process.env.LUCERO_MAX_CONVO_TURNS ?? 24);
+const LIMIT_REACHED_REPLY = "Esta conversación ya lleva un buen rato -- te paso con el equipo para que sigan ellos contigo y no te hagan dar más vueltas.";
 // Estructura por canal (15/10/2026, a petición real: "mismo cerebro, pero
 // diferente para cada agente"): el correo es de un solo disparo -- nadie
 // espera en línea, así que puede permitirse más rondas de herramientas para
@@ -110,6 +122,24 @@ export async function handleChatMessage(
   contact: string = sessionId,
 ): Promise<{ reply: string; tool_runs: number }> {
   const conversation = loadConversation(sessionId);
+  const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
+
+  if (userTurnCount > MAX_USER_TURNS_BEFORE_HANDOFF) {
+    await dispatchTool("create_lead", { phone: contact, channel });
+    await dispatchTool("create_handoff", {
+      lead_phone: contact,
+      reason: `La conversación por ${CHANNEL_LABEL[channel]} llegó al tope de ${MAX_USER_TURNS_BEFORE_HANDOFF} turnos sin resolverse -- se derivó automáticamente para no alargarla más.`,
+      urgency: "normal",
+    });
+    saveConversation({
+      id: sessionId,
+      messages: trimToTurns([...conversation.messages, { role: "user", content: userText }, { role: "assistant", content: LIMIT_REACHED_REPLY }]),
+      updated_at: new Date().toISOString(),
+      user_turn_count: userTurnCount,
+    });
+    return { reply: LIMIT_REACHED_REPLY, tool_runs: 0 };
+  }
+
   // El identificador de sesión del canal es el teléfono del cliente. Se registra
   // el lead en el primer contacto: sin él no se pueden hacer seguimientos ni
   // consultar el historial del cliente.
@@ -186,6 +216,7 @@ export async function handleChatMessage(
     id: sessionId,
     messages: trimToTurns([...history, ...turn]),
     updated_at: new Date().toISOString(),
+    user_turn_count: userTurnCount,
   });
   return { reply, tool_runs: toolRuns };
 }
