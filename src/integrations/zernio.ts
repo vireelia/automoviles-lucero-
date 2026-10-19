@@ -8,7 +8,7 @@
 //
 // Mismo patrón honesto que el resto de integraciones: sin credenciales no
 // se intenta nada, y un error de la API nunca se traduce en "enviado".
-import { Zernio } from "@zernio/node";
+import { Zernio, type SocialAccount } from "@zernio/node";
 import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
 
@@ -26,7 +26,16 @@ export function isZernioConnected(): boolean {
 
 // ---------- Publicación en redes (Studio) ----------
 
-export type ZernioAccount = { id: string; platform: string; [key: string]: unknown };
+export type ZernioAccount = { id: string; platform: string; displayName?: string };
+
+// La API de Zernio identifica cada cuenta por `_id` (confirmado contra la
+// API real 19/10/2026 -- la cuenta de WhatsApp recién conectada venía con
+// `id: undefined` hasta corregir esto), nunca `id` -- se normaliza aquí para
+// que el resto del código (crm/app.ts, ZERNIO_WHATSAPP_ACCOUNT_ID) solo
+// tenga que conocer `id`.
+function toZernioAccount(a: SocialAccount): ZernioAccount {
+  return { id: a._id, platform: a.platform, displayName: a.displayName };
+}
 
 export async function listZernioAccounts(): Promise<
   { ok: true; accounts: ZernioAccount[] } | { ok: false; error: string }
@@ -35,7 +44,7 @@ export async function listZernioAccounts(): Promise<
   if (!zernio) return { ok: false, error: "zernio_no_configurado" };
   try {
     const { data } = await zernio.accounts.listAccounts();
-    return { ok: true, accounts: (data?.accounts ?? data ?? []) as ZernioAccount[] };
+    return { ok: true, accounts: (data?.accounts ?? []).map(toZernioAccount) };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
