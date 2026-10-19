@@ -167,6 +167,17 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 
+// Da de alta a mano la conversación de Zernio de un número del EQUIPO
+// (Ramón/José), nunca de un cliente -- a diferencia del resto de
+// conversaciones, que el propio webhook /webhooks/zernio-whatsapp aprende
+// solas en cuanto alguien escribe, el número del equipo no "escribe primero"
+// al bot en el uso normal, así que su mapeo se siembra aquí una vez con el
+// conversationId real que ya existe en Zernio (historial de coexistencia).
+app.post("/admin/zernio/seed-team-conversation", requireAdminToken, route((a: { phone: string; conversation_id: string; account_id: string }) => {
+  rememberWhatsappConversation(a.phone, a.conversation_id, a.account_id);
+  return { status: "ok" };
+}));
+
 // CRM sencillo para el equipo del concesionario.
 bootstrapAdmin();
 app.use("/crm", crm);
