@@ -11,7 +11,7 @@ import { deliverEmail } from "../email/agent.js";
 import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
 import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled } from "../tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
@@ -1905,12 +1905,20 @@ function whatsappZernioBox(req: express.Request): string {
     : callbackError
       ? `<div class="msg" style="background:#fdecea;border-color:#c62828">Zernio no pudo conectar el número: ${esc(callbackError)}</div>`
       : "";
+  const agentOn = isWhatsappZernioAgentEnabled();
+  const agentToggle = configured
+    ? `<p>Miguel en este canal: <strong>${agentOn ? "Respondiendo" : "Pausado -- los mensajes avisan al equipo, nadie los contesta solo"}</strong></p>
+<form method="post" action="/crm/integraciones/whatsapp/agente/${agentOn ? "desactivar" : "activar"}" style="display:inline">
+<button class="btn ${agentOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${agentOn ? "¿Pausar a Miguel en WhatsApp? Los mensajes nuevos seguirán avisando al equipo, pero nadie los contestará solo." : "¿Activar a Miguel en WhatsApp? Empezará a contestar él solo los mensajes nuevos de este número."}')">${agentOn ? "Pausar a Miguel aquí" : "Activar a Miguel aquí"}</button>
+</form>`
+    : "";
   return `<div class="box"><h3 style="margin-top:0">WhatsApp -- vía Zernio</h3>
 <p>Estado: <strong>${configured ? "Configurado" : "No configurado"}</strong></p>
 <p class="sub">Alternativa a la WhatsApp Cloud API directa de Meta: conecta el número con un clic (Embedded Signup gestionado por Zernio), sin el proceso de verificación de negocio de Meta.</p>
 ${result}
 <p><a class="btn ${configured ? "light" : "ok"}" href="/crm/integraciones/whatsapp/conectar">${configured ? "Reconectar" : "Conectar"} WhatsApp con Zernio</a></p>
 <p class="sub">Requiere <code>ZERNIO_API_KEY</code> y <code>ZERNIO_PROFILE_ID</code> ya puestos en el servidor.</p>
+${agentToggle}
 </div>`;
 }
 
@@ -1931,6 +1939,18 @@ crm.get("/integraciones/whatsapp/callback", (req, res) => {
   const error = typeof req.query.error === "string" ? req.query.error : null;
   const qs = accountId ? `wa_account_id=${encodeURIComponent(accountId)}` : error ? `error=${encodeURIComponent(error)}` : "";
   res.redirect(`/crm/integraciones${qs ? `?${qs}` : ""}`);
+});
+
+crm.post("/integraciones/whatsapp/agente/activar", (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  setWhatsappZernioAgentEnabled(true, me(res).email);
+  back(res, "/crm/integraciones", "Miguel activado en WhatsApp -- ya contesta él solo los mensajes nuevos de este número.");
+});
+
+crm.post("/integraciones/whatsapp/agente/desactivar", (_req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  setWhatsappZernioAgentEnabled(false, me(res).email);
+  back(res, "/crm/integraciones", "Miguel pausado en WhatsApp -- los mensajes nuevos avisan al equipo, nadie los contesta solo.");
 });
 
 crm.post("/integraciones/telefono/activar", (_req, res) => {

@@ -20,7 +20,8 @@ import { verifyZernioSignature, rememberWhatsappConversation } from "./integrati
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled } from "./tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled } from "./tools/agent-toggle.js";
+import { raiseAlert } from "./alerts/alerts.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
@@ -418,6 +419,20 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     }
 
     rememberWhatsappConversation(phone, conversationId, accountId);
+
+    // Interruptor nuevo (19/10/2026, "todavía no actives Miguel" justo al
+    // dejar el canal conectado): con el agente en pausa, el mensaje real del
+    // cliente nunca se pierde -- se avisa al equipo para que responda a mano
+    // mientras tanto -- pero Miguel no contesta solo hasta que se active
+    // desde Integraciones.
+    if (!isWhatsappZernioAgentEnabled()) {
+      raiseAlert({
+        kind: "handoff_urgente",
+        lead_phone: phone,
+        reason: `WhatsApp (vía Zernio): el agente todavía está pausado -- el cliente escribió "${text.trim().slice(0, 300)}" y no se le ha respondido. Actívalo desde Integraciones cuando quieras que Miguel conteste aquí.`,
+      });
+      return;
+    }
 
     const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone);
     const sent = await sendWhatsappText(phone, result.reply);

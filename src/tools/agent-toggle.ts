@@ -36,3 +36,23 @@ export function setEmailAutoSendEnabled(enabled: boolean, updatedBy: string | nu
   rows.push({ id: "email_auto_send", enabled, updated_at: new Date().toISOString(), updated_by: updatedBy });
   writeCollection("agent_toggles", rows);
 }
+
+// Interruptor del agente en WhatsApp vía Zernio (19/10/2026, a petición real
+// justo al dejar el canal conectado: "todavía no actives Miguel"). A
+// diferencia de voice_agent/email_auto_send -- que ya llevaban tiempo en
+// marcha y por eso su valor por defecto es "activado" -- este canal es
+// nuevo de verdad, así que por defecto está APAGADO: hay que encenderlo a
+// propósito desde Integraciones, nunca queda activo solo por desplegar el
+// código o conectar el número.
+type WhatsappZernioToggleRecord = { id: "whatsapp_zernio_agent"; enabled: boolean; updated_at: string; updated_by: string | null };
+
+export function isWhatsappZernioAgentEnabled(): boolean {
+  const row = readCollection<WhatsappZernioToggleRecord>("agent_toggles").find((r) => r.id === "whatsapp_zernio_agent");
+  return row?.enabled ?? false;
+}
+
+export function setWhatsappZernioAgentEnabled(enabled: boolean, updatedBy: string | null = null): void {
+  const rows = readCollection<WhatsappZernioToggleRecord>("agent_toggles").filter((r) => r.id !== "whatsapp_zernio_agent");
+  rows.push({ id: "whatsapp_zernio_agent", enabled, updated_at: new Date().toISOString(), updated_by: updatedBy });
+  writeCollection("agent_toggles", rows);
+}
