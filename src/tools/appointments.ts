@@ -3,6 +3,7 @@ import { envelope } from "../response.js";
 import { isGoogleConnected, calendarBusy, calendarCreateEvent } from "../integrations/google.js";
 import { isMadridHoliday } from "../data/holidays-madrid-2026.js";
 import { withAppointmentLock } from "./appointment-lock.js";
+import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
 
 function now() {
   return new Date().toISOString();
@@ -45,7 +46,7 @@ function withinWeekdayWindow(minutes: number): boolean {
 // mucho "requested" (Sección 22: CITA != RESERVA, y no hay autoridad de
 // agenda todavía). Se valida el horario confirmado para no aceptar una
 // solicitud claramente fuera de lo que el negocio ya dijo que no atiende.
-export function createAppointment(args: {
+export async function createAppointment(args: {
   lead_phone?: string;
   vehicle_id?: string;
   appointment_type?: "visita" | "prueba" | "tasacion" | "reserva_comercial";
@@ -64,6 +65,7 @@ export function createAppointment(args: {
       created_at: now(),
     };
     appendToCollection("appointments", appointment);
+    await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
     return envelope({
       status: "ok",
       data: appointment,
@@ -88,6 +90,7 @@ export function createAppointment(args: {
     created_at: now(),
   };
   appendToCollection("appointments", appointment);
+  await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
   return envelope({
     status: "ok",
     data: appointment,
@@ -117,7 +120,7 @@ export function updateAppointment(args: { appointment_id: string; requested_date
   return envelope({ status: "ok", data: appt, source: "registro interno", conflicts: ["Cambio registrado como nueva solicitud -- sigue pendiente de confirmación del negocio."] });
 }
 
-export function cancelAppointment(args: { appointment_id: string; reason?: string }) {
+export async function cancelAppointment(args: { appointment_id: string; reason?: string }) {
   const appointments = readCollection<any>("appointments", []);
   const appt = appointments.find((a) => a.id === args.appointment_id);
   if (!appt) return envelope({ status: "not_found", error_code: "appointment_not_found" });
@@ -125,6 +128,7 @@ export function cancelAppointment(args: { appointment_id: string; reason?: strin
   appt.status = "cancelled";
   appt.cancel_reason = args.reason ?? null;
   writeCollection("appointments", appointments);
+  await notifyVisitCancelled({ lead_phone: appt.lead_phone, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time });
 
   return envelope({ status: "ok", data: appt, source: "registro interno" });
 }
@@ -274,7 +278,7 @@ export async function createAppointmentWithCalendar(args: Parameters<typeof crea
     const minutes = parseTime(args.requested_time);
     const dateOk = Boolean(args.requested_date && /^\d{4}-\d{2}-\d{2}$/.test(args.requested_date));
     if (!isGoogleConnected() || minutes === null || !dateOk || isNonBookingDay(args.requested_date)) {
-      return createAppointment(args);
+      return await createAppointment(args);
     }
     const startMs = madridLocalToUtcMs(args.requested_date!, minutes);
     const endMs = startMs + APPOINTMENT_MINUTES * 60000;
@@ -288,7 +292,7 @@ export async function createAppointmentWithCalendar(args: Parameters<typeof crea
         conflicts: ["Ese hueco ya está ocupado -- ofrecer otro horario."],
       });
     }
-    const result = createAppointment(args);
+    const result = await createAppointment(args);
     const registered = result as unknown as { status: string; data: { id: string } | null };
     if (registered.status !== "ok" || !registered.data) return result;
 

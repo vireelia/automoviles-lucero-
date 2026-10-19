@@ -2,6 +2,7 @@ import { appendToCollection, readCollection, writeCollection } from "../store.js
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
 import { getOfficialStatus, setOfficialStatus } from "./vehicle-state.js";
+import { notifyReservation } from "./team-notify.js";
 
 // Flujo de reserva (Secciones 25-28 del encargo). SIEMPRE requiere
 // validación humana antes de RESERVED -- ninguna herramienta de este
@@ -28,7 +29,7 @@ function readReservations() {
   return readCollection<Reservation>("reservations", []);
 }
 
-export function createReservationPending(args: { vehicle_id: string; lead_phone?: string }) {
+export async function createReservationPending(args: { vehicle_id: string; lead_phone?: string }) {
   const currentStatus = getOfficialStatus(args.vehicle_id);
   if (currentStatus === "RESERVED" || currentStatus === "SOLD") {
     return envelope({
@@ -65,6 +66,7 @@ export function createReservationPending(args: { vehicle_id: string; lead_phone?
   };
   appendToCollection("reservations", reservation);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
+  await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount });
 
   const conflicts = [
     "Datos bancarios/Bizum para el pago de la señal NO están configurados en este sistema todavía -- deriva con create_handoff para que el equipo le pase las instrucciones de pago reales. No inventes un número de cuenta ni un enlace de pago.",

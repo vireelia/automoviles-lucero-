@@ -29,7 +29,7 @@ function normalizeText(s: string) {
 // aviso humano sigue su curso normal (de ahí puede resolverse a mano).
 // Tampoco duplica: si ya hay una reserva viva para ese mismo coche y
 // contacto, no crea otra.
-export function tryAutoCreateReservation(leadPhone: string, vehicleInterest: string | null | undefined): void {
+export async function tryAutoCreateReservation(leadPhone: string, vehicleInterest: string | null | undefined): Promise<void> {
   try {
     if (!vehicleInterest || !vehicleInterest.trim()) return;
     const wanted = normalizeText(vehicleInterest);
@@ -46,7 +46,7 @@ export function tryAutoCreateReservation(leadPhone: string, vehicleInterest: str
     );
     if (alreadyPending) return; // ya está, no duplicar
 
-    createReservationPending({ vehicle_id: vehicleId, lead_phone: leadPhone });
+    await createReservationPending({ vehicle_id: vehicleId, lead_phone: leadPhone });
   } catch (err) {
     // Nunca debe romper la creación del aviso -- si esto falla, el aviso
     // humano ya quedó registrado de todas formas y el equipo lo resuelve.
@@ -102,7 +102,7 @@ export function createServiceRequest(args: { lead_phone?: string; procedure_type
 // (Sección 14). No hay transferencia en vivo conectada todavía (números y
 // responsables pendientes de confirmar, Sección 23) -- por eso esto solo
 // registra la petición en vez de intentar transferir la llamada.
-export function createHandoff(args: {
+export async function createHandoff(args: {
   lead_phone?: string;
   reason?: string;
   urgency?: "normal" | "alta";
@@ -137,7 +137,7 @@ export function createHandoff(args: {
     });
   }
   if (args.reason_type === "reserva" && args.lead_phone) {
-    tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest);
+    await tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest);
   }
   return envelope({
     status: "ok",

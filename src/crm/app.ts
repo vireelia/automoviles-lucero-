@@ -986,7 +986,7 @@ ${reservations.length === 0 ? `<div class="empty">Todavía no hay reservas.</div
   res.type("html").send(page("Reservas", me(res), body, msgOf(req)));
 });
 
-crm.post("/reservas", (req, res) => {
+crm.post("/reservas", async (req, res) => {
   const vehicleId = String(req.body.vehicle_id ?? "");
   const contacto = String(req.body.contacto ?? "").trim();
   const nombre = String(req.body.nombre ?? "").trim();
@@ -1022,7 +1022,7 @@ crm.post("/reservas", (req, res) => {
       save("leads", leads);
     }
   }
-  const result = createReservationPending({ vehicle_id: vehicleId, lead_phone: contacto }) as unknown as { status: string };
+  const result = (await createReservationPending({ vehicle_id: vehicleId, lead_phone: contacto })) as unknown as { status: string };
   if (result.status !== "ok") return back(res, "/crm/reservas", "Ese coche no está disponible para reservar");
   back(res, "/crm/reservas", "Reserva creada. Espera el pago de 500 €");
 });
@@ -1094,7 +1094,7 @@ crm.get("/alertas-activas.json", (_req, res) => {
   res.json({ ids: pendingAlerts().map((a) => a.id) });
 });
 
-crm.get("/pendientes", (req, res) => {
+crm.get("/pendientes", async (req, res) => {
   const isAdmin = me(res).role === "admin";
   const handoffs = list<Handoff>("handoffs").filter((h) => h.status === "requested").sort((a, b) => b.created_at.localeCompare(a.created_at));
   // Backfill automático (18/10/2026, "es una automatizacion, no nada para
@@ -1106,7 +1106,7 @@ crm.get("/pendientes", (req, res) => {
   for (const h of handoffs) {
     if (h.reason_type === "reserva" && h.lead_phone) {
       const lead = list<Lead>("leads").find((l) => l.phone === h.lead_phone);
-      tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
+      await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
     }
   }
   const mails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).sort((a, b) => b.created_at.localeCompare(a.created_at));
