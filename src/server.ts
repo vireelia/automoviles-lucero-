@@ -429,6 +429,24 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       return;
     }
 
+    // Nunca contestar en un grupo de WhatsApp (19/10/2026, "que el agente de
+    // chat no responda mensajes de grupos... solo mensajes de clientes
+    // reales"). La documentación pública de Zernio no confirma un campo
+    // "isGroup" fiable en este webhook para WhatsApp -- así que, en vez de
+    // confiar en un campo que podría no existir, dos comprobaciones
+    // defensivas que SÍ se pueden verificar: cualquier bandera de grupo que
+    // Meta pudiera colar sin documentar (groupId/isGroup, en cualquiera de
+    // los sitios donde Zernio podría ponerla), y que el identificador del
+    // remitente tenga forma de número de teléfono real (solo dígitos,
+    // 8-15 caracteres) -- un JID de grupo de WhatsApp no tiene esa forma.
+    const looksLikeGroup =
+      Boolean(body.message?.groupId || body.message?.isGroup || body.conversation?.groupId || body.conversation?.isGroup || body.message?.sender?.groupId) ||
+      !/^\d{8,15}$/.test(phone);
+    if (looksLikeGroup) {
+      console.warn("[zernio-whatsapp] mensaje con forma de grupo (no de cliente individual), se ignora:", JSON.stringify(body).slice(0, 500));
+      return;
+    }
+
     rememberWhatsappConversation(phone, conversationId, accountId);
 
     // Interruptor nuevo (19/10/2026, "todavía no actives Miguel" justo al
