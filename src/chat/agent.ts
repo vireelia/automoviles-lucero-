@@ -28,11 +28,13 @@ const MAX_TURNS_KEPT = 20;
 // Se cuenta por mensaje de USUARIO (no por ronda de herramientas, que ya
 // tiene su propio tope en MAX_TOOL_ROUNDS_BY_CHANNEL), independiente del
 // recorte de historial (trimToTurns) -- así sigue contando bien aunque la
-// conversación ya se haya recortado. Al llegar al tope, se deriva a una
-// persona UNA vez y se deja de contestar sola -- nunca se corta en
-// silencio sin que el cliente sepa qué pasa.
+// conversación ya se haya recortado. Al llegar al tope, la conversación se
+// cierra con naturalidad -- nunca se corta en silencio sin que el cliente
+// sepa qué pasa, pero tampoco avisa a Ramón/José: llegar al tope no es por
+// sí solo "algo importante" (a petición real, 19/10/2026 -- solo lo son
+// una visita o una reserva, y esas siguen avisando donde ya avisaban).
 const MAX_USER_TURNS_BEFORE_HANDOFF = Number(process.env.LUCERO_MAX_CONVO_TURNS ?? 24);
-const LIMIT_REACHED_REPLY = "Esta conversación ya lleva un buen rato -- te paso con el equipo para que sigan ellos contigo y no te hagan dar más vueltas.";
+const LIMIT_REACHED_REPLY = "Esta conversación ya lleva un buen rato -- para no darte más vueltas, lo mejor es que te pases por el concesionario o lo retomamos con calma en otro momento.";
 // Estructura por canal (15/10/2026, a petición real: "mismo cerebro, pero
 // diferente para cada agente"): el correo es de un solo disparo -- nadie
 // espera en línea, así que puede permitirse más rondas de herramientas para
@@ -125,12 +127,14 @@ export async function handleChatMessage(
   const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
 
   if (userTurnCount > MAX_USER_TURNS_BEFORE_HANDOFF) {
+    // A petición real (19/10/2026, corrección directa: "nunca se deriva al
+    // equipo si no es algo importante, como una visita o una reserva") --
+    // llegar al tope NO es, por sí solo, algo importante, así que esto
+    // NUNCA avisa a Ramón/José ni crea un handoff: solo corta la conversación
+    // con naturalidad. Los avisos reales siguen viviendo donde ya vivían --
+    // create_handoff (visita/reserva) los sigue llamando el propio agente
+    // cuando de verdad toca, no este tope.
     await dispatchTool("create_lead", { phone: contact, channel });
-    await dispatchTool("create_handoff", {
-      lead_phone: contact,
-      reason: `La conversación por ${CHANNEL_LABEL[channel]} llegó al tope de ${MAX_USER_TURNS_BEFORE_HANDOFF} turnos sin resolverse -- se derivó automáticamente para no alargarla más.`,
-      urgency: "normal",
-    });
     saveConversation({
       id: sessionId,
       messages: trimToTurns([...conversation.messages, { role: "user", content: userText }, { role: "assistant", content: LIMIT_REACHED_REPLY }]),
