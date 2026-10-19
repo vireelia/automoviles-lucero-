@@ -43,6 +43,10 @@ type Lead = {
   temperature: string;
   followup_count: number;
   do_not_contact: boolean;
+  // Limpieza de clientes de poco interés (19/10/2026, a petición real:
+  // "ocultar/archivar, no borrar"): nunca se borra nada aquí, solo deja de
+  // salir en la lista principal.
+  archived?: boolean;
   updated_at?: string;
   created_at: string;
 };
@@ -176,6 +180,26 @@ function leadDisplayName(l: Lead): string {
   if (l.phone && !isCochesNetRelay(l.phone)) return l.phone;
   if (l.vehicle_interest) return `Interesado/a en ${l.vehicle_interest}`;
   return "Sin datos de contacto";
+}
+// Limpieza automática de clientes de poco interés (19/10/2026, a petición
+// real: "ocultar/archivar, no borrar" + "Fría + sin contacto reciente").
+// Nunca borra nada -- solo deja de salir en la lista principal de
+// Clientes. Reversible con un clic ("Desarchivar"). Configurable por si
+// el tope de días hace falta ajustarlo sin tocar código.
+const LEAD_ARCHIVE_INACTIVE_DAYS = Number(process.env.LEAD_ARCHIVE_INACTIVE_DAYS ?? 45);
+function autoArchiveColdLeads(): void {
+  const leads = list<Lead>("leads");
+  const cutoff = Date.now() - LEAD_ARCHIVE_INACTIVE_DAYS * 24 * 60 * 60 * 1000;
+  let changed = false;
+  for (const l of leads) {
+    if (l.archived || l.temperature !== "COLD") continue;
+    const lastActivity = new Date(l.updated_at ?? l.created_at).getTime();
+    if (Number.isFinite(lastActivity) && lastActivity < cutoff) {
+      l.archived = true;
+      changed = true;
+    }
+  }
+  if (changed) save("leads", leads);
 }
 // Igual que leadDisplayName, pero para sitios que solo tienen phone/name
 // sueltos (Avisos, Pendientes) y no el Lead completo -- a petición real,
@@ -753,14 +777,15 @@ function leadCard(l: Lead, user: CrmUser): string {
   const del = user.role === "admin"
     ? `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
     : "";
+  const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline"><button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
   const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk" style="position:absolute;top:18px;right:20px">` : "";
   return `<div class="card" style="position:relative"><div class="info">
 ${sel}
 <h3>${esc(leadDisplayName(l))}</h3>
-<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="origen">${esc(ORIGIN[l.origin ?? l.channel ?? ""] ?? "Origen sin registrar")}</span>${!l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}</p>
+<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="origen">${esc(ORIGIN[l.origin ?? l.channel ?? ""] ?? "Origen sin registrar")}</span>${!l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}${l.archived ? `<span class="tag">Archivado</span>` : ""}</p>
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${del}
+<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${archiveBtn}${del}
 </div></div>`;
 }
 
@@ -1470,28 +1495,36 @@ crm.post("/llamadas-masivo", (req, res) => {
 
 // ---------- Clientes (solo lectura de la segmentación de Miguel) ----------
 crm.get("/clientes", (req, res) => {
-  const t = typeof req.query.t === "string" && TEMP[req.query.t] ? req.query.t : "todos";
-  const leads = list<Lead>("leads").filter((l) => t === "todos" || l.temperature === t).sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
+  autoArchiveColdLeads();
+  const t = typeof req.query.t === "string" && (TEMP[req.query.t] || req.query.t === "archivados") ? req.query.t : "todos";
+  const all = list<Lead>("leads");
+  const archivedCount = all.filter((l) => l.archived).length;
+  const leads = all
+    .filter((l) => (t === "archivados" ? l.archived : !l.archived && (t === "todos" || l.temperature === t)))
+    .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
   const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
   const isAdmin = me(res).role === "admin";
   const bulk = isAdmin && leads.length > 0
     ? `<form id="clientes-bulk" method="post" action="/crm/clientes-masivo"><input type="hidden" name="t" value="${esc(t)}"></form>
 <div class="bulkbar">
 <label><input class="msgsel" type="checkbox" onchange="toggleAllMsgs(this,'ids')"> Seleccionar todos (${leads.length})</label>
+${t === "archivados"
+  ? `<button class="btn ok" type="submit" form="clientes-bulk" name="accion" value="desarchivar_seleccionados">Desarchivar seleccionados</button>`
+  : `<button class="btn light" type="submit" form="clientes-bulk" name="accion" value="archivar_seleccionados">Archivar seleccionados</button>`}
 <button class="btn danger" type="submit" form="clientes-bulk" name="accion" value="eliminar_seleccionados" onclick="return confirm('¿Eliminar los clientes seleccionados? Se pueden recuperar luego desde la Papelera.')">Eliminar seleccionados</button>
 </div>`
     : "";
   const body = `<h1>Clientes</h1>
-<p class="sub">Miguel anota solo lo que quiere cada cliente. Tú solo lo lees y llamas si hace falta.</p>
+<p class="sub">Miguel anota solo lo que quiere cada cliente. Tú solo lo lees y llamas si hace falta. Los clientes fríos sin contacto en ${LEAD_ARCHIVE_INACTIVE_DAYS} días se archivan solos -- nunca se borran, solo dejan de aparecer aquí.</p>
 <div class="box"><h3 style="margin-top:0">Añadir un cliente a mano</h3>
 <form method="post" action="/crm/clientes">
 <div class="row"><div><label>Nombre</label><input name="nombre"></div>
 <div><label>Teléfono</label><input name="telefono" required></div></div>
 <label>Coche de interés</label><input name="vehicle_interest">
 <button class="btn ok" type="submit">Añadir cliente</button></form></div>
-<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")}</div>
+<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")} ${pill("archivados", `Archivados (${archivedCount})`)}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">Todavía no hay clientes en esta lista.</div>` : leads.map((l) => leadCard(l, me(res))).join("")}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "Todavía no hay clientes en esta lista."}</div>` : leads.map((l) => leadCard(l, me(res))).join("")}`;
   res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
 });
 
@@ -1560,6 +1593,8 @@ crm.post("/clientes/:id", (req, res) => {
   }
   if (accion === "no_contactar") lead.do_not_contact = true;
   else if (accion === "reactivar") lead.do_not_contact = false;
+  else if (accion === "archivar") lead.archived = true;
+  else if (accion === "desarchivar") lead.archived = false;
   else {
     // El teléfono NO se edita aquí a propósito: es la clave con la que
     // casan las visitas y reservas de este cliente (situation(), la propia
@@ -1571,7 +1606,19 @@ crm.post("/clientes/:id", (req, res) => {
   }
   lead.updated_at = now();
   save("leads", leads);
-  back(res, `/crm/clientes/${lead.id}`, accion === "guardar" ? "Cambios guardados" : accion === "no_contactar" ? "Listo: no le escribiremos más" : "Listo: sí se le puede escribir");
+  back(
+    res,
+    `/crm/clientes/${lead.id}`,
+    accion === "guardar"
+      ? "Cambios guardados"
+      : accion === "no_contactar"
+        ? "Listo: no le escribiremos más"
+        : accion === "archivar"
+          ? "Cliente archivado"
+          : accion === "desarchivar"
+            ? "Cliente desarchivado"
+            : "Listo: sí se le puede escribir",
+  );
 });
 
 // Eliminar varios clientes a la vez (a petición real, 18/10/2026: "la
@@ -1580,9 +1627,20 @@ crm.post("/clientes/:id", (req, res) => {
 // recuperable, nunca borrado directo -- y solo el administrador, igual que
 // ya exigía el borrado individual de clientes.
 crm.post("/clientes-masivo", (req, res) => {
-  if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede eliminar clientes");
   const ids = ([] as string[]).concat(req.body.ids ?? []);
   if (ids.length === 0) return back(res, "/crm/clientes", "No seleccionaste ningún cliente");
+  const accion = String(req.body.accion ?? "eliminar_seleccionados");
+
+  if (accion === "archivar_seleccionados" || accion === "desarchivar_seleccionados") {
+    const leads = list<Lead>("leads");
+    const targets = leads.filter((l) => ids.includes(l.id));
+    for (const l of targets) l.archived = accion === "archivar_seleccionados";
+    save("leads", leads);
+    const verbo = accion === "archivar_seleccionados" ? "archivado(s)" : "desarchivado(s)";
+    return back(res, "/crm/clientes", targets.length === 0 ? "No había nada que hacer" : `${targets.length} cliente(s) ${verbo}`);
+  }
+
+  if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede eliminar clientes");
   const leads = list<Lead>("leads");
   const targets = leads.filter((l) => ids.includes(l.id));
   for (const l of targets) moveToTrash("leads", l, `Cliente: ${l.name || l.phone || "sin nombre"}`, me(res).email);
