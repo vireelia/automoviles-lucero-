@@ -16,13 +16,20 @@ import { startScheduler } from "./scheduler.js";
 import { appendToCollection, readCollection, writeCollection } from "./store.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
-import { verifyZernioSignature, rememberWhatsappConversation } from "./integrations/zernio.js";
+import {
+  verifyZernioSignature,
+  rememberWhatsappConversation,
+  listRecentWhatsappConversations,
+  getRecentWhatsappMessages,
+  isRealCustomerConversation,
+} from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled } from "./tools/agent-toggle.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
+import { businessInfo } from "./data/business-info.js";
 import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
@@ -177,6 +184,92 @@ app.post("/admin/zernio/seed-team-conversation", requireAdminToken, route((a: { 
   rememberWhatsappConversation(a.phone, a.conversation_id, a.account_id);
   return { status: "ok" };
 }));
+
+// Backlog real de WhatsApp (19/10/2026, "mira los 100 mensajes reales de
+// los clientes y ve respondiendo, pero verifica que son clientes"):
+// conversaciones importadas del historial (de antes de este webhook) que
+// nunca pasaron por el agente. Mismo cerebro de siempre (handleChatMessage,
+// el mismo que usa cada mensaje nuevo) -- nunca una respuesta inventada
+// aparte. Tres filtros antes de tocar nada:
+// 1) Forma de cliente individual real (nunca grupo, nunca el número del
+//    propio equipo -- Ramón/José se excluyen explícitamente).
+// 2) Dentro de las 24h desde su último mensaje (fuera de eso, WhatsApp
+//    rechaza igualmente el envío -- no tiene sentido ni intentarlo).
+// 3) Con un mensaje entrante real con texto (se ignoran adjuntos sin
+//    texto, mensajes no soportados, etc. -- nunca se inventa qué pedían).
+// dry_run (por defecto true): genera la respuesta real del agente pero NO
+// la envía -- para poder revisar antes de mandar nada a un cliente real.
+const TEAM_PHONES = new Set([
+  businessInfo.responsables.ramon.transfer_number.replace(/[^\d]/g, ""),
+  businessInfo.responsables.jose.transfer_number.replace(/[^\d]/g, ""),
+]);
+app.post(
+  "/admin/zernio/process-whatsapp-backlog",
+  requireAdminToken,
+  route(async (a: { limit?: number; dry_run?: boolean; max_age_hours?: number }) => {
+    const limit = a.limit ?? 100;
+    const dryRun = a.dry_run ?? true;
+    const maxAgeHours = a.max_age_hours ?? 24;
+
+    const convsResult = await listRecentWhatsappConversations(limit);
+    if (!convsResult.ok) return { status: "error", error: convsResult.error };
+
+    const now = Date.now();
+    const report: Array<Record<string, unknown>> = [];
+
+    for (const c of convsResult.conversations) {
+      if (TEAM_PHONES.has(c.phone)) {
+        report.push({ phone: c.phone, name: c.name, saltado: "es_del_equipo_no_cliente" });
+        continue;
+      }
+      if (!isRealCustomerConversation(c)) {
+        report.push({ phone: c.phone, name: c.name, saltado: "no_parece_cliente_individual_real" });
+        continue;
+      }
+      if (!c.updatedTime) {
+        report.push({ phone: c.phone, name: c.name, saltado: "sin_fecha" });
+        continue;
+      }
+      const ageHours = (now - Date.parse(c.updatedTime)) / 3600000;
+      if (!(ageHours <= maxAgeHours)) {
+        report.push({ phone: c.phone, name: c.name, saltado: `fuera_de_ventana_24h (hace ${ageHours.toFixed(1)}h)` });
+        continue;
+      }
+
+      const msgsResult = await getRecentWhatsappMessages(c.conversationId, 10);
+      if (!msgsResult.ok) {
+        report.push({ phone: c.phone, name: c.name, saltado: `error_leyendo_mensajes: ${msgsResult.error}` });
+        continue;
+      }
+      const lastIncoming = msgsResult.messages.find((m) => m.direction === "incoming" && m.text && m.text.trim());
+      if (!lastIncoming?.text) {
+        report.push({ phone: c.phone, name: c.name, saltado: "sin_mensaje_entrante_con_texto" });
+        continue;
+      }
+
+      try {
+        const chatResult = await handleChatMessage(c.phone, lastIncoming.text, "WHATSAPP", c.phone);
+        if (dryRun) {
+          report.push({ phone: c.phone, name: c.name, pregunta: lastIncoming.text, respuesta_propuesta: chatResult.reply, enviado: false });
+        } else {
+          const sent = await sendWhatsappText(c.phone, chatResult.reply);
+          report.push({
+            phone: c.phone,
+            name: c.name,
+            pregunta: lastIncoming.text,
+            respuesta: chatResult.reply,
+            enviado: sent.ok,
+            error_envio: sent.ok ? null : sent.error,
+          });
+        }
+      } catch (err) {
+        report.push({ phone: c.phone, name: c.name, saltado: `error_agente: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    }
+
+    return { status: "ok", dry_run: dryRun, total_conversaciones: convsResult.conversations.length, report };
+  }),
+);
 
 // CRM sencillo para el equipo del concesionario.
 bootstrapAdmin();

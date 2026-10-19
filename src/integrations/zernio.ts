@@ -111,6 +111,86 @@ function normalizeParticipantId(phone: string): string {
   return phone.replace(/[^\d]/g, "");
 }
 
+// Backlog real de WhatsApp (19/10/2026, "mira los 100 mensajes reales de
+// los clientes y ve respondiendo, pero verifica que son clientes"):
+// conversaciones reales importadas del historial de coexistencia al
+// conectar el número, de antes de que existiera este webhook -- hay que
+// leerlas y responderlas con el mismo agente de siempre, nunca inventando
+// una respuesta aparte.
+export type WhatsappConversationSummary = {
+  conversationId: string;
+  phone: string;
+  name: string | null;
+  lastMessage: string | null;
+  updatedTime: string | null;
+  unreadCount: number;
+};
+
+// Mismo criterio que el webhook (server.ts): un cliente real es un número
+// individual (solo dígitos, 8-15 -- el máximo real de E.164), nunca un
+// grupo ni un id con otra forma.
+function looksLikeRealCustomerPhone(phone: string): boolean {
+  return /^\d{8,15}$/.test(phone);
+}
+
+export async function listRecentWhatsappConversations(limit = 100): Promise<
+  { ok: true; conversations: WhatsappConversationSummary[] } | { ok: false; error: string }
+> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data } = await zernio.messages.listInboxConversations({ query: { accountId, platform: "whatsapp", limit, sortOrder: "desc" } });
+    const rows = (data?.data ?? []) as Array<{
+      id: string;
+      participantUsername?: string;
+      participantId?: string;
+      participantName?: string;
+      lastMessage?: string;
+      updatedTime?: string;
+      unreadCount?: number | null;
+    }>;
+    const conversations = rows.map((r) => ({
+      conversationId: r.id,
+      phone: normalizeParticipantId(r.participantId ?? r.participantUsername ?? ""),
+      name: r.participantName && !/^\d+$/.test(r.participantName) ? r.participantName : null,
+      lastMessage: r.lastMessage ?? null,
+      updatedTime: r.updatedTime ?? null,
+      unreadCount: r.unreadCount ?? 0,
+    }));
+    return { ok: true, conversations };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function isRealCustomerConversation(c: WhatsappConversationSummary): boolean {
+  return looksLikeRealCustomerPhone(c.phone);
+}
+
+// Últimos mensajes de una conversación, del más reciente al más antiguo --
+// para ver de verdad qué preguntó el cliente, no solo el resumen corto de
+// listRecentWhatsappConversations.
+export async function getRecentWhatsappMessages(
+  conversationId: string,
+  limit = 10,
+): Promise<{ ok: true; messages: { text: string | null; direction: "incoming" | "outgoing"; createdAt: string }[] } | { ok: false; error: string }> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data } = await zernio.messages.getInboxConversationMessages({ path: { conversationId }, query: { accountId, limit, sortOrder: "desc" } });
+    const messages = (data.messages ?? []).map((m: { message?: string | null; direction: "incoming" | "outgoing"; createdAt: string }) => ({
+      text: m.message ?? null,
+      direction: m.direction,
+      createdAt: m.createdAt,
+    }));
+    return { ok: true, messages };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Recuerda qué conversationId de Zernio corresponde a cada número de
 // teléfono, para poder responder dentro de la ventana de 24h sin tener
 // que crear una conversación nueva (que en WhatsApp exige plantilla).
