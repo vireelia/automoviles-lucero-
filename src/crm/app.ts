@@ -280,9 +280,15 @@ const LEAD_ARCHIVE_INACTIVE_DAYS = Number(process.env.LEAD_ARCHIVE_INACTIVE_DAYS
 function autoArchiveColdLeads(): void {
   const leads = list<Lead>("leads");
   const cutoff = Date.now() - LEAD_ARCHIVE_INACTIVE_DAYS * 24 * 60 * 60 * 1000;
+  // FALLO REAL detectado (20/10/2026): nunca archivar -- ni a mano en masa ni
+  // aquí -- un lead con un aviso (handoff) todavía sin atender en Pendientes;
+  // el aviso es la única señal real de una oportunidad en curso cuando
+  // todavía no existe cita/reserva (ver también /clientes-masivo).
+  const openHandoffPhones = new Set(list<Handoff>("handoffs").filter((h) => h.status === "requested" && h.lead_phone).map((h) => h.lead_phone as string));
   let changed = false;
   for (const l of leads) {
     if (l.archived || l.temperature !== "COLD") continue;
+    if (l.phone && openHandoffPhones.has(l.phone)) continue;
     const lastActivity = new Date(l.updated_at ?? l.created_at).getTime();
     if (Number.isFinite(lastActivity) && lastActivity < cutoff) {
       l.archived = true;
@@ -2059,10 +2065,25 @@ crm.post("/clientes-masivo", (req, res) => {
   if (accion === "archivar_seleccionados" || accion === "desarchivar_seleccionados") {
     const leads = list<Lead>("leads");
     const targets = leads.filter((l) => ids.includes(l.id));
-    for (const l of targets) l.archived = accion === "archivar_seleccionados";
-    save("leads", leads);
     const verbo = accion === "archivar_seleccionados" ? "archivado(s)" : "desarchivado(s)";
-    return back(res, "/crm/clientes", targets.length === 0 ? "No había nada que hacer" : `${targets.length} cliente(s) ${verbo}`);
+    if (accion === "desarchivar_seleccionados") {
+      for (const l of targets) l.archived = false;
+      save("leads", leads);
+      return back(res, "/crm/clientes", targets.length === 0 ? "No había nada que hacer" : `${targets.length} cliente(s) ${verbo}`);
+    }
+    // FALLO REAL detectado (20/10/2026): un archivado masivo por antigüedad
+    // se tragó clientes con avisos reales sin resolver (p. ej. una oferta de
+    // compra o un "quiero reservar" que nunca llegó a confirmarse) solo
+    // porque no tenían cita/reserva registrada todavía -- el aviso vivía
+    // únicamente en Pendientes, no en una cita/reserva real. Regla nueva:
+    // nunca archivar un lead con un aviso (handoff) todavía sin atender.
+    const openHandoffPhones = new Set(list<Handoff>("handoffs").filter((h) => h.status === "requested" && h.lead_phone).map((h) => h.lead_phone as string));
+    const skipped = targets.filter((l) => l.phone && openHandoffPhones.has(l.phone));
+    const toArchive = targets.filter((l) => !(l.phone && openHandoffPhones.has(l.phone)));
+    for (const l of toArchive) l.archived = true;
+    save("leads", leads);
+    const skippedMsg = skipped.length > 0 ? ` (${skipped.length} omitido(s) por tener un aviso sin atender en Pendientes)` : "";
+    return back(res, "/crm/clientes", toArchive.length === 0 ? "No había nada que archivar" : `${toArchive.length} cliente(s) ${verbo}${skippedMsg}`);
   }
 
   if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede eliminar clientes");
