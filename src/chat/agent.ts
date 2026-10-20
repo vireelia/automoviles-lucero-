@@ -189,6 +189,19 @@ export async function handleChatMessage(
         } catch {
           args = {};
         }
+        // Canal de origen en visitas/reservas/handoffs (20/10/2026, mejora
+        // integral del CRM, sección 11.1/12.1): nunca se le pide al modelo
+        // que lo incluya él mismo -- ya lo sabemos aquí con certeza (el
+        // parámetro "channel" de esta misma función), así que se inyecta
+        // directo, igual que ya se hace con el identificador de contacto.
+        if (
+          (call.function.name === "create_appointment" || call.function.name === "create_reservation_pending" || call.function.name === "create_handoff") &&
+          args &&
+          typeof args === "object" &&
+          !("channel" in args)
+        ) {
+          (args as Record<string, unknown>).channel = channel;
+        }
         const result = await dispatchTool(call.function.name, args);
         toolRuns++;
         appendToCollection("tool_call_logs", {

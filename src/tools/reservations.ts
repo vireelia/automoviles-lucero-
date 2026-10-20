@@ -19,6 +19,9 @@ type Reservation = {
   expires_at: string;
   verified_by: string | null;
   verified_at: string | null;
+  // Canal de origen (20/10/2026, mejora integral del CRM, sección 12.1) --
+  // nunca se sobrescribe. Ausente en reservas históricas.
+  channel?: string | null;
 };
 
 function now() {
@@ -29,7 +32,7 @@ function readReservations() {
   return readCollection<Reservation>("reservations", []);
 }
 
-export async function createReservationPending(args: { vehicle_id: string; lead_phone?: string }) {
+export async function createReservationPending(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
   const currentStatus = getOfficialStatus(args.vehicle_id);
   if (currentStatus === "RESERVED" || currentStatus === "SOLD") {
     return envelope({
@@ -56,6 +59,7 @@ export async function createReservationPending(args: { vehicle_id: string; lead_
     id: crypto.randomUUID(),
     vehicle_id: args.vehicle_id,
     lead_phone: args.lead_phone ?? null,
+    channel: args.channel ?? null,
     amount_eur: amount,
     status: "pending_payment",
     payment_receipt_note: null,

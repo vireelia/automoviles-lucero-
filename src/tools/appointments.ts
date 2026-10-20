@@ -53,6 +53,9 @@ export async function createAppointment(args: {
   requested_date?: string;
   requested_time?: string;
   notes?: string;
+  // Canal de origen (20/10/2026, mejora integral del CRM, sección 11.1) --
+  // nunca se sobrescribe después de creada. Se guarda vía el spread de abajo.
+  channel?: string;
 }) {
   const minutes = parseTime(args.requested_time);
   const nonBookingDay = isNonBookingDay(args.requested_date);

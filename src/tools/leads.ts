@@ -49,7 +49,7 @@ function readLeads() {
 // teléfono real. No se toca nada que no sea un teléfono de verdad (un email
 // usado como clave de contacto, o un identificador largo como el PSID de
 // Facebook, se dejan exactamente igual).
-function normalizePhone(raw: string): string {
+export function normalizePhone(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.includes("@")) return trimmed.toLowerCase();
   const digits = trimmed.replace(/[^\d+]/g, "");

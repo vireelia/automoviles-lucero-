@@ -11,6 +11,8 @@ import { deliverEmail } from "../email/agent.js";
 import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
 import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
+import { notifyVisitCancelled } from "../tools/team-notify.js";
+import { normalizePhone } from "../tools/leads.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
@@ -48,6 +50,12 @@ type Lead = {
   // "ocultar/archivar, no borrar"): nunca se borra nada aquí, solo deja de
   // salir en la lista principal.
   archived?: boolean;
+  // Venta cerrada/perdida (20/10/2026, mejora integral del CRM, sección 6.3:
+  // esto SÍ es una decisión humana que ningún dato derivado puede inferir
+  // -- a diferencia de la "fase" (visita concertada, reserva pendiente...),
+  // que se deriva sola de citas/reservas reales, ver leadPhase().
+  sale_outcome?: "cerrada" | "perdida" | null;
+  lost_reason?: string | null;
   updated_at?: string;
   created_at: string;
 };
@@ -59,6 +67,11 @@ type Reservation = {
   status: "pending_payment" | "pending_verification" | "confirmed" | "expired" | "cancelled";
   created_at: string;
   verified_by: string | null;
+  // Canal de origen (20/10/2026, mejora integral del CRM, sección 12.1):
+  // nunca se sobrescribe después de creada, igual que "origin" en Lead.
+  // Ausente en reservas históricas -- se muestran como "Origen desconocido",
+  // nunca se adivina.
+  channel?: string | null;
 };
 type Appointment = {
   id: string;
@@ -70,6 +83,8 @@ type Appointment = {
   notes?: string;
   status: string;
   created_at: string;
+  // Canal de origen (20/10/2026, sección 11.1) -- mismo criterio que en Reservation.
+  channel?: string | null;
 };
 type Handoff = { id: string; lead_phone: string | null; lead_name?: string | null; reason?: string; urgency?: string; notes?: string; reason_type?: string; status: string; created_at: string };
 // Especificación formal del agente de chat (16/10/2026, sección CRM: "...y
@@ -124,6 +139,7 @@ const APPOINTMENT_TEXT: Record<string, string> = {
   requested: "Pendiente de confirmar",
   confirmed: "Confirmada",
   cancelled: "Cancelada",
+  no_presentado: "No se presentó",
 };
 const VEHICLE_TEXT: Record<OfficialVehicleStatus, string> = {
   AVAILABLE: "Disponible",
@@ -136,6 +152,51 @@ const TEMP: Record<string, { label: string; cls: string; help: string; letter: s
   WARM: { label: "Tibio · interesado, sin prisa", cls: "t-warm", help: "tibio", letter: "T" },
   COLD: { label: "Frío · solo está mirando", cls: "t-cold", help: "frío", letter: "F" },
 };
+// Fase comercial (20/10/2026, mejora integral del CRM, sección 6.3): "no
+// utilizar una única etiqueta para representar conceptos distintos" -- la
+// temperatura (TEMP, interés) y la fase (dónde está la operación) son dos
+// cosas distintas y se muestran por separado. La fase se DERIVA de datos
+// reales (citas/reservas ya existentes) en vez de ser un campo editable a
+// mano que alguien tendría que mantener sincronizado -- la única excepción
+// es venta cerrada/perdida, que sí es una decisión humana explícita
+// (sale_outcome en Lead) porque ningún dato derivado puede inferirla sola.
+type LeadPhase = "nuevo" | "contactado" | "visita_concertada" | "visita_realizada" | "reserva_pendiente" | "reservado" | "venta_cerrada" | "venta_perdida" | "archivado" | "no_contactar";
+const LEAD_PHASE_LABEL: Record<LeadPhase, string> = {
+  nuevo: "Nuevo",
+  contactado: "Contactado",
+  visita_concertada: "Visita concertada",
+  visita_realizada: "Visita realizada",
+  reserva_pendiente: "Reserva pendiente",
+  reservado: "Reservado",
+  venta_cerrada: "Venta cerrada",
+  venta_perdida: "Venta perdida",
+  archivado: "Archivado",
+  no_contactar: "No contactar",
+};
+function leadPhase(lead: Lead, appts: Appointment[], reservations: Reservation[], today: string): LeadPhase {
+  if (lead.sale_outcome === "cerrada") return "venta_cerrada";
+  if (lead.sale_outcome === "perdida") return "venta_perdida";
+  if (lead.archived) return "archivado";
+  if (lead.do_not_contact) return "no_contactar";
+  const myReservations = reservations.filter((r) => r.lead_phone === lead.phone);
+  if (myReservations.some((r) => r.status === "confirmed")) return "reservado";
+  if (myReservations.some((r) => r.status === "pending_payment" || r.status === "pending_verification")) return "reserva_pendiente";
+  const myAppts = appts.filter((a) => a.lead_phone === lead.phone && a.status !== "cancelled");
+  if (myAppts.some((a) => a.status === "confirmed" && (a.requested_date ?? "") >= today)) return "visita_concertada";
+  if (myAppts.some((a) => a.status === "confirmed" && (a.requested_date ?? "") < today)) return "visita_realizada";
+  if (lead.notes || lead.vehicle_interest || lead.followup_count > 0) return "contactado";
+  return "nuevo";
+}
+// Aviso de posible duplicado (20/10/2026, sección 6.5): nunca fusiona
+// solo -- solo avisa con enlace a la otra ficha y al mergeLeads ya
+// existente (solo admin). Compara por teléfono normalizado, el mismo
+// criterio que ya usa upsertLead -- "phone" a veces guarda en realidad un
+// correo (patrón ya existente en este CRM), normalizePhone ya lo cubre.
+function findPossibleDuplicate(lead: Lead, allLeads: Lead[]): Lead | null {
+  if (!lead.phone) return null;
+  const key = normalizePhone(lead.phone);
+  return allLeads.find((other) => other.id !== lead.id && other.phone && normalizePhone(other.phone) === key) ?? null;
+}
 // Agente/canal por el que entró el cliente. El texto va en la tarjeta; la letra solo indica temperatura.
 // FALLO REAL detectado en la auditoría del 18/10/2026: a los leads reales
 // con origin "WHATSAPP" (confirmado en data/leads.json de producción) les
@@ -146,6 +207,15 @@ const TEMP: Record<string, { label: string; cls: string; help: string; letter: s
 // en `channel`/`origin` en vez de un canal real -- se muestra honestamente
 // tal cual está guardado, sin tocar de dónde viene ese dato.
 const ORIGIN: Record<string, string> = { VOICE: "Voz", CHAT: "Chat", EMAIL: "Correo", WHATSAPP: "WhatsApp", FACEBOOK: "Facebook", MANUAL: "Añadido a mano", "coches.net": "Coches.net" };
+// Pestañas de origen en Visitas/Reservas (20/10/2026, mejora integral del
+// CRM, secciones 11.1/12.1): Llamadas / WhatsApp / Otros canales -- "otros"
+// incluye correo, chat web, añadido a mano, y origen desconocido (dato
+// histórico sin canal registrado), nunca se adivina cuál sería.
+function channelBucket(channel: string | null | undefined): "llamadas" | "whatsapp" | "otros" {
+  if (channel === "VOICE") return "llamadas";
+  if (channel === "WHATSAPP") return "whatsapp";
+  return "otros";
+}
 // Plataforma que originó el contacto (distinta del canal): Coches.net,
 // Wallapop... Antes de mostrar un dato de origen hay que decir
 // "Origen desconocido" en vez de inventarlo (encargo del cliente, Fase 2).
@@ -265,6 +335,58 @@ function now() {
 function todayMadrid(): string {
   return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
 }
+// Filtros temporales de Clientes (20/10/2026, mejora integral del CRM,
+// sección 6.1): se convierte cada "created_at" (timestamp real) a su día de
+// calendario EN HORA DE MADRID (mismo truco que todayMadrid, usa el huso
+// real vía Intl -- así el cambio de hora de verano/invierno no desplaza
+// ningún cliente de día) y luego toda la aritmética de rango (sumar/restar
+// días, límites de mes) se hace sobre esas cadenas "YYYY-MM-DD" con fechas
+// ancladas en UTC -- nunca mezcla las dos cosas, para no arrastrar un
+// desfase de huso horario a la aritmética de calendario.
+function madridDateOnly(iso: string): string {
+  return new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+}
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function monthBoundsOf(dateStr: string, monthsBack: number): { start: string; end: string } {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() - monthsBack;
+  const start = new Date(Date.UTC(y, m, 1));
+  const end = new Date(Date.UTC(y, m + 1, 0));
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+type DateFilterKey = "hoy" | "ayer" | "7dias" | "30dias" | "mes" | "mes_anterior" | "todo";
+const DATE_FILTER_LABEL: Record<DateFilterKey, string> = {
+  hoy: "Hoy",
+  ayer: "Ayer",
+  "7dias": "Últimos 7 días",
+  "30dias": "Últimos 30 días",
+  mes: "Este mes",
+  mes_anterior: "Mes anterior",
+  todo: "Todo",
+};
+function matchesDateFilter(filter: DateFilterKey, isoCreatedAt: string | undefined, today: string): boolean {
+  if (filter === "todo") return true;
+  if (!isoCreatedAt) return false;
+  const d = madridDateOnly(isoCreatedAt);
+  if (filter === "hoy") return d === today;
+  if (filter === "ayer") return d === addDaysToDateStr(today, -1);
+  if (filter === "7dias") return d >= addDaysToDateStr(today, -6) && d <= today;
+  if (filter === "30dias") return d >= addDaysToDateStr(today, -29) && d <= today;
+  if (filter === "mes") {
+    const { start, end } = monthBoundsOf(today, 0);
+    return d >= start && d <= end;
+  }
+  if (filter === "mes_anterior") {
+    const { start, end } = monthBoundsOf(today, 1);
+    return d >= start && d <= end;
+  }
+  return true;
+}
 function vehicleName(id: string | undefined | null): string {
   const v = currentVehicles().find((x) => x.id === id);
   return v ? `${v.make} ${v.model} ${v.year ?? ""}`.trim() : "Coche sin nombre";
@@ -350,15 +472,23 @@ function button(label: string, action: string, extra = "") {
 }
 
 // ---------- pantalla ----------
+// Reorganizado (20/10/2026, mejora integral del CRM, sección 4): agrupado
+// como pide el encargo -- Hoy / Clientes y oportunidades / Pendientes /
+// Canales de entrada (Llamadas, WhatsApp, Correos) / Visitas / Reservas /
+// Coches -- manteniendo las rutas existentes tal cual, ninguna cambia.
+// "Embudo comercial", "Seguimiento" e "Informes" (secciones 13, 14, 18 del
+// encargo) se añaden al menú solo cuando esas páginas existan de verdad en
+// las próximas fases -- un enlace a una página que no existe incumpliría la
+// propia regla del encargo de "no simular que funciona".
 const MENU: [string, string][] = [
   ["/crm", "Hoy"],
+  ["/crm/clientes", "Clientes y oportunidades"],
+  ["/crm/pendientes", "Pendientes"],
+  ["/crm/llamadas", "Llamadas"],
+  ["/crm/whatsapp", "WhatsApp"],
+  ["/crm/correos", "Correos"],
   ["/crm/citas", "Visitas"],
   ["/crm/reservas", "Reservas"],
-  ["/crm/pendientes", "Pendientes"],
-  ["/crm/correos", "Correos"],
-  ["/crm/whatsapp", "WhatsApp"],
-  ["/crm/llamadas", "Llamadas"],
-  ["/crm/clientes", "Clientes"],
   ["/crm/coches", "Coches"],
 ];
 
@@ -725,6 +855,7 @@ function apptCard(a: Appointment): string {
   const whatsapp = waButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
   const actions = [
     a.status === "requested" ? button("Confirmar la visita", "confirmar", "ok") : "",
+    a.status === "confirmed" ? button("No se presentó", "no_presentado", "light") : "",
     a.status !== "cancelled" ? confirmButton("Cancelar la visita", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
     // A petición real (16/10/2026, "en esta sección quiero que añadas la
     // papelera, para borrar consultas antiguas"): disponible siempre, no
@@ -736,7 +867,7 @@ function apptCard(a: Appointment): string {
 ${simpleCheckbox("citas-bulk", a.id)}
 <div class="when"><span>${esc(d.weekday)}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span><em>${esc(a.requested_time ?? "")}</em></div>
 <div class="info"><h3>${esc(veh)}</h3>
-<p><span class="tag">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""}</p>
+<p><span class="tag">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""} <span class="tag">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></p>
 <p>Cliente: <b>${esc(contactLabel(a.lead_phone, null))}</b></p>
 ${a.notes ? `<p>${esc(a.notes)}</p>` : ""}
 <form method="post" action="/crm/citas/${esc(a.id)}">${actions}
@@ -774,7 +905,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   return `<div class="card ${tone}" id="r-${esc(r.id)}" style="position:relative"><div class="info">
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <h3>${esc(veh)}</h3>
-<p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span></p>
+<p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span> <span class="tag">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></p>
 <p>Cliente: <b>${esc(contactLabel(r.lead_phone, null))}</b></p>
 <p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
 <form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}
@@ -785,7 +916,7 @@ ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 </div></div>`;
 }
 
-function leadCard(l: Lead, user: CrmUser): string {
+function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
   const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
   const del = user.role === "admin"
@@ -793,10 +924,23 @@ function leadCard(l: Lead, user: CrmUser): string {
     : "";
   const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline"><button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
   const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk" style="position:absolute;top:18px;right:20px">` : "";
+  // Origen (primera captación) y canal (último contacto) son dos conceptos
+  // distintos que ya se guardan por separado (20/10/2026, sección 7) --
+  // antes solo se mostraba uno. Se muestran los dos, y solo el canal si
+  // coinciden, para no repetir la misma etiqueta dos veces sin motivo.
+  const originLabel = ORIGIN[l.origin ?? ""] ?? (l.origin ? l.origin : null);
+  const channelLabel = ORIGIN[l.channel ?? ""] ?? (l.channel ? l.channel : null);
+  const channelTags = originLabel && channelLabel && originLabel !== channelLabel
+    ? `<span class="origen">Captado: ${esc(originLabel)}</span> <span class="origen">Último contacto: ${esc(channelLabel)}</span>`
+    : `<span class="origen">${esc(originLabel ?? channelLabel ?? "Origen sin registrar")}</span>`;
+  const duplicateWarning = duplicate
+    ? `<p><a class="link" href="/crm/clientes/${esc(duplicate.id)}" style="color:#9a3412">⚠️ Posible duplicado: ${esc(leadDisplayName(duplicate))} -- mismo teléfono normalizado</a></p>`
+    : "";
   return `<div class="card" style="position:relative"><div class="info">
 ${sel}
 <h3>${esc(leadDisplayName(l))}</h3>
-<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="origen">${esc(ORIGIN[l.origin ?? l.channel ?? ""] ?? "Origen sin registrar")}</span>${!l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}${l.archived ? `<span class="tag">Archivado</span>` : ""}</p>
+<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span> ${channelTags}${!l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}${l.archived ? `<span class="tag">Archivado</span>` : ""}</p>
+${duplicateWarning}
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
 <a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${archiveBtn}${del}
@@ -888,13 +1032,17 @@ crm.get("/buscar", (req, res) => {
   const q = String(req.query.q ?? "").trim().toLowerCase();
   const digits = q.replace(/\D/g, "");
   const match = (...values: (string | null | undefined)[]) => values.some((v) => v && v.toLowerCase().includes(q));
-  const leads = q ? list<Lead>("leads").filter((l) => match(l.name, l.phone, l.vehicle_interest) || (digits.length >= 4 && (l.phone ?? "").replace(/\D/g, "").includes(digits))) : [];
-  const appts = q ? list<Appointment>("appointments").filter((a) => match(a.lead_phone, vehicleName(a.vehicle_id))) : [];
-  const resv = q ? list<Reservation>("reservations").filter((r) => match(r.lead_phone, vehicleName(r.vehicle_id))) : [];
+  const allLeads = list<Lead>("leads");
+  const allAppts = list<Appointment>("appointments");
+  const allResv = list<Reservation>("reservations");
+  const today = todayMadrid();
+  const leads = q ? allLeads.filter((l) => match(l.name, l.phone, l.vehicle_interest) || (digits.length >= 4 && (l.phone ?? "").replace(/\D/g, "").includes(digits))) : [];
+  const appts = q ? allAppts.filter((a) => match(a.lead_phone, vehicleName(a.vehicle_id))) : [];
+  const resv = q ? allResv.filter((r) => match(r.lead_phone, vehicleName(r.vehicle_id))) : [];
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.map((l) => leadCard(l, me(res))).join("")}
+${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today), findPossibleDuplicate(l, allLeads))).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -922,20 +1070,25 @@ ${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : 
 // ---------- Visitas ----------
 crm.get("/citas", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "todas";
+  const c = typeof req.query.c === "string" ? req.query.c : "todos";
   let items = list<Appointment>("appointments");
   if (f === "pendientes") items = items.filter((a) => a.status === "requested");
   if (f === "confirmadas") items = items.filter((a) => a.status === "confirmed");
+  if (f === "no_presentado") items = items.filter((a) => a.status === "no_presentado");
+  if (c !== "todos") items = items.filter((a) => channelBucket(a.channel) === c);
   items.sort((x, y) => `${x.requested_date ?? ""}${x.requested_time ?? ""}`.localeCompare(`${y.requested_date ?? ""}${y.requested_time ?? ""}`));
-  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Visitas</h1>
 <p class="sub">Aquí ves los días y las horas en que vendrán los clientes a ver un coche.</p>
-<p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
+<p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
+<p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} ${pill("no_presentado", "No presentado")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
 ${items.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", items.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
 ${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : items.map(apptCard).join("")}`;
   res.type("html").send(page("Visitas", me(res), body, msgOf(req)));
 });
 
-crm.post("/citas/:id", (req, res) => {
+crm.post("/citas/:id", async (req, res) => {
   const accion = String(req.body.accion ?? "");
   const appts = list<Appointment>("appointments");
   const a = appts.find((x) => x.id === req.params.id);
@@ -954,7 +1107,14 @@ crm.post("/citas/:id", (req, res) => {
     return back(res, "/crm/citas", "Visita movida a la papelera");
   }
   if (accion === "confirmar") a.status = "confirmed";
-  else if (accion === "cancelar") a.status = "cancelled";
+  else if (accion === "cancelar") {
+    a.status = "cancelled";
+    // A petición real (20/10/2026, mejora integral del CRM, sección 11.5):
+    // esto se quedaba sin avisar a Ramón/José -- notifyVisitCancelled ya
+    // existe y se usa desde el agente, pero cancelar a mano desde el CRM
+    // nunca pasaba por ahí. Mismo aviso, mismo sitio, sin duplicar lógica.
+    await notifyVisitCancelled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
+  } else if (accion === "no_presentado") a.status = "no_presentado";
   else if (accion === "cambiar") {
     const fecha = String(req.body.fecha ?? "").trim();
     const hora = String(req.body.hora ?? "").trim();
@@ -962,7 +1122,17 @@ crm.post("/citas/:id", (req, res) => {
     if (hora) a.requested_time = hora;
   }
   save("appointments", appts);
-  back(res, "/crm/citas", accion === "confirmar" ? "Visita confirmada" : accion === "cancelar" ? "Visita cancelada" : "Día y hora cambiados");
+  back(
+    res,
+    "/crm/citas",
+    accion === "confirmar"
+      ? "Visita confirmada"
+      : accion === "cancelar"
+        ? "Visita cancelada"
+        : accion === "no_presentado"
+          ? "Marcada como no presentado"
+          : "Día y hora cambiados",
+  );
 });
 
 // Borrado masivo (a petición real, 18/10/2026: "el borrar masivo lo quiero
@@ -981,11 +1151,14 @@ crm.post("/citas-masivo", (req, res) => {
 
 // ---------- Reservas ----------
 crm.get("/reservas", (req, res) => {
-  const reservations = list<Reservation>("reservations").sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const c = typeof req.query.c === "string" ? req.query.c : "todos";
+  let reservations = list<Reservation>("reservations").sort((a, b) => b.created_at.localeCompare(a.created_at));
+  if (c !== "todos") reservations = reservations.filter((r) => channelBucket(r.channel) === c);
   const available = currentVehicles().filter((v) => getOfficialStatus(v.id) === "AVAILABLE");
   // Solo las cerradas (canceladas/caducadas) se pueden borrar -- mismo
   // criterio que el borrado individual, ninguna reserva viva se cuenta.
   const bulkEligible = me(res).role === "admin" ? reservations.filter((r) => r.status === "cancelled" || r.status === "expired").length : 0;
+  const canalPill = (k: string, label: string) => `<a href="/crm/reservas?c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Reservas</h1>
 <p class="sub">Una reserva aparta un coche con 500 €. Cuando el cliente paga, compruébalo y pulsa "Confirmar la reserva".</p>
 <div class="box"><h3 style="margin-top:0">Hacer una reserva a mano</h3>
@@ -994,8 +1167,9 @@ crm.get("/reservas", (req, res) => {
 <label>Coche</label><select name="vehicle_id">${available.map((v) => option(v.id, `${vehicleName(v.id)} · ${priceOf(v.id)} €`, "")).join("")}</select>
 <label>Teléfono o correo del cliente</label><input name="contacto" required>
 <button class="btn ok" type="submit">Crear la reserva</button></form></div>
+<p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 ${bulkEligible > 0 ? simpleBulkBar("reservas-bulk", "/crm/reservas-masivo", bulkEligible, "¿Eliminar las reservas canceladas/caducadas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-${reservations.length === 0 ? `<div class="empty">Todavía no hay reservas.</div>` : reservations.map((r) => reservationCard(r, me(res))).join("")}`;
+${reservations.length === 0 ? `<div class="empty">No hay reservas en esta lista.</div>` : reservations.map((r) => reservationCard(r, me(res))).join("")}`;
   res.type("html").send(page("Reservas", me(res), body, msgOf(req)));
 });
 
@@ -1035,7 +1209,7 @@ crm.post("/reservas", async (req, res) => {
       save("leads", leads);
     }
   }
-  const result = (await createReservationPending({ vehicle_id: vehicleId, lead_phone: contacto })) as unknown as { status: string };
+  const result = (await createReservationPending({ vehicle_id: vehicleId, lead_phone: contacto, channel: "MANUAL" })) as unknown as { status: string };
   if (result.status !== "ok") return back(res, "/crm/reservas", "Ese coche no está disponible para reservar");
   back(res, "/crm/reservas", "Reserva creada. Espera el pago de 500 €");
 });
@@ -1511,12 +1685,20 @@ crm.post("/llamadas-masivo", (req, res) => {
 crm.get("/clientes", (req, res) => {
   autoArchiveColdLeads();
   const t = typeof req.query.t === "string" && (TEMP[req.query.t] || req.query.t === "archivados") ? req.query.t : "todos";
+  const dateFilter: DateFilterKey = (["hoy", "ayer", "7dias", "30dias", "mes", "mes_anterior", "todo"] as const).includes(req.query.d as DateFilterKey)
+    ? (req.query.d as DateFilterKey)
+    : "todo";
+  const today = todayMadrid();
   const all = list<Lead>("leads");
+  const appts = list<Appointment>("appointments");
+  const reservations = list<Reservation>("reservations");
   const archivedCount = all.filter((l) => l.archived).length;
   const leads = all
     .filter((l) => (t === "archivados" ? l.archived : !l.archived && (t === "todos" || l.temperature === t)))
+    .filter((l) => matchesDateFilter(dateFilter, l.created_at, today))
     .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
-  const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
+  const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}&d=${dateFilter}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
+  const datePill = (k: DateFilterKey) => `<a href="/crm/clientes?t=${t}&d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const isAdmin = me(res).role === "admin";
   const bulk = isAdmin && leads.length > 0
     ? `<form id="clientes-bulk" method="post" action="/crm/clientes-masivo"><input type="hidden" name="t" value="${esc(t)}"></form>
@@ -1537,16 +1719,22 @@ ${t === "archivados"
 <label>Coche de interés</label><input name="vehicle_interest">
 <button class="btn ok" type="submit">Añadir cliente</button></form></div>
 <div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")} ${pill("archivados", `Archivados (${archivedCount})`)}</div>
+<div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "Todavía no hay clientes en esta lista."}</div>` : leads.map((l) => leadCard(l, me(res))).join("")}`;
-  res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today), findPossibleDuplicate(l, all))).join("")}`;
+  res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
 crm.post("/clientes", (req, res) => {
   const telefono = String(req.body.telefono ?? "").trim();
   if (!telefono) return back(res, "/crm/clientes", "Escribe el teléfono del cliente");
   const leads = list<Lead>("leads");
-  if (leads.some((l) => l.phone === telefono)) return back(res, "/crm/clientes", "Ya existe un cliente con ese teléfono");
+  // Arreglo real (20/10/2026, sección 6.5): el alta manual comparaba el
+  // teléfono tal cual, sin normalizar -- a diferencia de upsertLead (el
+  // mismo número en otro formato, ej. "622188213" vs "+34622188213",
+  // colaba un duplicado). Mismo criterio que ya usa el resto del CRM.
+  const key = normalizePhone(telefono);
+  if (leads.some((l) => l.phone && normalizePhone(l.phone) === key)) return back(res, "/crm/clientes", "Ya existe un cliente con ese teléfono");
   leads.push({
     id: crypto.randomUUID(),
     phone: telefono,
@@ -1565,24 +1753,51 @@ crm.post("/clientes", (req, res) => {
 });
 
 crm.get("/clientes/:id", (req, res) => {
-  const lead = list<Lead>("leads").find((l) => l.id === req.params.id);
+  const allLeads = list<Lead>("leads");
+  const lead = allLeads.find((l) => l.id === req.params.id);
   if (!lead) return back(res, "/crm/clientes", "No encuentro ese cliente");
   const key = lead.phone ?? "";
   const appts = list<Appointment>("appointments").filter((a) => a.lead_phone === key);
   const resv = list<Reservation>("reservations").filter((r) => r.lead_phone === key);
-  const summaries = list<ConversationSummary>("conversation_summaries")
-    .filter((c) => c.phone === key)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const summaries = list<ConversationSummary>("conversation_summaries").filter((c) => c.phone === key);
   const t = TEMP[lead.temperature] ?? TEMP.COLD;
+  const phase = leadPhase(lead, appts, resv, todayMadrid());
+  const duplicate = findPossibleDuplicate(lead, allLeads);
+  // Cronología única (20/10/2026, sección 6.4): visitas + reservas +
+  // resúmenes de conversación, todo junto y ordenado por fecha -- antes
+  // estaban en tres bloques separados sin relación temporal entre ellos.
+  const timeline: { at: string; html: string }[] = [
+    ...appts.map((a) => ({
+      at: a.created_at,
+      html: `📅 Visita (${esc(ORIGIN[a.channel ?? ""] ?? "origen desconocido")}): ${esc(a.requested_date ?? "sin fecha")} ${esc(a.requested_time ?? "")} -- <b>${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</b>`,
+    })),
+    ...resv.map((r) => ({
+      at: r.created_at,
+      html: `💰 Reserva (${esc(ORIGIN[r.channel ?? ""] ?? "origen desconocido")}) de ${esc(vehicleName(r.vehicle_id))} -- <b>${esc(RESERVATION_TEXT[r.status] ?? r.status)}</b> (${r.amount_eur} €)`,
+    })),
+    ...summaries.map((s) => ({ at: s.created_at, html: `💬 Resumen de conversación: ${esc(s.summary)}` })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  const duplicateWarning = duplicate
+    ? `<div class="msg" style="background:#fff8e6;border-color:#d9a22b">⚠️ Posible duplicado: <a class="link" href="/crm/clientes/${esc(duplicate.id)}">${esc(leadDisplayName(duplicate))}</a> tiene el mismo teléfono normalizado. Si es la misma persona, pide a un administrador que lo fusione desde /tools/merge_leads.</div>`
+    : "";
+  const saleOutcomeBox = `<div class="box"><h3 style="margin-top:0">Venta cerrada o perdida</h3>
+<p class="sub">Esto es una decisión del equipo -- nunca se marca solo.</p>
+${lead.sale_outcome ? `<p><b>Estado:</b> ${lead.sale_outcome === "cerrada" ? "Venta cerrada" : `Venta perdida${lead.lost_reason ? ` -- ${esc(lead.lost_reason)}` : ""}`} <form method="post" action="/crm/clientes/${esc(lead.id)}" style="display:inline">${button("Reabrir oportunidad", "reabrir", "light")}</form></p>` : `
+<form method="post" action="/crm/clientes/${esc(lead.id)}" style="display:inline">${confirmButton("✅ Venta cerrada", "venta_cerrada", "ok", "¿Confirmas que esta venta se ha cerrado?")}</form>
+<form method="post" action="/crm/clientes/${esc(lead.id)}" style="display:inline">
+<select name="lost_reason"><option value="">Motivo de la pérdida...</option>${["Precio", "Financiación", "Vehículo vendido o no disponible", "Compró en otro concesionario", "No responde", "Cancelación", "No interesado", "Otro"].map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
+<button class="btn danger" type="submit" name="accion" value="venta_perdida">❌ Venta perdida</button>
+</form>`}
+</div>`;
   const body = `<p><a class="link" href="/crm/clientes">← Volver a clientes</a></p>
 <h1>${esc(lead.name || lead.phone || "Cliente")}</h1>
-<p><span class="tag ${t.cls}">${esc(t.label)}</span></p>
+<p><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span> <span class="origen">Captado: ${esc(ORIGIN[lead.origin ?? ""] ?? "sin registrar")}</span> <span class="origen">Último contacto: ${esc(ORIGIN[lead.channel ?? ""] ?? "sin registrar")}</span></p>
+${duplicateWarning}
 <div class="box"><p><b>Lo que quiere:</b> ${esc(situation(lead))}</p>
 <p><b>Contacto:</b> ${esc(lead.phone ?? "—")}</p>
-<p><b>Visitas:</b> ${appts.length === 0 ? "ninguna" : appts.map((a) => `${esc(a.requested_date ?? "")} ${esc(a.requested_time ?? "")} (${esc(APPOINTMENT_TEXT[a.status] ?? a.status)})`).join(" · ")}</p>
-<p><b>Reservas:</b> ${resv.length === 0 ? "ninguna" : resv.map((r) => `${esc(vehicleName(r.vehicle_id))}: ${esc(RESERVATION_TEXT[r.status] ?? r.status)}`).join(" · ")}</p>
 ${phoneLink(lead.phone)}</div>
-${summaries.length > 0 ? `<div class="box"><h3 style="margin-top:0">Resumen de conversaciones</h3>${summaries.map((s) => `<p class="sub">${esc(fmtDate(s.created_at))}</p><p>${esc(s.summary)}</p>`).join("<hr>")}</div>` : ""}
+${saleOutcomeBox}
+${timeline.length > 0 ? `<div class="box"><h3 style="margin-top:0">Historial</h3>${timeline.map((e) => `<p class="sub">${esc(fmtDate(e.at))}</p><p>${e.html}</p>`).join("<hr>")}</div>` : ""}
 <form class="box" method="post" action="/crm/clientes/${esc(lead.id)}">
 <label>✏️ Nombre</label><input name="nombre" value="${esc(lead.name ?? "")}">
 <label>✏️ Coche de interés</label><input name="vehicle_interest" value="${esc(lead.vehicle_interest ?? "")}">
@@ -1591,7 +1806,7 @@ ${summaries.length > 0 ? `<div class="box"><h3 style="margin-top:0">Resumen de c
 ${lead.do_not_contact ? button("Volver a escribirle", "reactivar", "light") : button("No volver a escribirle", "no_contactar", "danger")}
 ${me(res).role === "admin" ? confirmButton("Eliminar cliente", "eliminar", "danger", `¿Eliminar a "${lead.name || lead.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`) : ""}
 </form>`;
-  res.type("html").send(page("Clientes", me(res), body, msgOf(req)));
+  res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
 crm.post("/clientes/:id", (req, res) => {
@@ -1609,7 +1824,16 @@ crm.post("/clientes/:id", (req, res) => {
   else if (accion === "reactivar") lead.do_not_contact = false;
   else if (accion === "archivar") lead.archived = true;
   else if (accion === "desarchivar") lead.archived = false;
-  else {
+  else if (accion === "venta_cerrada") {
+    lead.sale_outcome = "cerrada";
+    lead.lost_reason = null;
+  } else if (accion === "venta_perdida") {
+    lead.sale_outcome = "perdida";
+    lead.lost_reason = String(req.body.lost_reason ?? "").trim() || "Otro";
+  } else if (accion === "reabrir") {
+    lead.sale_outcome = null;
+    lead.lost_reason = null;
+  } else {
     // El teléfono NO se edita aquí a propósito: es la clave con la que
     // casan las visitas y reservas de este cliente (situation(), la propia
     // ficha), y cambiarlo a mano las dejaría huérfanas sin que nadie se dé
@@ -1620,19 +1844,17 @@ crm.post("/clientes/:id", (req, res) => {
   }
   lead.updated_at = now();
   save("leads", leads);
-  back(
-    res,
-    `/crm/clientes/${lead.id}`,
-    accion === "guardar"
-      ? "Cambios guardados"
-      : accion === "no_contactar"
-        ? "Listo: no le escribiremos más"
-        : accion === "archivar"
-          ? "Cliente archivado"
-          : accion === "desarchivar"
-            ? "Cliente desarchivado"
-            : "Listo: sí se le puede escribir",
-  );
+  const ACCION_MSG: Record<string, string> = {
+    guardar: "Cambios guardados",
+    no_contactar: "Listo: no le escribiremos más",
+    reactivar: "Listo: sí se le puede escribir",
+    archivar: "Cliente archivado",
+    desarchivar: "Cliente desarchivado",
+    venta_cerrada: "Venta marcada como cerrada",
+    venta_perdida: "Venta marcada como perdida",
+    reabrir: "Oportunidad reabierta",
+  };
+  back(res, `/crm/clientes/${lead.id}`, ACCION_MSG[accion] ?? "Listo");
 });
 
 // Eliminar varios clientes a la vez (a petición real, 18/10/2026: "la

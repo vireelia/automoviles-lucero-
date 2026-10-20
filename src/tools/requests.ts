@@ -29,7 +29,7 @@ function normalizeText(s: string) {
 // aviso humano sigue su curso normal (de ahí puede resolverse a mano).
 // Tampoco duplica: si ya hay una reserva viva para ese mismo coche y
 // contacto, no crea otra.
-export async function tryAutoCreateReservation(leadPhone: string, vehicleInterest: string | null | undefined): Promise<void> {
+export async function tryAutoCreateReservation(leadPhone: string, vehicleInterest: string | null | undefined, channel?: string | null): Promise<void> {
   try {
     if (!vehicleInterest || !vehicleInterest.trim()) return;
     const wanted = normalizeText(vehicleInterest);
@@ -46,7 +46,7 @@ export async function tryAutoCreateReservation(leadPhone: string, vehicleInteres
     );
     if (alreadyPending) return; // ya está, no duplicar
 
-    await createReservationPending({ vehicle_id: vehicleId, lead_phone: leadPhone });
+    await createReservationPending({ vehicle_id: vehicleId, lead_phone: leadPhone, channel: channel ?? undefined });
   } catch (err) {
     // Nunca debe romper la creación del aviso -- si esto falla, el aviso
     // humano ya quedó registrado de todas formas y el equipo lo resuelve.
@@ -112,6 +112,10 @@ export async function createHandoff(args: {
   // genérico) -- ver Sección "el agente debería dejar notificada la
   // reserva para que se pueda ver".
   reason_type?: "reserva" | "compra_inmediata" | "otro";
+  // Canal de origen (20/10/2026) -- inyectado por handleChatMessage/markVoiceOrigin,
+  // nunca lo manda el modelo por su cuenta. Se guarda en el propio handoff
+  // (vía el spread de abajo) y se hereda a la reserva automática si aplica.
+  channel?: string;
 }) {
   // El nombre nunca lo manda quien llama a create_handoff -- se recupera del
   // lead ya guardado por su teléfono (FALLO REAL detectado 13/10/2026: un
@@ -137,7 +141,7 @@ export async function createHandoff(args: {
     });
   }
   if (args.reason_type === "reserva" && args.lead_phone) {
-    await tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest);
+    await tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest, args.channel);
   }
   return envelope({
     status: "ok",

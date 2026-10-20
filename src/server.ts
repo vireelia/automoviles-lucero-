@@ -139,15 +139,15 @@ app.post("/tools/stop_followups", route((a) => stopFollowups(a)));
 app.post("/tools/create_purchase_request", requireAdminToken, route((a) => createPurchaseRequest(a)));
 app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(a)));
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
-app.post("/tools/create_handoff", route((a) => createHandoff(a)));
+app.post("/tools/create_handoff", markVoiceOrigin, route((a) => createHandoff(a)));
 app.post("/tools/get_appointment_slots", route(() => getAppointmentSlots()));
-app.post("/tools/create_appointment", route((a) => createAppointmentWithCalendar(a)));
+app.post("/tools/create_appointment", markVoiceOrigin, route((a) => createAppointmentWithCalendar(a)));
 app.post("/tools/update_appointment", route((a) => updateAppointment(a)));
 app.post("/tools/cancel_appointment", route((a) => cancelAppointment(a)));
 // Sin admin-token a propósito (16/10/2026): Retell la llama en vivo, igual
 // que create_handoff/create_appointment -- ver la excepción puntual en
 // scripts/sync-retell.mjs y prompt-core.md (CUÁNDO SE TRANSFIERE EN VOZ).
-app.post("/tools/create_reservation_pending", route((a) => createReservationPending(a)));
+app.post("/tools/create_reservation_pending", markVoiceOrigin, route((a) => createReservationPending(a)));
 app.post("/tools/submit_payment_receipt", requireAdminToken, route((a) => submitPaymentReceipt(a)));
 app.post("/tools/request_financing", route((a) => requestFinancing(a)));
 app.post("/tools/send_internal_summary", requireAdminToken, route((a) => sendInternalSummary(a)));
