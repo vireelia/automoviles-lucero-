@@ -3,6 +3,7 @@ import { envelope } from "../response.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending } from "./reservations.js";
+import { createAutoTask } from "./tasks.js";
 
 function now() {
   return new Date().toISOString();
@@ -138,6 +139,17 @@ export async function createHandoff(args: {
       lead_phone: args.lead_phone ?? null,
       name: lead?.name ?? null,
       reason: args.reason ?? "Atención urgente",
+    });
+    // Seguimiento comercial (20/10/2026, sección 14): un handoff urgente
+    // crea su propia tarea de revisión -- deduplicada por el id real del
+    // handoff, nunca se repite si este mismo se reprocesa.
+    createAutoTask({
+      lead_phone: args.lead_phone ?? null,
+      type: "revisar_handoff",
+      reason: args.reason ?? "Atención urgente",
+      source_ref: handoff.id,
+      channel: args.channel ?? null,
+      priority: "alta",
     });
   }
   if (args.reason_type === "reserva" && args.lead_phone) {

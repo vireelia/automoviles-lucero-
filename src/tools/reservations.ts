@@ -3,6 +3,7 @@ import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
 import { getOfficialStatus, setOfficialStatus } from "./vehicle-state.js";
 import { notifyReservation } from "./team-notify.js";
+import { createAutoTask } from "./tasks.js";
 
 // Flujo de reserva (Secciones 25-28 del encargo). SIEMPRE requiere
 // validación humana antes de RESERVED -- ninguna herramienta de este
@@ -92,6 +93,16 @@ export function submitPaymentReceipt(args: { reservation_id: string; note?: stri
   reservation.status = "pending_verification";
   reservation.payment_receipt_note = args.note ?? "Cliente indica haber enviado justificante -- sin verificar todavía.";
   writeCollection("reservations", reservations);
+  // Seguimiento comercial (20/10/2026, sección 14, "llegue un justificante
+  // pendiente de verificar"): deduplicada por el id real de la reserva.
+  createAutoTask({
+    lead_phone: reservation.lead_phone,
+    type: "verificar_reserva",
+    reason: `Justificante recibido para ${reservation.vehicle_id} -- comprobar y confirmar o rechazar.`,
+    source_ref: reservation.id,
+    channel: reservation.channel ?? null,
+    priority: "alta",
+  });
 
   return envelope({
     status: "ok",

@@ -4,6 +4,7 @@ import { isGoogleConnected, calendarBusy, calendarCreateEvent } from "../integra
 import { isMadridHoliday } from "../data/holidays-madrid-2026.js";
 import { withAppointmentLock } from "./appointment-lock.js";
 import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
+import { createAutoTask } from "./tasks.js";
 
 function now() {
   return new Date().toISOString();
@@ -69,6 +70,14 @@ export async function createAppointment(args: {
     };
     appendToCollection("appointments", appointment);
     await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
+    createAutoTask({
+      lead_phone: args.lead_phone ?? null,
+      type: "confirmar_visita",
+      reason: `Confirmar visita del ${args.requested_date ?? "día por fijar"} ${args.requested_time ?? ""}.`,
+      source_ref: appointment.id,
+      channel: args.channel ?? null,
+      due_at: args.requested_date && args.requested_time ? `${args.requested_date}T${args.requested_time}:00` : null,
+    });
     return envelope({
       status: "ok",
       data: appointment,
@@ -94,6 +103,14 @@ export async function createAppointment(args: {
   };
   appendToCollection("appointments", appointment);
   await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
+  createAutoTask({
+    lead_phone: args.lead_phone ?? null,
+    type: "confirmar_visita",
+    reason: `Confirmar visita del ${args.requested_date ?? "día por fijar"} ${args.requested_time ?? ""}.`,
+    source_ref: appointment.id,
+    channel: args.channel ?? null,
+    due_at: args.requested_date && args.requested_time ? `${args.requested_date}T${args.requested_time}:00` : null,
+  });
   return envelope({
     status: "ok",
     data: appointment,

@@ -13,6 +13,7 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled } from "../tools/team-notify.js";
 import { normalizePhone } from "../tools/leads.js";
+import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
@@ -56,6 +57,10 @@ type Lead = {
   // que se deriva sola de citas/reservas reales, ver leadPhase().
   sale_outcome?: "cerrada" | "perdida" | null;
   lost_reason?: string | null;
+  // Comercial responsable y próxima acción (20/10/2026, secciones 6.4/13):
+  // campos explícitos, nadie los deriva por el cliente.
+  assigned_to?: string | null;
+  next_action?: string | null;
   updated_at?: string;
   created_at: string;
 };
@@ -160,12 +165,14 @@ const TEMP: Record<string, { label: string; cls: string; help: string; letter: s
 // mano que alguien tendría que mantener sincronizado -- la única excepción
 // es venta cerrada/perdida, que sí es una decisión humana explícita
 // (sale_outcome en Lead) porque ningún dato derivado puede inferirla sola.
-type LeadPhase = "nuevo" | "contactado" | "visita_concertada" | "visita_realizada" | "reserva_pendiente" | "reservado" | "venta_cerrada" | "venta_perdida" | "archivado" | "no_contactar";
+type LeadPhase = "nuevo" | "pendiente_contactar" | "contactado" | "visita_concertada" | "visita_realizada" | "negociacion_financiacion" | "reserva_pendiente" | "reservado" | "venta_cerrada" | "venta_perdida" | "archivado" | "no_contactar";
 const LEAD_PHASE_LABEL: Record<LeadPhase, string> = {
   nuevo: "Nuevo",
+  pendiente_contactar: "Pendiente de contactar",
   contactado: "Contactado",
   visita_concertada: "Visita concertada",
   visita_realizada: "Visita realizada",
+  negociacion_financiacion: "Negociación/financiación",
   reserva_pendiente: "Reserva pendiente",
   reservado: "Reservado",
   venta_cerrada: "Venta cerrada",
@@ -173,7 +180,13 @@ const LEAD_PHASE_LABEL: Record<LeadPhase, string> = {
   archivado: "Archivado",
   no_contactar: "No contactar",
 };
-function leadPhase(lead: Lead, appts: Appointment[], reservations: Reservation[], today: string): LeadPhase {
+function leadPhase(
+  lead: Lead,
+  appts: Appointment[],
+  reservations: Reservation[],
+  today: string,
+  financingRequests: { lead_phone?: string; status: string }[] = [],
+): LeadPhase {
   if (lead.sale_outcome === "cerrada") return "venta_cerrada";
   if (lead.sale_outcome === "perdida") return "venta_perdida";
   if (lead.archived) return "archivado";
@@ -181,10 +194,16 @@ function leadPhase(lead: Lead, appts: Appointment[], reservations: Reservation[]
   const myReservations = reservations.filter((r) => r.lead_phone === lead.phone);
   if (myReservations.some((r) => r.status === "confirmed")) return "reservado";
   if (myReservations.some((r) => r.status === "pending_payment" || r.status === "pending_verification")) return "reserva_pendiente";
+  // Negociación/financiación (20/10/2026, sección 13): dato real ya
+  // existente (financing_requests), nunca inventado -- una solicitud de
+  // financiación todavía sin resolver es una señal real de negociación en
+  // curso, distinta de solo "contactado".
+  if (financingRequests.some((f) => f.lead_phone === lead.phone && f.status === "pending_review")) return "negociacion_financiacion";
   const myAppts = appts.filter((a) => a.lead_phone === lead.phone && a.status !== "cancelled");
   if (myAppts.some((a) => a.status === "confirmed" && (a.requested_date ?? "") >= today)) return "visita_concertada";
   if (myAppts.some((a) => a.status === "confirmed" && (a.requested_date ?? "") < today)) return "visita_realizada";
   if (lead.notes || lead.vehicle_interest || lead.followup_count > 0) return "contactado";
+  if (lead.next_action) return "pendiente_contactar";
   return "nuevo";
 }
 // Aviso de posible duplicado (20/10/2026, sección 6.5): nunca fusiona
@@ -475,11 +494,10 @@ function button(label: string, action: string, extra = "") {
 // Reorganizado (20/10/2026, mejora integral del CRM, sección 4): agrupado
 // como pide el encargo -- Hoy / Clientes y oportunidades / Pendientes /
 // Canales de entrada (Llamadas, WhatsApp, Correos) / Visitas / Reservas /
-// Coches -- manteniendo las rutas existentes tal cual, ninguna cambia.
-// "Embudo comercial", "Seguimiento" e "Informes" (secciones 13, 14, 18 del
-// encargo) se añaden al menú solo cuando esas páginas existan de verdad en
-// las próximas fases -- un enlace a una página que no existe incumpliría la
-// propia regla del encargo de "no simular que funciona".
+// Embudo / Seguimiento / Coches -- manteniendo las rutas existentes tal
+// cual, ninguna cambia. "Informes" (sección 18, Fase 4) se añade al menú
+// solo cuando esa página exista de verdad -- un enlace a una página que no
+// existe incumpliría la propia regla del encargo de "no simular que funciona".
 const MENU: [string, string][] = [
   ["/crm", "Hoy"],
   ["/crm/clientes", "Clientes y oportunidades"],
@@ -489,6 +507,8 @@ const MENU: [string, string][] = [
   ["/crm/correos", "Correos"],
   ["/crm/citas", "Visitas"],
   ["/crm/reservas", "Reservas"],
+  ["/crm/embudo", "Embudo comercial"],
+  ["/crm/seguimiento", "Seguimiento"],
   ["/crm/coches", "Coches"],
 ];
 
@@ -1035,6 +1055,7 @@ crm.get("/buscar", (req, res) => {
   const allLeads = list<Lead>("leads");
   const allAppts = list<Appointment>("appointments");
   const allResv = list<Reservation>("reservations");
+  const allFinancing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const today = todayMadrid();
   const leads = q ? allLeads.filter((l) => match(l.name, l.phone, l.vehicle_interest) || (digits.length >= 4 && (l.phone ?? "").replace(/\D/g, "").includes(digits))) : [];
   const appts = q ? allAppts.filter((a) => match(a.lead_phone, vehicleName(a.vehicle_id))) : [];
@@ -1042,7 +1063,7 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today), findPossibleDuplicate(l, allLeads))).join("")}
+${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads))).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -1114,8 +1135,19 @@ crm.post("/citas/:id", async (req, res) => {
     // existe y se usa desde el agente, pero cancelar a mano desde el CRM
     // nunca pasaba por ahí. Mismo aviso, mismo sitio, sin duplicar lógica.
     await notifyVisitCancelled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
-  } else if (accion === "no_presentado") a.status = "no_presentado";
-  else if (accion === "cambiar") {
+  } else if (accion === "no_presentado") {
+    a.status = "no_presentado";
+    // Seguimiento comercial (20/10/2026, sección 14, "un cliente no se
+    // presente" crea una tarea de recuperación) -- deduplicada por el id
+    // real de la visita.
+    createAutoTask({
+      lead_phone: a.lead_phone,
+      type: "recuperar_cliente",
+      reason: `No se presentó a la visita de ${vehicleName(a.vehicle_id)} del ${a.requested_date ?? ""} ${a.requested_time ?? ""}.`,
+      source_ref: a.id,
+      channel: a.channel ?? null,
+    });
+  } else if (accion === "cambiar") {
     const fecha = String(req.body.fecha ?? "").trim();
     const hora = String(req.body.hora ?? "").trim();
     if (fecha) a.requested_date = fecha;
@@ -1222,6 +1254,14 @@ crm.post("/reservas/:id", (req, res) => {
   if (accion === "pagado") {
     r.status = "pending_verification";
     save("reservations", reservations);
+    createAutoTask({
+      lead_phone: r.lead_phone,
+      type: "verificar_reserva",
+      reason: `Justificante recibido para ${vehicleName(r.vehicle_id)} -- comprobar y confirmar o rechazar.`,
+      source_ref: r.id,
+      channel: r.channel ?? null,
+      priority: "alta",
+    });
     return back(res, "/crm/reservas", "Anotado: falta comprobar el justificante");
   }
   if ((accion === "confirmar" || accion === "vendido") && !canConfirmPayments(me(res))) {
@@ -1274,6 +1314,154 @@ crm.post("/reservas-masivo", (req, res) => {
   back(res, "/crm/reservas", targets.length === 0 ? "No había nada que hacer (solo se pueden borrar canceladas o caducadas)" : `${targets.length} reserva(s) movida(s) a la papelera`);
 });
 
+// ---------- Seguimiento comercial ----------
+const TASK_TYPE_LABEL: Record<TaskType, string> = {
+  llamar: "Llamar a cliente",
+  responder_mensaje: "Responder mensaje",
+  responder_correo: "Responder correo",
+  confirmar_visita: "Confirmar visita",
+  verificar_reserva: "Verificar reserva",
+  revisar_financiacion: "Revisar financiación",
+  recuperar_cliente: "Recuperar cliente",
+  seguimiento_propuesta: "Seguimiento de propuesta",
+  resolver_incidencia: "Resolver incidencia",
+  revisar_handoff: "Revisar handoff",
+  otra: "Otra tarea comercial",
+};
+function taskCard(t: Task): string {
+  const overdue = t.due_at ? t.due_at < new Date().toISOString() : false;
+  const tone = t.status === "completada" ? "off" : overdue ? "urgent" : t.priority === "alta" ? "pending" : "";
+  return `<div class="card ${tone}" id="task-${esc(t.id)}"><div class="info">
+<h3>${esc(TASK_TYPE_LABEL[t.type])}</h3>
+<p><span class="tag">${esc(contactLabel(t.lead_phone, null))}</span>${t.channel ? ` <span class="tag">${esc(ORIGIN[t.channel] ?? t.channel)}</span>` : ""}${t.priority === "alta" ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Prioridad alta</span>` : ""}${overdue && t.status === "pendiente" ? ` <span class="tag" style="background:#b3261e;color:#fff">Vencida</span>` : ""}${t.status === "completada" ? `<span class="tag">Completada</span>` : ""}</p>
+${t.reason ? `<p>${esc(t.reason)}</p>` : ""}
+<p class="sub">Creada: ${esc(fmtDate(t.created_at))}${t.due_at ? ` · Vence: ${esc(fmtDate(t.due_at))}` : ""}${t.assigned_to ? ` · Asignada a: ${esc(t.assigned_to)}` : ""}</p>
+${t.lead_phone ? `<a class="btn light" href="/crm/buscar?q=${esc(t.lead_phone)}">Ver cliente</a>` : ""}
+${t.status === "pendiente" ? `<form method="post" action="/crm/seguimiento/${esc(t.id)}/asignar" style="display:inline"><select name="assigned_to" onchange="this.form.submit()"><option value="">Sin asignar</option>${listUsers().map((u) => `<option value="${esc(u.email)}" ${t.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></form>` : ""}
+${t.status === "pendiente" ? `<form method="post" action="/crm/seguimiento/${esc(t.id)}" style="display:inline">${button("Completar", "completar", "ok")}</form>` : ""}
+</div></div>`;
+}
+crm.get("/seguimiento", (req, res) => {
+  const tasks = listTasks();
+  const f = typeof req.query.f === "string" ? req.query.f : "pendientes";
+  const leads = list<Lead>("leads");
+  // Automatización derivada (20/10/2026, sección 14: "un cliente caliente
+  // no tenga una próxima acción") -- no se materializa en tasks.json (no
+  // nace de un evento puntual, es un estado continuo que se re-evalúa solo
+  // cada vez que se mira esta página, igual que el archivado automático).
+  const hotWithoutAction = leads.filter((l) => l.temperature === "HOT" && !l.archived && !l.do_not_contact && !l.next_action && !l.sale_outcome);
+  let items = tasks;
+  if (f === "pendientes") items = items.filter((t) => t.status === "pendiente");
+  if (f === "vencidas") items = items.filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
+  if (f === "completadas") items = items.filter((t) => t.status === "completada");
+  items = items.sort((a, b) => (b.priority === "alta" ? 1 : 0) - (a.priority === "alta" ? 1 : 0) || (a.due_at ?? "9999").localeCompare(b.due_at ?? "9999"));
+  const pill = (k: string, label: string) => `<a href="/crm/seguimiento?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const body = `<h1>Seguimiento</h1>
+<p class="sub">Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar, cliente que no se presentó, handoff urgente), otras se añaden a mano.</p>
+${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">🔥 ${hotWithoutAction.length} cliente(s) caliente(s) sin próxima acción definida: ${hotWithoutAction.map((l) => `<a class="link" href="/crm/clientes?q=${esc(l.phone ?? "")}">${esc(leadDisplayName(l))}</a>`).join(", ")}</div>` : ""}
+<div class="box"><h3 style="margin-top:0">Añadir una tarea</h3>
+<form method="post" action="/crm/seguimiento">
+<label>Tipo</label><select name="type">${Object.entries(TASK_TYPE_LABEL).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("")}</select>
+<label>Teléfono o correo del cliente (opcional)</label><input name="lead_phone">
+<label>Motivo</label><input name="reason" required>
+<div class="row"><div><label>Prioridad</label><select name="priority"><option value="normal">Normal</option><option value="alta">Alta</option></select></div>
+<div><label>Fecha límite (opcional)</label><input type="date" name="due_at"></div></div>
+<button class="btn ok" type="submit">Crear tarea</button></form></div>
+<p>${pill("pendientes", "Pendientes")} ${pill("vencidas", "Vencidas")} ${pill("completadas", "Completadas")} ${pill("todas", "Todas")}</p>
+${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : items.map(taskCard).join("")}`;
+  res.type("html").send(page("Seguimiento", me(res), body, msgOf(req)));
+});
+crm.post("/seguimiento", (req, res) => {
+  const type = String(req.body.type ?? "otra") as TaskType;
+  const reason = String(req.body.reason ?? "").trim();
+  if (!reason) return back(res, "/crm/seguimiento", "Escribe el motivo de la tarea");
+  const leadPhoneRaw = String(req.body.lead_phone ?? "").trim();
+  createManualTask({
+    lead_phone: leadPhoneRaw || null,
+    type: Object.keys(TASK_TYPE_LABEL).includes(type) ? type : "otra",
+    reason,
+    priority: req.body.priority === "alta" ? "alta" : "normal",
+    assigned_to: me(res).email,
+    due_at: req.body.due_at ? String(req.body.due_at) : null,
+  });
+  back(res, "/crm/seguimiento", "Tarea creada");
+});
+crm.post("/seguimiento/:id", (req, res) => {
+  const ok = completeTask(req.params.id, me(res).email);
+  back(res, "/crm/seguimiento", ok ? "Tarea completada" : "No encuentro esa tarea");
+});
+crm.post("/seguimiento/:id/asignar", (req, res) => {
+  const assignedTo = String(req.body.assigned_to ?? "").trim() || null;
+  const ok = assignTask(req.params.id, assignedTo);
+  back(res, "/crm/seguimiento", ok ? "Tarea asignada" : "No encuentro esa tarea");
+});
+
+// ---------- Embudo comercial ----------
+// Columnas del funnel (20/10/2026, sección 13): reutiliza leadPhase, nunca
+// un modelo paralelo -- "archivado"/"no_contactar" quedan fuera a propósito,
+// son estados de gestión del cliente, no una etapa de venta en curso (ya se
+// ven en Clientes). Mover una tarjeta entre columnas no es un simple
+// drag-and-drop: las etapas ligadas a visitas/reservas/financiación solo
+// cambian cuando esa operación real cambia (clicando "Ver ficha" se llega a
+// donde de verdad se actúa) -- lo único editable aquí mismo es responsable
+// y próxima acción, que sí son campos propios del cliente.
+const EMBUDO_COLUMNS: LeadPhase[] = [
+  "nuevo",
+  "pendiente_contactar",
+  "contactado",
+  "visita_concertada",
+  "visita_realizada",
+  "negociacion_financiacion",
+  "reserva_pendiente",
+  "reservado",
+  "venta_cerrada",
+  "venta_perdida",
+];
+function embudoCard(l: Lead, phase: LeadPhase, resv: Reservation[]): string {
+  const myReserva = resv.find((r) => r.lead_phone === l.phone && (r.status === "pending_payment" || r.status === "pending_verification" || r.status === "confirmed"));
+  const daysInPhase = Math.floor((Date.now() - new Date(l.updated_at ?? l.created_at).getTime()) / 86400000);
+  return `<div class="card" style="margin-bottom:10px"><div class="info">
+<h3 style="font-size:19px">${esc(leadDisplayName(l))}</h3>
+<p class="sub">${esc(l.vehicle_interest ?? "sin coche de interés")}</p>
+<p><span class="origen">${esc(ORIGIN[l.origin ?? ""] ?? "origen sin registrar")}</span></p>
+${myReserva ? `<p><b>${myReserva.amount_eur} €</b></p>` : ""}
+<form method="post" action="/crm/clientes/${esc(l.id)}">
+<input type="hidden" name="accion" value="actualizar_embudo"><input type="hidden" name="volver" value="/crm/embudo">
+<label class="sub">Responsable</label><select name="assigned_to" onchange="this.form.submit()"><option value="">Sin asignar</option>${listUsers().map((u) => `<option value="${esc(u.email)}" ${l.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select>
+<label class="sub">Próxima acción</label><input name="next_action" value="${esc(l.next_action ?? "")}" placeholder="ej. llamar el jueves">
+<button class="btn light" type="submit" style="font-size:15px;padding:8px 12px">Guardar</button>
+</form>
+<p class="sub">${daysInPhase === 0 ? "Hoy" : `Hace ${daysInPhase} día(s)`} en esta fase -- <a class="link" href="/crm/clientes/${esc(l.id)}">Ver ficha</a></p>
+</div></div>`;
+}
+crm.get("/embudo", (req, res) => {
+  const vista = req.query.v === "lista" ? "lista" : "columnas";
+  const leads = list<Lead>("leads");
+  const appts = list<Appointment>("appointments");
+  const resv = list<Reservation>("reservations");
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const today = todayMadrid();
+  const withPhase = leads
+    .map((l) => ({ lead: l, phase: leadPhase(l, appts, resv, today, financing) }))
+    .filter((x) => EMBUDO_COLUMNS.includes(x.phase));
+  const body = vista === "lista"
+    ? `<h1>Embudo comercial</h1>
+<p class="sub">${withPhase.length} oportunidad(es) activa(s). <a class="link" href="/crm/embudo">Ver en columnas</a></p>
+${EMBUDO_COLUMNS.map((phase) => {
+  const items = withPhase.filter((x) => x.phase === phase);
+  return items.length === 0 ? "" : `<h2>${esc(LEAD_PHASE_LABEL[phase])} (${items.length})</h2>${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("")}`;
+}).join("")}`
+    : `<h1>Embudo comercial</h1>
+<p class="sub">${withPhase.length} oportunidad(es) activa(s). <a class="link" href="/crm/embudo?v=lista">Ver en lista</a></p>
+<div style="display:flex;gap:14px;overflow-x:auto;padding-bottom:10px">
+${EMBUDO_COLUMNS.map((phase) => {
+  const items = withPhase.filter((x) => x.phase === phase);
+  return `<div style="min-width:280px;flex-shrink:0"><h3 style="font-size:17px">${esc(LEAD_PHASE_LABEL[phase])} (${items.length})</h3>${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("") || `<div class="empty">Vacío</div>`}</div>`;
+}).join("")}
+</div>`;
+  res.type("html").send(page("Embudo comercial", me(res), body, msgOf(req)));
+});
+
 // ---------- Pendientes (avisos de Miguel y correos) ----------
 // Para el timbre (ver script en page()): lista de IDs de alertas urgentes
 // activas ahora mismo, para que el navegador detecte cuáles son nuevas.
@@ -1297,8 +1485,13 @@ crm.get("/pendientes", async (req, res) => {
     }
   }
   const mails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  // Tareas vencidas (20/10/2026, sección 19: "mejorar Pendientes para
+  // incluir tareas vencidas") -- solo un aviso con enlace a Seguimiento,
+  // sin duplicar aquí la lista completa de tareas.
+  const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
   const body = `<h1>Pendientes</h1>
 <p class="sub">Aquí aparece lo que Miguel no puede resolver solo. Cuando lo hayas atendido, pulsa el botón.</p>
+${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">⏰ ${overdueTasks.length} tarea(s) de seguimiento vencida(s) -- <a class="link" href="/crm/seguimiento?f=vencidas">verlas</a></div>` : ""}
 <h2>Avisos de Miguel (${handoffs.length})</h2>
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Úsalo solo para avisos ya atendidos; se pueden recuperar luego desde la Papelera.") : ""}
 ${handoffs.length === 0 ? `<div class="empty">No hay avisos.</div>` : handoffs.map((h) => {
@@ -1692,6 +1885,7 @@ crm.get("/clientes", (req, res) => {
   const all = list<Lead>("leads");
   const appts = list<Appointment>("appointments");
   const reservations = list<Reservation>("reservations");
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const archivedCount = all.filter((l) => l.archived).length;
   const leads = all
     .filter((l) => (t === "archivados" ? l.archived : !l.archived && (t === "todos" || l.temperature === t)))
@@ -1721,7 +1915,7 @@ ${t === "archivados"
 <div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")} ${pill("archivados", `Archivados (${archivedCount})`)}</div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today), findPossibleDuplicate(l, all))).join("")}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all))).join("")}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
@@ -1760,8 +1954,9 @@ crm.get("/clientes/:id", (req, res) => {
   const appts = list<Appointment>("appointments").filter((a) => a.lead_phone === key);
   const resv = list<Reservation>("reservations").filter((r) => r.lead_phone === key);
   const summaries = list<ConversationSummary>("conversation_summaries").filter((c) => c.phone === key);
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests").filter((f) => f.lead_phone === key);
   const t = TEMP[lead.temperature] ?? TEMP.COLD;
-  const phase = leadPhase(lead, appts, resv, todayMadrid());
+  const phase = leadPhase(lead, appts, resv, todayMadrid(), financing);
   const duplicate = findPossibleDuplicate(lead, allLeads);
   // Cronología única (20/10/2026, sección 6.4): visitas + reservas +
   // resúmenes de conversación, todo junto y ordenado por fecha -- antes
@@ -1833,6 +2028,12 @@ crm.post("/clientes/:id", (req, res) => {
   } else if (accion === "reabrir") {
     lead.sale_outcome = null;
     lead.lost_reason = null;
+  } else if (accion === "actualizar_embudo") {
+    // Edición rápida desde el Embudo (20/10/2026, sección 13) -- solo toca
+    // responsable/próxima acción, nunca nombre/coche/notas (eso sigue
+    // siendo el formulario "guardar" de la ficha completa).
+    lead.assigned_to = String(req.body.assigned_to ?? "").trim() || null;
+    lead.next_action = String(req.body.next_action ?? "").trim() || null;
   } else {
     // El teléfono NO se edita aquí a propósito: es la clave con la que
     // casan las visitas y reservas de este cliente (situation(), la propia
@@ -1853,8 +2054,10 @@ crm.post("/clientes/:id", (req, res) => {
     venta_cerrada: "Venta marcada como cerrada",
     venta_perdida: "Venta marcada como perdida",
     reabrir: "Oportunidad reabierta",
+    actualizar_embudo: "Responsable/próxima acción actualizados",
   };
-  back(res, `/crm/clientes/${lead.id}`, ACCION_MSG[accion] ?? "Listo");
+  const volver = typeof req.body.volver === "string" && req.body.volver === "/crm/embudo" ? "/crm/embudo" : `/crm/clientes/${lead.id}`;
+  back(res, volver, ACCION_MSG[accion] ?? "Listo");
 });
 
 // Eliminar varios clientes a la vez (a petición real, 18/10/2026: "la
