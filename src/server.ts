@@ -13,7 +13,7 @@ import { verifyRetellSignature } from "./integrations/retell-signature.js";
 import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
-import { appendToCollection, readCollection, writeCollection } from "./store.js";
+import { readCollection, writeCollection } from "./store.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -67,6 +67,32 @@ app.use(
 // entrada, resultado y latencia -- para poder revisar después exactamente
 // qué pasó en una llamada/chat real sin depender de leer el transcript a
 // mano. No es telemetría de producto, es trazabilidad para pruebas.
+// FALLO REAL detectado (20/10/2026, auditoría de 99 llamadas de voz reales):
+// 4 timeouts de search_vehicles en un solo día (19/10), pese a que esa tool
+// es puramente en memoria y debería responder en milisegundos. Causa real
+// (confirmada leyendo el código, no solo síntoma): appendToCollection hace
+// un read+JSON.parse+JSON.stringify+write SÍNCRONO de la colección entera en
+// cada llamada -- y el logging de auditoría de abajo se hacía ANTES de
+// responder, así que el tiempo que Retell mide incluía esa reescritura
+// completa. Cuanto más crece tool_call_logs (una entrada por cada tool call
+// de voz y chat, para siempre), más lenta se vuelve cada llamada, sin que el
+// inventario en sí tenga ninguna culpa -- el inventario sigue consultándose
+// exactamente igual que siempre, desde el snapshot ya importado del XML de
+// Coches.net PRO (vehicles-seed.ts/currentVehicles()), nunca en vivo.
+// Dos arreglos, sin tocar ninguna otra colección (leads/citas/reservas
+// siguen escribiéndose igual, no hay riesgo de corromper datos de negocio):
+// 1) el log de auditoría se escribe DESPUÉS de responder -- el tiempo que ve
+//    Retell ya no incluye esa escritura.
+// 2) tool_call_logs se acota a las últimas 5000 entradas en cada escritura,
+//    para que el coste de cada una no siga creciendo para siempre según pasan
+//    las semanas.
+const TOOL_CALL_LOGS_MAX = 5000;
+function logToolCall(entry: Record<string, unknown>): void {
+  const items = readCollection<Record<string, unknown>>("tool_call_logs");
+  items.push(entry);
+  if (items.length > TOOL_CALL_LOGS_MAX) items.splice(0, items.length - TOOL_CALL_LOGS_MAX);
+  writeCollection("tool_call_logs", items);
+}
 function route(fn: (args: any) => unknown) {
   return async (req: express.Request, res: express.Response) => {
     const startedAt = Date.now();
@@ -75,7 +101,8 @@ function route(fn: (args: any) => unknown) {
       const body = req.body ?? {};
       const args = body && typeof body === "object" && "args" in body && body.args && typeof body.args === "object" ? body.args : body;
       const result = await fn(args);
-      appendToCollection("tool_call_logs", {
+      res.json(result);
+      logToolCall({
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         tool: toolName,
@@ -83,7 +110,6 @@ function route(fn: (args: any) => unknown) {
         result,
         latency_ms: Date.now() - startedAt,
       });
-      res.json(result);
     } catch (err) {
       const errorResult = {
         status: "error",
@@ -91,7 +117,8 @@ function route(fn: (args: any) => unknown) {
         data: null,
         error_code: err instanceof Error ? err.message : "unknown_error",
       };
-      appendToCollection("tool_call_logs", {
+      res.status(200).json(errorResult);
+      logToolCall({
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         tool: toolName,
@@ -99,7 +126,6 @@ function route(fn: (args: any) => unknown) {
         result: errorResult,
         latency_ms: Date.now() - startedAt,
       });
-      res.status(200).json(errorResult);
     }
   };
 }
