@@ -532,19 +532,6 @@ header strong{font-size:24px}
 nav{display:flex;flex-wrap:wrap;gap:8px}
 nav a{color:#fff;text-decoration:none;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:19px}
 nav a.on{background:#f0b429;color:#1d2b44;font-weight:700}
-/* Menú plegado (19/10/2026, a petición real de Ramón: "que en vez de
-   salir en línea, que salga Hoy y al pinchar en Hoy salgan todas las
-   demás") -- antes el <nav> enseñaba los 13 enlaces siempre; ahora solo
-   se ve "Hoy", y al pulsarlo se despliega el resto debajo. <details> es
-   nativo del navegador (sin JS, funciona igual en el móvil) y conserva
-   el resaltado de la sección activa dentro de la lista desplegada. */
-.navmenu{position:relative}
-.navmenu summary{list-style:none;cursor:pointer;color:#fff;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:19px;font-weight:700}
-.navmenu summary::-webkit-details-marker{display:none}
-.navmenu summary::after{content:" ▾"}
-.navmenu[open] summary{background:#f0b429;color:#1d2b44}
-.navmenu[open] summary::after{content:" ▴"}
-.navmenu-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 main{max-width:980px;margin:0 auto;padding:18px}
 h1{font-size:34px;margin:6px 0 4px}
 h2{font-size:24px;margin:22px 0 10px}
@@ -638,7 +625,7 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
 <header><strong>Automóviles Lucero</strong>
-<nav><details class="navmenu"><summary>Hoy</summary><div class="navmenu-list">${menu.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}">${label}</a>`).join("")}</div></details></nav>
+<nav>${menu.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}">${label}</a>`).join("")}</nav>
 <form method="post" action="/crm/salir" style="margin:0"><button class="btn light" type="submit">Salir</button></form></header>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}${body}</main>
 <script>
