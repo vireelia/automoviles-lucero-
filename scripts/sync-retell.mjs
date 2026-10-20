@@ -208,7 +208,7 @@ const AGENT_TOOLS = [
     reason_type: { type: "string", enum: ["reserva", "compra_inmediata", "otro"] },
   }),
   tool("send_location", "Devuelve la dirección y referencias de metro confirmadas del concesionario.", {}, []),
-  tool("send_whatsapp", "Registra el envío de un mensaje de WhatsApp al cliente (queda en cola, sin integración de envío real todavía).", { lead_phone: S, message: S }),
+  tool("send_whatsapp", "Envía de verdad un WhatsApp al cliente (puede fallar, comprueba la respuesta real antes de decir que se envió). En VOZ no hace falta pedir el teléfono: se usa automáticamente el número real de quien llama si no se indica lead_phone.", { lead_phone: S, message: S }),
   tool("notify_salesperson", "Notifica al vendedor (Ramón/José) de un lead caliente o incidencia urgente. Queda en cola hasta conectar el destino real.", {
     name: S, phone: S, vehicle: S, channel: { type: "string", enum: ["VOICE", "CHAT"] }, intent: S, objection: S, last_action: S, summary: S, urgency: { type: "string", enum: ["normal", "alta"] },
   }),

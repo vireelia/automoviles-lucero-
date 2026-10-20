@@ -225,7 +225,15 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
 
   const existing = findWhatsappConversation(phone);
   if (!existing) {
-    return { ok: false, error: "sin_conversacion_abierta: el cliente no ha escrito antes por este canal, hace falta una plantilla aprobada para iniciar" };
+    // Petición real (20/10/2026, auditoría de llamadas de voz: "el agente no
+    // debería ofrecer [WhatsApp] en voz... busquemos la manera de que el
+    // agente... le envíe cogiendo el número de la llamada"): en vez de
+    // rendirse aquí, se intenta iniciar la conversación de verdad con Meta
+    // Direct Send (categoría "utility", sin plantilla aprobada -- ver
+    // sendZernioWhatsappNewConversation). Si la cuenta no es elegible para
+    // Direct Send, Meta/Zernio lo rechaza con un error real (nunca se finge
+    // un envío) y aquí se devuelve tal cual.
+    return sendZernioWhatsappNewConversation(zernio, accountId, phone, body);
   }
 
   try {
@@ -235,6 +243,35 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
     });
     const messageId = data.messageId ?? data.messageIds?.[0];
     if (!messageId) return { ok: false, error: "zernio_sin_message_id" };
+    return { ok: true, messageId };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Inicia una conversación de WhatsApp nueva con un número que nunca escribió
+// antes, usando Meta Direct Send (mensaje de categoría "utility", sin
+// plantilla aprobada -- Meta la empareja o la crea sola de forma asíncrona).
+// Requiere que la cuenta de WhatsApp Business del negocio sea elegible para
+// Direct Send; si no lo es, Meta devuelve DIRECT_SEND_NOT_ELIGIBLE (u otro
+// código de la lista) y aquí se propaga el error real, nunca se asume
+// entregado. Solo para contenido realmente "utility" (ubicación, horarios,
+// confirmaciones) -- nunca para enlaces de vehículos ni nada promocional,
+// eso arriesgaría que Meta reclasifique o restrinja el número del negocio.
+async function sendZernioWhatsappNewConversation(zernio: Zernio, accountId: string, phone: string, body: string): Promise<ZernioWhatsappSendResult> {
+  try {
+    const { data, error } = await zernio.messages.createInboxConversation({
+      body: { accountId, participantId: normalizeParticipantId(phone), message: body, category: "utility" },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const message = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_direct_send_rechazado${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
+    }
+    const messageId = data?.messageId;
+    const conversationId = data?.conversationId;
+    if (!messageId || !conversationId) return { ok: false, error: "zernio_sin_message_id_direct_send" };
+    rememberWhatsappConversation(phone, conversationId, accountId);
     return { ok: true, messageId };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

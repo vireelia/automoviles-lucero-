@@ -149,6 +149,20 @@ function markVoiceOrigin(req: express.Request, _res: express.Response, next: exp
   }
   next();
 }
+// Teléfono real del que llama (20/10/2026, auditoría de llamadas de voz:
+// "busquemos la manera de que el agente... le envíe cogiendo el número de
+// la llamada"): en una llamada de Retell, el número real está en
+// `call.from_number` -- nunca hace falta que el cliente lo repita en voz ni
+// que el modelo lo adivine. Solo rellena si el modelo no puso ya un
+// lead_phone explícito (mismo criterio que markVoiceOrigin con el canal).
+function markCallerPhone(req: express.Request, _res: express.Response, next: express.NextFunction) {
+  const body = req.body ?? {};
+  const fromNumber = body.call?.from_number;
+  if (typeof fromNumber === "string" && fromNumber && body.args && typeof body.args === "object" && !body.args.lead_phone) {
+    body.args.lead_phone = fromNumber;
+  }
+  next();
+}
 app.post("/tools/create_lead", markVoiceOrigin, route((a) => upsertLead(a)));
 app.post("/tools/update_lead", markVoiceOrigin, route((a) => upsertLead(a)));
 app.post("/tools/get_vehicle", route((a) => getVehicle(a)));
@@ -177,9 +191,9 @@ app.post("/tools/create_reservation_pending", markVoiceOrigin, route((a) => crea
 app.post("/tools/submit_payment_receipt", requireAdminToken, route((a) => submitPaymentReceipt(a)));
 app.post("/tools/request_financing", route((a) => requestFinancing(a)));
 app.post("/tools/send_internal_summary", requireAdminToken, route((a) => sendInternalSummary(a)));
-app.post("/tools/send_vehicle_link", route((a) => sendVehicleLink(a)));
+app.post("/tools/send_vehicle_link", markCallerPhone, route((a) => sendVehicleLink(a)));
 app.post("/tools/send_location", route(() => sendLocation()));
-app.post("/tools/send_whatsapp", route((a) => sendWhatsapp(a)));
+app.post("/tools/send_whatsapp", markCallerPhone, route((a) => sendWhatsapp(a)));
 app.post("/tools/notify_salesperson", route((a) => notifySalesperson(a)));
 app.post("/tools/save_conversation", route((a) => saveConversation(a)));
 app.post("/tools/create_conversation_summary", route((a) => createConversationSummary(a)));
