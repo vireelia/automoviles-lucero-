@@ -121,7 +121,11 @@ export const businessInfo = {
   delivery_note: "Confirmado 29/09/2026: la entrega normalmente se hace al momento, el mismo día que se cierra la operación. No prometer un plazo distinto salvo que haya trámites pendientes que lo impidan.",
   vehicle_history_disclaimer: "Confirmado 29/09/2026: Automóviles Lucero es una COMPRAVENTA, no el propietario original -- no conocen el historial completo (propietarios anteriores, reparaciones previas a la compra, etc.). Ante preguntas de ese tipo, la respuesta honesta no es 'lo confirma el vendedor' sino explicar que, al ser compraventa, no tienen el historial completo del vehículo antes de que entrara en el concesionario.",
   privacy_rule: "Confirmado 29/09/2026: el agente nunca debe compartir datos personales de la empresa ni de las personas (ni de Ramón/José, ni de otros clientes). Tampoco debe sobre-especificar información en general.",
-  reminder: { hours_before: 2, channel: "WhatsApp (automatización pendiente de integración real)" },
+  // Recordatorios escalonados (petición real, 20/10/2026): 24h antes + 6h
+  // antes cuando la cita se concertó con margen de sobra; si se concertó con
+  // menos de 24h de antelación (nunca cruza esa ventana), se manda solo el de
+  // 1h en su lugar -- nunca los tres a la vez. Lógica real en scheduler.ts.
+  reminder: { hours_before: { long: 24, mid: 6, short: 1 }, channel: "WhatsApp o correo (según el canal de origen del lead), vía la integración real ya conectada" },
   followups: { max_automatic: 3, rule: "No usar mensajes repetitivos tipo '¿sigues interesado?'. Aportar valor (vehículo nuevo, alternativa, actualización, enlace). Después del tercero: STOP." },
   similar_vehicles_match: { price_range_eur: 2000, km_range: 50000, same_category_priority: true, limit: 3 },
   lead_scoring: {

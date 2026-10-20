@@ -21,7 +21,9 @@ type Appointment = {
   requested_date?: string;
   requested_time?: string;
   status: string;
-  reminder_sent?: boolean;
+  reminder_24h_sent?: boolean;
+  reminder_6h_sent?: boolean;
+  reminder_1h_sent?: boolean;
 };
 
 function parseAppointmentDateTime(a: Appointment): Date | null {
@@ -31,25 +33,62 @@ function parseAppointmentDateTime(a: Appointment): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// Ventana de disparo de cada aviso: ±10 minutos sobre el objetivo exacto, para
+// no depender de que el intervalo de comprobación (cada 5 min) caiga justo en
+// el minuto exacto.
+function withinWindow(msUntil: number, hoursBefore: number): boolean {
+  const target = hoursBefore * 60 * 60 * 1000;
+  const tolerance = 10 * 60 * 1000;
+  return msUntil <= target + tolerance && msUntil >= target - tolerance;
+}
+
+function sendApptReminder(appt: Appointment, message: string) {
+  if (!appt.lead_phone) return;
+  if (appt.lead_phone.includes("@")) {
+    void deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+  } else {
+    void sendWhatsapp({ lead_phone: appt.lead_phone, message });
+  }
+}
+
+// Recordatorios escalonados (petición real, 20/10/2026: "también se le debe
+// de recordar aunque sea 24 horas antes de que tiene una visita y unas 6
+// horas antes a los de 24 horas, y si es directamente 1h antes"): el caso
+// normal (cita concertada con margen de sobra) recibe 24h antes Y 6h antes;
+// el caso de última hora (la cita se concierta con menos de 24h de
+// antelación, así que nunca llega a cruzar esa ventana) recibe solo el de 1h
+// -- nunca los tres avisos a la vez para la misma cita.
 function checkAppointmentReminders() {
   const appointments = readCollection<Appointment>("appointments", []);
   const now = Date.now();
   let changed = false;
 
   for (const appt of appointments) {
-    if (appt.status === "cancelled" || appt.reminder_sent) continue;
+    if (appt.status === "cancelled") continue;
     const when = parseAppointmentDateTime(appt);
     if (!when) continue;
     const msUntil = when.getTime() - now;
-    // Ventana de disparo: entre 1h50 y 2h10 antes, para no depender de que el
-    // intervalo caiga justo en el minuto exacto.
-    if (msUntil > 0 && msUntil <= businessInfo.reminder.hours_before * 60 * 60 * 1000 + 10 * 60 * 1000 && msUntil >= businessInfo.reminder.hours_before * 60 * 60 * 1000 - 10 * 60 * 1000) {
-      if (appt.lead_phone) {
-        sendWhatsapp({ lead_phone: appt.lead_phone, message: `Recordatorio: tienes una cita en Automóviles Lucero hoy a las ${appt.requested_time}.` });
-      }
-      appt.reminder_sent = true;
+    if (msUntil <= 0) continue;
+
+    if (!appt.reminder_24h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.long)) {
+      sendApptReminder(appt, `Recordatorio: mañana tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
+      appt.reminder_24h_sent = true;
       changed = true;
-      console.log(`[scheduler] recordatorio de cita encolado para ${appt.id}`);
+      console.log(`[scheduler] recordatorio 24h encolado para ${appt.id}`);
+      continue;
+    }
+    if (appt.reminder_24h_sent && !appt.reminder_6h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.mid)) {
+      sendApptReminder(appt, `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
+      appt.reminder_6h_sent = true;
+      changed = true;
+      console.log(`[scheduler] recordatorio 6h encolado para ${appt.id}`);
+      continue;
+    }
+    if (!appt.reminder_24h_sent && !appt.reminder_1h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.short)) {
+      sendApptReminder(appt, `Recordatorio: en 1 hora tienes una cita en Automóviles Lucero (a las ${appt.requested_time}).`);
+      appt.reminder_1h_sent = true;
+      changed = true;
+      console.log(`[scheduler] recordatorio 1h (cita de última hora) encolado para ${appt.id}`);
     }
   }
   if (changed) writeCollection("appointments", appointments);
