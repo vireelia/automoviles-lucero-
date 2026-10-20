@@ -494,10 +494,8 @@ function button(label: string, action: string, extra = "") {
 // Reorganizado (20/10/2026, mejora integral del CRM, sección 4): agrupado
 // como pide el encargo -- Hoy / Clientes y oportunidades / Pendientes /
 // Canales de entrada (Llamadas, WhatsApp, Correos) / Visitas / Reservas /
-// Embudo / Seguimiento / Coches -- manteniendo las rutas existentes tal
-// cual, ninguna cambia. "Informes" (sección 18, Fase 4) se añade al menú
-// solo cuando esa página exista de verdad -- un enlace a una página que no
-// existe incumpliría la propia regla del encargo de "no simular que funciona".
+// Embudo / Seguimiento / Coches / Informes -- manteniendo las rutas
+// existentes tal cual, ninguna cambia.
 const MENU: [string, string][] = [
   ["/crm", "Hoy"],
   ["/crm/clientes", "Clientes y oportunidades"],
@@ -510,6 +508,7 @@ const MENU: [string, string][] = [
   ["/crm/embudo", "Embudo comercial"],
   ["/crm/seguimiento", "Seguimiento"],
   ["/crm/coches", "Coches"],
+  ["/crm/informes", "Informes"],
 ];
 
 function page(section: string, user: CrmUser, body: string, msg?: string): string {
@@ -2136,6 +2135,122 @@ crm.post("/coches/:id", (req, res) => {
     save("vehicle_overrides", overrides);
   }
   back(res, `/crm/coches/${v.id}`, "Coche guardado");
+});
+
+// ---------- Informes comerciales ----------
+// Fase 4 de la mejora integral del CRM (20/10/2026, sección 18): reutiliza
+// exactamente los mismos filtros temporales de Clientes (Fase 1) y el
+// mismo patrón de agregación real que ya usaba el cuadro de voz en
+// Integraciones (contar/filtrar arrays en memoria con datos reales, nunca
+// una cifra inventada). "No contar dos veces la misma venta": una venta
+// cerrada vive en un único campo (Lead.sale_outcome), así que cualquier
+// desglose por canal cuenta ese mismo lead una sola vez, nunca una vez por
+// cada canal por el que pasó.
+crm.get("/informes", (req, res) => {
+  const dateFilter: DateFilterKey = (["hoy", "ayer", "7dias", "30dias", "mes", "mes_anterior", "todo"] as const).includes(req.query.d as DateFilterKey)
+    ? (req.query.d as DateFilterKey)
+    : "30dias";
+  const today = todayMadrid();
+  const leads = list<Lead>("leads").filter((l) => matchesDateFilter(dateFilter, l.created_at, today));
+  const appts = list<Appointment>("appointments").filter((a) => matchesDateFilter(dateFilter, a.created_at, today));
+  const resv = list<Reservation>("reservations").filter((r) => matchesDateFilter(dateFilter, r.created_at, today));
+  const handoffs = list<Handoff>("handoffs").filter((h) => matchesDateFilter(dateFilter, h.created_at, today));
+  const tasks = listTasks();
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+
+  const leadsNuevos = leads.length;
+  const leadsCalientes = leads.filter((l) => l.temperature === "HOT").length;
+  const leadsContactados = leads.filter((l) => {
+    const p = leadPhase(l, appts, resv, today, financing);
+    return p !== "nuevo" && p !== "pendiente_contactar";
+  }).length;
+  const visitasConcertadas = appts.length;
+  const visitasRealizadas = appts.filter((a) => a.status === "confirmed" && (a.requested_date ?? "") < today).length;
+  const visitasNoPresentado = appts.filter((a) => a.status === "no_presentado").length;
+  const reservasCreadas = resv.length;
+  const reservasConfirmadas = resv.filter((r) => r.status === "confirmed").length;
+  const reservasCanceladas = resv.filter((r) => r.status === "cancelled").length;
+  const ventasCerradas = leads.filter((l) => l.sale_outcome === "cerrada").length;
+  const ventasPerdidas = leads.filter((l) => l.sale_outcome === "perdida");
+  const motivosPerdida = new Map<string, number>();
+  for (const l of ventasPerdidas) motivosPerdida.set(l.lost_reason ?? "Otro", (motivosPerdida.get(l.lost_reason ?? "Otro") ?? 0) + 1);
+  const tareasVencidas = tasks.filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString()).length;
+
+  // Tiempo medio hasta el primer contacto humano: desde que se crea el lead
+  // hasta su primer handoff real -- solo se promedia cuando hay datos de
+  // verdad, nunca un número relleno cuando no hay ningún handoff todavía.
+  const allHandoffs = list<Handoff>("handoffs");
+  const firstContactHours: number[] = [];
+  for (const l of leads) {
+    if (!l.phone) continue;
+    const firstHandoff = allHandoffs.filter((h) => h.lead_phone === l.phone).sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+    if (firstHandoff) firstContactHours.push((new Date(firstHandoff.created_at).getTime() - new Date(l.created_at).getTime()) / 3600000);
+  }
+  const avgFirstContactHours = firstContactHours.length ? firstContactHours.reduce((a, b) => a + b, 0) / firstContactHours.length : null;
+
+  // Conversión: siempre sobre los leads del propio periodo, para que la
+  // tasa tenga sentido junto a los contadores de arriba -- nunca mezclando
+  // un numerador del periodo con un denominador histórico completo.
+  const leadsConVisita = leads.filter((l) => appts.some((a) => a.lead_phone === l.phone)).length;
+  const leadsConReserva = leads.filter((l) => resv.some((r) => r.lead_phone === l.phone)).length;
+  const convLeadVisita = leadsNuevos > 0 ? (leadsConVisita / leadsNuevos) * 100 : null;
+  const convVisitaReserva = leadsConVisita > 0 ? (leads.filter((l) => appts.some((a) => a.lead_phone === l.phone) && resv.some((r) => r.lead_phone === l.phone)).length / leadsConVisita) * 100 : null;
+  const convReservaVenta = leadsConReserva > 0 ? (leads.filter((l) => resv.some((r) => r.lead_phone === l.phone) && l.sale_outcome === "cerrada").length / leadsConReserva) * 100 : null;
+
+  // Coste real de voz (mismo dato que Integraciones, Retell lo reporta por
+  // llamada) -- nunca se mezcla con WhatsApp/chat/correo, que no tienen
+  // coste medido por canal todavía.
+  const voiceCalls = readCollection<{ channel: string; created_at: string; cost_cents: number | null }>("call_analyses")
+    .filter((c) => c.channel === "VOICE")
+    .filter((c) => matchesDateFilter(dateFilter, c.created_at, today));
+  const voiceCostEur = voiceCalls.reduce((sum, c) => sum + (c.cost_cents ?? 0), 0) / 100;
+  const costePorLlamada = voiceCalls.length > 0 ? voiceCostEur / voiceCalls.length : null;
+
+  // Atribución: primera captación (Lead.origin, nunca se sobrescribe) vs
+  // canal de conversión (el canal real de la reserva que llevó a la venta,
+  // cuando existe) -- dos tablas distintas, cada venta cuenta una sola vez
+  // en cada una.
+  const porOrigen = new Map<string, number>();
+  for (const l of leads) porOrigen.set(ORIGIN[l.origin ?? ""] ?? "Origen desconocido", (porOrigen.get(ORIGIN[l.origin ?? ""] ?? "Origen desconocido") ?? 0) + 1);
+  const ventasPorCanalConversion = new Map<string, number>();
+  for (const l of leads.filter((x) => x.sale_outcome === "cerrada")) {
+    const miReserva = resv.find((r) => r.lead_phone === l.phone);
+    const label = ORIGIN[miReserva?.channel ?? ""] ?? "Origen desconocido";
+    ventasPorCanalConversion.set(label, (ventasPorCanalConversion.get(label) ?? 0) + 1);
+  }
+
+  const stat = (n: number | string, label: string) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
+  const datePill = (k: DateFilterKey) => `<a href="/crm/informes?d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
+  const pct = (n: number | null) => (n === null ? "sin datos" : `${n.toFixed(0)}%`);
+  const body = `<h1>Informes</h1>
+<p class="sub">Todo lo de abajo son conteos reales del periodo elegido -- nunca una cifra estimada. "Sin datos" significa que todavía no hay ningún caso real que medir, no un error.</p>
+<div class="legend">${(["hoy", "ayer", "7dias", "30dias", "mes", "mes_anterior", "todo"] as DateFilterKey[]).map(datePill).join(" ")}</div>
+<div class="stats">
+${stat(leadsNuevos, "leads nuevos")}
+${stat(leadsContactados, "leads contactados")}
+${stat(leadsCalientes, "leads calientes")}
+${stat(visitasConcertadas, "visitas concertadas")}
+${stat(visitasRealizadas, "visitas realizadas")}
+${stat(visitasNoPresentado, "no presentado")}
+${stat(reservasCreadas, "reservas creadas")}
+${stat(reservasConfirmadas, "reservas pagadas y verificadas")}
+${stat(reservasCanceladas, "reservas canceladas")}
+${stat(ventasCerradas, "ventas cerradas")}
+${stat(ventasPerdidas.length, "ventas perdidas")}
+${stat(tareasVencidas, "tareas vencidas")}
+</div>
+<div class="box"><h3 style="margin-top:0">Conversión del periodo</h3>
+<p>Lead → visita: <b>${pct(convLeadVisita)}</b> · Visita → reserva: <b>${pct(convVisitaReserva)}</b> · Reserva → venta: <b>${pct(convReservaVenta)}</b></p>
+<p class="sub">Tiempo medio hasta el primer contacto humano (handoff real): ${avgFirstContactHours !== null ? `${avgFirstContactHours.toFixed(1)} horas` : "sin datos todavía"}</p>
+</div>
+<div class="box"><h3 style="margin-top:0">Coste real -- agente de voz</h3>
+<p>Llamadas: <b>${voiceCalls.length}</b> · Coste total: <b>${voiceCostEur.toFixed(2)} $</b> · Coste por llamada: <b>${costePorLlamada !== null ? `${costePorLlamada.toFixed(2)} $` : "sin datos"}</b></p>
+<p class="sub">WhatsApp, chat y correo todavía no tienen coste medido por canal -- no se muestra un número para no inventarlo.</p>
+</div>
+${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos de venta perdida</h3>${[...motivosPerdida.entries()].map(([m, n]) => `<p>${esc(m)}: <b>${n}</b></p>`).join("")}</div>` : ""}
+<div class="box"><h3 style="margin-top:0">Leads por canal de primera captación</h3>${[...porOrigen.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>
+${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${[...ventasPorCanalConversion.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>` : ""}`;
+  res.type("html").send(page("Informes", me(res), body, msgOf(req)));
 });
 
 // ---------- Equipo (solo administrador) ----------
