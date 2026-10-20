@@ -321,9 +321,12 @@ export async function createAppointmentWithCalendar(args: Parameters<typeof crea
     const endMinutes = minutes + APPOINTMENT_MINUTES;
     const eh = String(Math.floor(endMinutes / 60)).padStart(2, "0");
     const em = String(endMinutes % 60).padStart(2, "0");
+    // Agente que la solicitó (20/10/2026, sección 15: tres identidades) --
+    // antes decía siempre "Miguel" aunque viniera de WhatsApp/correo.
+    const requestedByAgent = args.channel === "VOICE" ? "Miguel" : args.channel === "EMAIL" ? "Daniel" : args.channel === "WHATSAPP" || args.channel === "CHAT" || args.channel === "FACEBOOK" ? "Carolina" : "el asistente virtual";
     const event = await calendarCreateEvent({
       summary: `Cita Lucero (${args.appointment_type ?? "visita"}) -- pendiente de confirmar`,
-      description: `Solicitada por Miguel. Teléfono: ${args.lead_phone ?? "sin teléfono"}. Vehículo: ${args.vehicle_id ?? "sin vehículo"}. ${args.notes ?? ""}`.trim(),
+      description: `Solicitada por ${requestedByAgent}. Teléfono: ${args.lead_phone ?? "sin teléfono"}. Vehículo: ${args.vehicle_id ?? "sin vehículo"}. ${args.notes ?? ""}`.trim(),
       startLocal: `${args.requested_date}T${hh}:${mm}:00`,
       endLocal: `${args.requested_date}T${eh}:${em}:00`,
     });

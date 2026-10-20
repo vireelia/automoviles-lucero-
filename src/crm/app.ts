@@ -91,7 +91,7 @@ type Appointment = {
   // Canal de origen (20/10/2026, sección 11.1) -- mismo criterio que en Reservation.
   channel?: string | null;
 };
-type Handoff = { id: string; lead_phone: string | null; lead_name?: string | null; reason?: string; urgency?: string; notes?: string; reason_type?: string; status: string; created_at: string };
+type Handoff = { id: string; lead_phone: string | null; lead_name?: string | null; reason?: string; urgency?: string; notes?: string; reason_type?: string; status: string; created_at: string; channel?: string };
 // Especificación formal del agente de chat (16/10/2026, sección CRM: "...y
 // resumen de conversación"): el agente ya llamaba a save_conversation/
 // create_conversation_summary, pero esos datos no se veían en ningún sitio
@@ -1462,7 +1462,7 @@ ${EMBUDO_COLUMNS.map((phase) => {
   res.type("html").send(page("Embudo comercial", me(res), body, msgOf(req)));
 });
 
-// ---------- Pendientes (avisos de Miguel y correos) ----------
+// ---------- Pendientes (avisos de los agentes y correos) ----------
 // Para el timbre (ver script en page()): lista de IDs de alertas urgentes
 // activas ahora mismo, para que el navegador detecte cuáles son nuevas.
 crm.get("/alertas-activas.json", (_req, res) => {
@@ -1490,9 +1490,9 @@ crm.get("/pendientes", async (req, res) => {
   // sin duplicar aquí la lista completa de tareas.
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
   const body = `<h1>Pendientes</h1>
-<p class="sub">Aquí aparece lo que Miguel no puede resolver solo. Cuando lo hayas atendido, pulsa el botón.</p>
+<p class="sub">Aquí aparece lo que Miguel, Carolina o Daniel no pueden resolver solos. Cuando lo hayas atendido, pulsa el botón.</p>
 ${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">⏰ ${overdueTasks.length} tarea(s) de seguimiento vencida(s) -- <a class="link" href="/crm/seguimiento?f=vencidas">verlas</a></div>` : ""}
-<h2>Avisos de Miguel (${handoffs.length})</h2>
+<h2>Avisos de los agentes (${handoffs.length})</h2>
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Úsalo solo para avisos ya atendidos; se pueden recuperar luego desde la Papelera.") : ""}
 ${handoffs.length === 0 ? `<div class="empty">No hay avisos.</div>` : handoffs.map((h) => {
   // Misma limpieza ya aplicada a las alertas de Hoy (18/10/2026, "estas
@@ -1716,7 +1716,7 @@ crm.get("/correos", (req, res) => {
   const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const body = `<h1>Correos</h1>
-<p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Miguel solo y lo que espera respuesta humana.</p>
+<p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
 ${filterPills("/crm/correos", f, q, true)}
 ${searchBox("/crm/correos", f, q, "Buscar por remitente, asunto o portal")}
 ${items.length > 0 ? bulkBar("/crm/correos", f, q, items.length, true) : ""}
@@ -1874,7 +1874,7 @@ crm.post("/llamadas-masivo", (req, res) => {
   back(res, "/crm/llamadas", n === 0 ? "No había nada que hacer" : accion.startsWith("eliminar") ? `${n} llamada(s) movida(s) a la papelera` : accion === "archivar" ? `${n} llamada(s) archivada(s)` : `${n} llamada(s) marcada(s) como leída`);
 });
 
-// ---------- Clientes (solo lectura de la segmentación de Miguel) ----------
+// ---------- Clientes (solo lectura de la segmentación de los agentes) ----------
 crm.get("/clientes", (req, res) => {
   autoArchiveColdLeads();
   const t = typeof req.query.t === "string" && (TEMP[req.query.t] || req.query.t === "archivados") ? req.query.t : "todos";
@@ -1905,7 +1905,7 @@ ${t === "archivados"
 </div>`
     : "";
   const body = `<h1>Clientes</h1>
-<p class="sub">Miguel anota solo lo que quiere cada cliente. Tú solo lo lees y llamas si hace falta. Los clientes fríos sin contacto en ${LEAD_ARCHIVE_INACTIVE_DAYS} días se archivan solos -- nunca se borran, solo dejan de aparecer aquí.</p>
+<p class="sub">Miguel, Carolina y Daniel anotan solos lo que quiere cada cliente, sea cual sea el canal. Tú solo lo lees y llamas si hace falta. Los clientes fríos sin contacto en ${LEAD_ARCHIVE_INACTIVE_DAYS} días se archivan solos -- nunca se borran, solo dejan de aparecer aquí.</p>
 <div class="box"><h3 style="margin-top:0">Añadir un cliente a mano</h3>
 <form method="post" action="/crm/clientes">
 <div class="row"><div><label>Nombre</label><input name="nombre"></div>
@@ -2229,7 +2229,7 @@ crm.get("/integraciones", (req, res) => {
     ? `<a class="btn light" href="/crm/integraciones/google/conectar">Reconectar Google</a>`
     : `<a class="btn ok" href="/crm/integraciones/google/conectar">Conectar Google</a>`;
   const disconnectButton = st.connected
-    ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Miguel dejará de enviar correos y crear citas.')">Desconectar Google</button></form>`
+    ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Daniel dejará de enviar correos y no se podrá comprobar disponibilidad real para las visitas.')">Desconectar Google</button></form>`
     : "";
   const tests = st.connected
     ? `<div class="box"><h3 style="margin-top:0">Pruebas</h3>
@@ -2289,8 +2289,40 @@ ${toReview.length === 0
   ? `<p>Ninguna llamada marcada para revisar por ahora.</p>`
   : toReview.map((c) => `<p>${esc(fmtDate(c.created_at))} -- ${esc(c.from_number ?? "número desconocido")}${c.max_pause_sec ? ` -- pausa de ${c.max_pause_sec.toFixed(1)}s` : ""}${c.custom_analysis_data?.issues_detected && c.custom_analysis_data.issues_detected !== "ninguno" ? ` -- ${esc(c.custom_analysis_data.issues_detected)}` : ""}${c.summary ? `<br><span class="sub">${esc(c.summary)}</span>` : ""}</p>`).join("")}
 </div>`;
+  // Tarjetas de los 3 agentes (20/10/2026, mejora integral del CRM, sección
+  // 15): resumen por identidad, reutilizando datos reales que ya se
+  // registran (leads, handoffs, tasks, call_analyses) -- nunca una tarjeta
+  // visual sin datos detrás. El coste solo es real para voz (Retell lo
+  // reporta); en WhatsApp/chat/correo se dice honestamente que no hay
+  // seguimiento de coste por canal todavía, en vez de inventar un número.
+  const allLeadsForAgents = list<Lead>("leads");
+  const allHandoffsForAgents = list<Handoff>("handoffs");
+  const allTasksForAgents = listTasks();
+  function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[]): string {
+    const clientes = allLeadsForAgents.filter((l) => l.channel && channelKeys.includes(l.channel)).length;
+    const handoffsCount = allHandoffsForAgents.filter((h) => h.channel && channelKeys.includes(h.channel)).length;
+    const tareasPendientes = allTasksForAgents.filter((t) => t.status === "pendiente" && t.channel && channelKeys.includes(t.channel)).length;
+    const ultima = allLeadsForAgents
+      .filter((l) => l.channel && channelKeys.includes(l.channel))
+      .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))[0];
+    return `<div class="box"><h3 style="margin-top:0">${esc(name)}</h3>
+<p class="sub">${esc(funcion)}</p>
+<p>Estado: <strong>${esc(estado)}</strong></p>
+<p>Canales: ${esc(canales)}</p>
+<p>Clientes atendidos: <strong>${clientes}</strong> · Avisos generados: <strong>${handoffsCount}</strong> · Tareas pendientes: <strong>${tareasPendientes}</strong></p>
+<p class="sub">Última actividad: ${ultima ? esc(fmtDate(ultima.updated_at ?? ultima.created_at)) : "ninguna todavía"}</p>
+</div>`;
+  }
+  const agentCards = `<h2>Agentes IA</h2>
+<div class="row">
+${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", voiceOn ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"])}
+${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"])}
+${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"])}
+</div>
+<p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
   const body = `<h1>Integraciones</h1>
 <p class="sub">Conexión con la cuenta de Google del negocio: correo y calendario de citas.</p>
+${agentCards}
 ${config}
 <div class="box"><h3 style="margin-top:0">Google</h3>
 <p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
@@ -2345,9 +2377,9 @@ function whatsappZernioBox(req: express.Request): string {
       : "";
   const agentOn = isWhatsappZernioAgentEnabled();
   const agentToggle = configured
-    ? `<p>Miguel en este canal: <strong>${agentOn ? "Respondiendo" : "Pausado -- los mensajes avisan al equipo, nadie los contesta solo"}</strong></p>
+    ? `<p>Carolina en este canal: <strong>${agentOn ? "Respondiendo" : "Pausada -- los mensajes avisan al equipo, nadie los contesta solo"}</strong></p>
 <form method="post" action="/crm/integraciones/whatsapp/agente/${agentOn ? "desactivar" : "activar"}" style="display:inline">
-<button class="btn ${agentOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${agentOn ? "¿Pausar a Miguel en WhatsApp? Los mensajes nuevos seguirán avisando al equipo, pero nadie los contestará solo." : "¿Activar a Miguel en WhatsApp? Empezará a contestar él solo los mensajes nuevos de este número."}')">${agentOn ? "Pausar a Miguel aquí" : "Activar a Miguel aquí"}</button>
+<button class="btn ${agentOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${agentOn ? "¿Pausar a Carolina en WhatsApp? Los mensajes nuevos seguirán avisando al equipo, pero nadie los contestará solo." : "¿Activar a Carolina en WhatsApp? Empezará a contestar ella sola los mensajes nuevos de este número."}')">${agentOn ? "Pausar a Carolina aquí" : "Activar a Carolina aquí"}</button>
 </form>`
     : "";
   return `<div class="box"><h3 style="margin-top:0">WhatsApp -- vía Zernio</h3>
@@ -2382,13 +2414,13 @@ crm.get("/integraciones/whatsapp/callback", (req, res) => {
 crm.post("/integraciones/whatsapp/agente/activar", (_req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setWhatsappZernioAgentEnabled(true, me(res).email);
-  back(res, "/crm/integraciones", "Miguel activado en WhatsApp -- ya contesta él solo los mensajes nuevos de este número.");
+  back(res, "/crm/integraciones", "Carolina activada en WhatsApp -- ya contesta ella sola los mensajes nuevos de este número.");
 });
 
 crm.post("/integraciones/whatsapp/agente/desactivar", (_req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setWhatsappZernioAgentEnabled(false, me(res).email);
-  back(res, "/crm/integraciones", "Miguel pausado en WhatsApp -- los mensajes nuevos avisan al equipo, nadie los contesta solo.");
+  back(res, "/crm/integraciones", "Carolina pausada en WhatsApp -- los mensajes nuevos avisan al equipo, nadie los contesta solo.");
 });
 
 crm.post("/integraciones/telefono/activar", (_req, res) => {

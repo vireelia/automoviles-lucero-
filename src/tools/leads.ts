@@ -140,11 +140,34 @@ export function updateContactPreferences(args: { phone: string; do_not_contact?:
 
 // get_customer_history (Sección 37): recupera contexto si vuelve el mismo
 // cliente, para no hacerle repetir información.
+// Enriquecida (20/10/2026, mejora integral del CRM, sección 16: "memoria
+// compartida" entre Miguel/Carolina/Daniel) -- antes solo devolvía los
+// campos sueltos del lead (notas, interés...), nunca sus visitas/reservas/
+// resúmenes de conversación reales, aunque esos datos ya existían y eran
+// del mismo cliente real (mismo teléfono exacto, nunca una coincidencia
+// adivinada entre canales distintos -- eso sigue sin fusionarse solo, ver
+// mergeLeads). Así, si un cliente habló antes con Miguel por voz y ahora
+// escribe a Carolina por WhatsApp, esta herramienta ya le da el historial
+// real de las visitas/reservas que dejó, sin tener que repetirlo él.
 export function getCustomerHistory(args: { phone: string }) {
   const leads = readLeads();
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
-  return envelope({ status: "ok", data: lead, source: "registro interno" });
+  const appointments = readCollection<{ vehicle_id?: string; requested_date?: string; requested_time?: string; status: string; channel?: string; lead_phone: string | null }>("appointments").filter(
+    (a) => a.lead_phone === args.phone,
+  );
+  const reservations = readCollection<{ vehicle_id: string; amount_eur: number; status: string; channel?: string; lead_phone: string | null }>("reservations").filter(
+    (r) => r.lead_phone === args.phone,
+  );
+  const summaries = readCollection<{ phone?: string | null; summary: string; created_at: string }>("conversation_summaries")
+    .filter((s) => s.phone === args.phone)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, 5);
+  return envelope({
+    status: "ok",
+    data: { ...lead, appointments, reservations, recent_conversation_summaries: summaries },
+    source: "registro interno",
+  });
 }
 
 // score_lead (Sección 36): el agente clasifica en base a la conversación y
