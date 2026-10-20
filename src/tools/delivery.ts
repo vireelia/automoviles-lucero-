@@ -177,6 +177,31 @@ export async function notifySalesperson(args: {
   });
 }
 
+// get_responsable_contact (20/10/2026, petición real: "cuando el cliente le
+// pregunte a Carolina por si puede hablar con un responsable, que le pase el
+// número de Ramón o José por WhatsApp para que lo pueda llamar"). Solo para
+// WhatsApp/Messenger/correo (Carolina/Daniel) -- en voz no hace falta, ya
+// existe transfer_call en vivo, que resuelve lo mismo mejor. Excepción
+// explícita documentada en business-info.ts privacy_rule -- los números
+// reales nunca viven en el prompt, se resuelven aquí igual que en
+// notify_salesperson.
+export function getResponsableContact(args: { preferencia?: "ramon" | "jose" }) {
+  const ramon = { nombre: "Ramón", telefono: businessInfo.responsables.ramon.transfer_number };
+  const jose = { nombre: "José", telefono: businessInfo.responsables.jose.transfer_number };
+  const data =
+    args.preferencia === "jose"
+      ? { elegido: jose, alternativa: ramon }
+      : args.preferencia === "ramon"
+        ? { elegido: ramon, alternativa: jose }
+        : { elegido: ramon, alternativa: jose, nota: "No se indicó preferencia -- se da el de Ramón por defecto, José como alternativa si hace falta." };
+  return envelope({
+    status: "ok",
+    data,
+    source: "Números personales confirmados por el negocio (business-info.ts, responsables.*)",
+    conflicts: ["Excepción de privacidad concreta: solo dar este teléfono cuando el cliente pida explícitamente hablar con una persona -- nunca compartir ningún otro dato personal del negocio o del equipo."],
+  });
+}
+
 export function saveConversation(args: {
   phone?: string;
   channel: "VOICE" | "CHAT";

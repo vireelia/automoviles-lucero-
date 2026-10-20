@@ -3,7 +3,7 @@ import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles } fro
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups } from "../tools/leads.js";
 import { createServiceRequest, createHandoff, createVehicleValuation } from "../tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "../tools/appointments.js";
-import { sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "../tools/delivery.js";
+import { sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, getResponsableContact, saveConversation, createConversationSummary } from "../tools/delivery.js";
 import { requestFinancing } from "../tools/financing.js";
 
 // Mismo mapeo que las rutas /tools/* del servidor, pero llamado en proceso:
@@ -42,6 +42,7 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   send_location: () => sendLocation(),
   send_whatsapp: (a) => sendWhatsapp(a),
   notify_salesperson: (a) => notifySalesperson(a),
+  get_responsable_contact: (a) => getResponsableContact(a),
   save_conversation: (a) => saveConversation(a),
   create_conversation_summary: (a) => createConversationSummary(a),
 };

@@ -493,6 +493,27 @@
   {
     "type": "function",
     "function": {
+      "name": "get_responsable_contact",
+      "description": "Solo WhatsApp/Messenger/correo (Carolina/Daniel): cuando el cliente pide explícitamente hablar con una persona del negocio, da el teléfono personal de Ramón o José para que le llame. Nunca en voz (ahí ya existe transferencia en vivo).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "preferencia": {
+            "type": "string",
+            "enum": [
+              "ramon",
+              "jose"
+            ],
+            "description": "Con cuál de los dos prefiere hablar el cliente, si lo dijo. Si no lo dijo, se omite."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "save_conversation",
       "description": "Guarda la conversación (transcripción/resumen/intención/vehículo/resultado) al terminar la gestión.",
       "parameters": {
