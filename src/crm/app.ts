@@ -68,6 +68,13 @@ type Lead = {
   // campos explícitos, nadie los deriva por el cliente.
   assigned_to?: string | null;
   next_action?: string | null;
+  // Bandeja única de entrada (21/10/2026, Fase A del encargo de reorganización
+  // integral): la única parte de "calidad de datos" que ningún dato derivado
+  // puede decidir sola -- si de verdad es un lead comercial (spam/número
+  // equivocado/proveedor no lo son). El resto (incompleto/dudoso/posible
+  // duplicado) se deriva solo, ver dataQuality(). Opcional, se lee con
+  // `?? false` -- ningún registro histórico necesita migración.
+  non_commercial?: boolean;
   updated_at?: string;
   created_at: string;
 };
@@ -223,6 +230,47 @@ function findPossibleDuplicate(lead: Lead, allLeads: Lead[]): Lead | null {
   const key = normalizePhone(lead.phone);
   return allLeads.find((other) => other.id !== lead.id && other.phone && normalizePhone(other.phone) === key) ?? null;
 }
+// Bandeja única de entrada (21/10/2026, Fase A): calidad de datos derivada,
+// nunca guardada -- misma filosofía que leadPhase. Solo "no_comercial" es
+// una decisión humana explícita (lead.non_commercial), el resto se calcula
+// de datos ya reales.
+type DataQuality = "completo" | "incompleto" | "dudoso" | "posible_duplicado" | "no_comercial";
+function dataQuality(lead: Lead, allLeads: Lead[]): DataQuality {
+  if (lead.non_commercial) return "no_comercial";
+  if (findPossibleDuplicate(lead, allLeads)) return "posible_duplicado";
+  if (!lead.phone && !lead.name) return "incompleto";
+  if (!lead.vehicle_interest && !lead.notes) return "incompleto";
+  // normalizePhone deja el texto tal cual si no parece un teléfono real
+  // (menos de 7 o más de 11 dígitos) -- esa es la señal de "dudoso".
+  if (lead.phone && !lead.phone.includes("@") && !/^\+?\d{9,11}$/.test(lead.phone.replace(/\D/g, ""))) return "dudoso";
+  if (lead.origin && !(lead.origin in ORIGIN)) return "dudoso";
+  return "completo";
+}
+const DATA_QUALITY_LABEL: Record<DataQuality, string> = {
+  completo: "Completo",
+  incompleto: "Incompleto",
+  dudoso: "Dudoso",
+  posible_duplicado: "Posible duplicado",
+  no_comercial: "No comercial",
+};
+// Prioridad P1-P4 (21/10/2026, Fase A, sección 7 del encargo): v1 simple
+// sobre datos YA reales (temperatura, fase, avisos urgentes abiertos).
+// Nunca se guarda -- el motor de reglas completo (más criterios de
+// negocio) es Fase B/C/D, fuera de esta entrega.
+type LeadPriority = "P1" | "P2" | "P3" | "P4";
+function leadPriority(lead: Lead, phase: LeadPhase, hasOpenUrgentHandoff: boolean): LeadPriority {
+  if (hasOpenUrgentHandoff) return "P1";
+  if (lead.temperature === "HOT" && (phase === "nuevo" || phase === "pendiente_contactar" || phase === "contactado")) return "P1";
+  if (phase === "pendiente_contactar" || lead.temperature === "WARM") return "P2";
+  if (phase === "nuevo") return "P3";
+  return "P4";
+}
+const LEAD_PRIORITY_LABEL: Record<LeadPriority, string> = {
+  P1: "P1 -- Urgente",
+  P2: "P2 -- Alta",
+  P3: "P3 -- Normal",
+  P4: "P4 -- Diferida",
+};
 // Agente/canal por el que entró el cliente. El texto va en la tarjeta; la letra solo indica temperatura.
 // FALLO REAL detectado en la auditoría del 18/10/2026: a los leads reales
 // con origin "WHATSAPP" (confirmado en data/leads.json de producción) les
@@ -535,6 +583,7 @@ function button(label: string, action: string, extra = "") {
 // existentes tal cual, ninguna cambia.
 const MENU: [string, string][] = [
   ["/crm", "Hoy"],
+  ["/crm/entrada", "Entrada de leads"],
   ["/crm/clientes", "Clientes y oportunidades"],
   ["/crm/publicidad", "Clientes para publicidad"],
   ["/crm/pendientes", "Pendientes"],
@@ -1008,11 +1057,16 @@ crm.get("/", (req, res) => {
   const todayAppts = appts.filter((a) => a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
   const upcoming = appts.filter((a) => (a.requested_date ?? "") > today).sort((x, y) => (x.requested_date ?? "").localeCompare(y.requested_date ?? "")).slice(0, 6);
   const toAttend = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification");
+  // Fase A punto 2/7 (21/10/2026): las tareas urgentes/vencidas nunca
+  // aparecían en Hoy, el único sitio pensado para "qué hago ahora mismo" --
+  // aunque ya se veían en /crm/seguimiento. Mismo patrón {href,text}.
+  const urgentTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString())));
   const todo: { href: string; text: string }[] = [
     ...toAttend.filter((r) => r.status === "pending_verification").map((r) => ({ href: "/crm/reservas", text: `Confirmar la reserva de ${vehicleName(r.vehicle_id)}` })),
     ...todayAppts.filter((a) => a.status === "requested").map((a) => ({ href: "/crm/citas", text: `Confirmar la visita de hoy a las ${a.requested_time ?? "?"}` })),
     ...handoffs.map((h) => ({ href: "/crm/pendientes", text: `Atender: ${h.reason ?? "un cliente necesita una persona"}` })),
     ...mails.map((m) => ({ href: "/crm/pendientes", text: `Contestar a ${m.from}` })),
+    ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
   const d = dayLabel(today);
   const alerts = pendingAlerts();
@@ -1116,16 +1170,28 @@ ${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : 
 crm.get("/citas", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "todas";
   const c = typeof req.query.c === "string" ? req.query.c : "todos";
+  const d = typeof req.query.d === "string" ? req.query.d : "todas";
+  const today = todayMadrid();
   let items = list<Appointment>("appointments");
   if (f === "pendientes") items = items.filter((a) => a.status === "requested");
   if (f === "confirmadas") items = items.filter((a) => a.status === "confirmed");
   if (f === "no_presentado") items = items.filter((a) => a.status === "no_presentado");
   if (c !== "todos") items = items.filter((a) => channelBucket(a.channel) === c);
+  // Pestañas por día (21/10/2026, Fase A punto 6, "es mucho lio" -- la lista
+  // mezclaba hoy con pendientes de días pasados y sin fecha). Por defecto
+  // "todas" para no romper ningún enlace ya guardado (incluidos los del
+  // propio dashboard de Hoy); un tercer eje independiente de f/c.
+  if (d === "hoy") items = items.filter((a) => a.requested_date === today);
+  else if (d === "ayer") items = items.filter((a) => a.requested_date === addDaysToDateStr(today, -1));
+  else if (d === "sin_fecha") items = items.filter((a) => !a.requested_date);
+  else if (d === "otros_dias") items = items.filter((a) => a.requested_date && a.requested_date !== today && a.requested_date !== addDaysToDateStr(today, -1));
   items.sort((x, y) => `${x.requested_date ?? ""}${x.requested_time ?? ""}`.localeCompare(`${y.requested_date ?? ""}${y.requested_time ?? ""}`));
-  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
-  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}&d=${d}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}&d=${d}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const diaPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${c}&d=${k}" class="tag" style="text-decoration:none;${d === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Visitas</h1>
 <p class="sub">Aquí ves los días y las horas en que vendrán los clientes a ver un coche.</p>
+<p>${diaPill("todas", "Todos los días")} ${diaPill("hoy", "Hoy")} ${diaPill("ayer", "Ayer")} ${diaPill("otros_dias", "Otros días")} ${diaPill("sin_fecha", "Sin fecha")}</p>
 <p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 <p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} ${pill("no_presentado", "No presentado")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
 ${items.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", items.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
@@ -1920,6 +1986,61 @@ crm.post("/llamadas-masivo", (req, res) => {
 });
 
 // ---------- Clientes (solo lectura de la segmentación de los agentes) ----------
+// ---------- Entrada de leads (bandeja única de triaje) ----------
+// Fase A (21/10/2026, punto 4 del encargo): "qué atiendo ahora mismo, en
+// orden" -- distinto de Clientes, que es el listado histórico completo
+// para buscar a alguien. Sin acciones masivas en esta v1: toda edición
+// real sigue pasando por "Ver ficha" hacia /crm/clientes/:id, donde ya vive.
+function entradaCard(l: Lead, phase: LeadPhase, quality: DataQuality, priority: LeadPriority, duplicate: Lead | null): string {
+  const t = TEMP[l.temperature] ?? TEMP.COLD;
+  const prioCls = priority === "P1" ? "t-hot" : priority === "P2" ? "t-warm" : "";
+  const qualityNote = quality === "posible_duplicado" && duplicate
+    ? `<a class="link" href="/crm/clientes/${esc(duplicate.id)}" style="color:#9a3412">⚠️ ${esc(DATA_QUALITY_LABEL[quality])}: mismo teléfono que ${esc(leadDisplayName(duplicate))}</a>`
+    : DATA_QUALITY_LABEL[quality];
+  return `<div class="card" style="position:relative"><div class="info">
+<h3>${esc(leadDisplayName(l))}</h3>
+<p><span class="tag ${prioCls}">${esc(LEAD_PRIORITY_LABEL[priority])}</span> <span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span></p>
+<p>${qualityNote}</p>
+<p><b>${esc(situation(l))}</b></p>
+<p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
+<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?")}
+</div></div>`;
+}
+crm.get("/entrada", (req, res) => {
+  const p = typeof req.query.p === "string" && ["P1", "P2", "P3", "P4"].includes(req.query.p) ? (req.query.p as LeadPriority) : "todas";
+  const cal = typeof req.query.cal === "string" && ["completo", "incompleto", "dudoso", "posible_duplicado", "no_comercial"].includes(req.query.cal)
+    ? (req.query.cal as DataQuality)
+    : "todas";
+  const today = todayMadrid();
+  const all = list<Lead>("leads");
+  const appts = list<Appointment>("appointments");
+  const reservations = list<Reservation>("reservations");
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const handoffs = list<Handoff>("handoffs");
+  const activeLeads = all.filter((l) => !l.archived && !l.marketing_list && !l.do_not_contact && !l.sale_outcome);
+  const rows = activeLeads.map((l) => {
+    const phase = leadPhase(l, appts, reservations, today, financing);
+    const quality = dataQuality(l, all);
+    const hasOpenUrgentHandoff = Boolean(
+      l.phone && handoffs.some((h) => h.status === "requested" && h.urgency === "alta" && h.lead_phone && normalizePhone(h.lead_phone) === normalizePhone(l.phone!)),
+    );
+    const priority = leadPriority(l, phase, hasOpenUrgentHandoff);
+    return { lead: l, phase, quality, priority, duplicate: findPossibleDuplicate(l, all) };
+  });
+  const filtered = rows
+    .filter((r) => p === "todas" || r.priority === p)
+    .filter((r) => cal === "todas" || r.quality === cal)
+    .sort((a, b) => a.priority.localeCompare(b.priority) || (b.lead.updated_at ?? b.lead.created_at).localeCompare(a.lead.updated_at ?? a.lead.created_at));
+  const prioPill = (k: string, label: string) => `<a href="/crm/entrada?p=${k}&cal=${cal}" class="tag" style="text-decoration:none;${p === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const calPill = (k: string, label: string) => `<a href="/crm/entrada?p=${p}&cal=${k}" class="tag" style="text-decoration:none;${cal === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const body = `<h1>Entrada de leads</h1>
+<p class="sub">Qué atiende ahora mismo, en orden de prioridad. Para el historial completo o buscar a alguien concreto, usa Clientes.</p>
+<div class="legend">${prioPill("todas", "Todas")} ${prioPill("P1", "P1 Urgente")} ${prioPill("P2", "P2 Alta")} ${prioPill("P3", "P3 Normal")} ${prioPill("P4", "P4 Diferida")}</div>
+<div class="legend">${calPill("todas", "Toda calidad")} ${calPill("completo", "Completo")} ${calPill("incompleto", "Incompleto")} ${calPill("dudoso", "Dudoso")} ${calPill("posible_duplicado", "Posible duplicado")} ${calPill("no_comercial", "No comercial")}</div>
+${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate)).join("")}`;
+  res.type("html").send(page("Entrada de leads", me(res), body, msgOf(req)));
+});
+
 crm.get("/clientes", (req, res) => {
   autoArchiveColdLeads();
   const t = typeof req.query.t === "string" && (TEMP[req.query.t] || req.query.t === "archivados") ? req.query.t : "todos";
@@ -2044,6 +2165,7 @@ ${timeline.length > 0 ? `<div class="box"><h3 style="margin-top:0">Historial</h3
 <label>Notas para el equipo</label><textarea name="notes" rows="3">${esc(lead.notes ?? "")}</textarea>
 <button class="btn ok" type="submit" name="accion" value="guardar">Guardar cambios</button>
 ${lead.do_not_contact ? button("Volver a escribirle", "reactivar", "light") : button("No volver a escribirle", "no_contactar", "danger")}
+${lead.non_commercial ? button("No es spam, es un cliente real", "quitar_no_comercial", "light") : button("Marcar como no comercial (spam/nº equivocado)", "marcar_no_comercial", "light")}
 ${me(res).role === "admin" ? confirmButton("Eliminar cliente", "eliminar", "danger", `¿Eliminar a "${lead.name || lead.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`) : ""}
 </form>`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
@@ -2062,6 +2184,8 @@ crm.post("/clientes/:id", (req, res) => {
   }
   if (accion === "no_contactar") lead.do_not_contact = true;
   else if (accion === "reactivar") lead.do_not_contact = false;
+  else if (accion === "marcar_no_comercial") lead.non_commercial = true;
+  else if (accion === "quitar_no_comercial") lead.non_commercial = false;
   else if (accion === "archivar") lead.archived = true;
   else if (accion === "desarchivar") lead.archived = false;
   else if (accion === "mover_publicidad") lead.marketing_list = true;
@@ -2096,6 +2220,8 @@ crm.post("/clientes/:id", (req, res) => {
     guardar: "Cambios guardados",
     no_contactar: "Listo: no le escribiremos más",
     reactivar: "Listo: sí se le puede escribir",
+    marcar_no_comercial: "Marcado como no comercial",
+    quitar_no_comercial: "Ya no está marcado como no comercial",
     archivar: "Cliente archivado",
     desarchivar: "Cliente desarchivado",
     mover_publicidad: "Movido a Clientes para publicidad",
@@ -2105,7 +2231,10 @@ crm.post("/clientes/:id", (req, res) => {
     reabrir: "Oportunidad reabierta",
     actualizar_embudo: "Responsable/próxima acción actualizados",
   };
-  const volver = typeof req.body.volver === "string" && req.body.volver === "/crm/embudo" ? "/crm/embudo" : `/crm/clientes/${lead.id}`;
+  const volver =
+    typeof req.body.volver === "string" && (req.body.volver === "/crm/embudo" || req.body.volver === "/crm/entrada")
+      ? req.body.volver
+      : `/crm/clientes/${lead.id}`;
   back(res, volver, ACCION_MSG[accion] ?? "Listo");
 });
 
@@ -2303,6 +2432,23 @@ crm.get("/informes", (req, res) => {
     ventasPorCanalConversion.set(label, (ventasPorCanalConversion.get(label) ?? 0) + 1);
   }
 
+  // Calidad de datos y duplicados (21/10/2026, Fase A punto 3): pasada real
+  // de agrupación sobre TODOS los leads (nunca solo el periodo elegido,
+  // porque un duplicado puede venir de hace meses) -- misma normalización
+  // que ya usa findPossibleDuplicate/upsertLead. Nunca fusiona solo, solo
+  // enlaza a las fichas para fusión manual.
+  const allLeadsEver = list<Lead>("leads");
+  const dupGroups = new Map<string, Lead[]>();
+  for (const l of allLeadsEver) {
+    if (!l.phone) continue;
+    const key = normalizePhone(l.phone);
+    if (!dupGroups.has(key)) dupGroups.set(key, []);
+    dupGroups.get(key)!.push(l);
+  }
+  const realDupGroups = [...dupGroups.values()].filter((g) => g.length > 1);
+  const dupRowCount = realDupGroups.reduce((sum, g) => sum + g.length, 0);
+  const sinTelefonoNiNombre = allLeadsEver.filter((l) => !l.phone && !l.name).length;
+
   const stat = (n: number | string, label: string) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
   const datePill = (k: DateFilterKey) => `<a href="/crm/informes?d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const pct = (n: number | null) => (n === null ? "sin datos" : `${n.toFixed(0)}%`);
@@ -2333,7 +2479,13 @@ ${stat(tareasVencidas, "tareas vencidas")}
 </div>
 ${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos de venta perdida</h3>${[...motivosPerdida.entries()].map(([m, n]) => `<p>${esc(m)}: <b>${n}</b></p>`).join("")}</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Leads por canal de primera captación</h3>${[...porOrigen.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>
-${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${[...ventasPorCanalConversion.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>` : ""}`;
+${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${[...ventasPorCanalConversion.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>` : ""}
+<div class="box"><h3 style="margin-top:0">Calidad de datos y duplicados (histórico completo, no solo el periodo)</h3>
+<p>Grupos de teléfono duplicado: <b>${realDupGroups.length}</b> (${dupRowCount} fichas en total) · Sin teléfono ni nombre: <b>${sinTelefonoNiNombre}</b></p>
+${realDupGroups.length > 0
+  ? realDupGroups.map((g) => `<p class="sub">${g.map((l) => `<a class="link" href="/crm/clientes/${esc(l.id)}">${esc(leadDisplayName(l))}</a>`).join(" ↔ ")}</p>`).join("")
+  : `<p class="sub">No hay duplicados de teléfono ahora mismo.</p>`}
+</div>`;
   res.type("html").send(page("Informes", me(res), body, msgOf(req)));
 });
 
