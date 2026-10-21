@@ -91,6 +91,25 @@ function contactLine(phone: string | null | undefined, name: string): string {
   return name === "sin nombre" ? phone : `${name} (${phone})`;
 }
 
+// Aviso al equipo 30 min antes de cada visita (21/10/2026, petición real:
+// "a Ramón y a José que sea un poco más seguido, 30 min antes de las horas
+// de las visitas reales") -- distinto del recordatorio al cliente
+// (scheduler.ts, 24h/6h/1h): este es solo para que Ramón/José sepan que
+// alguien llega en breve, aunque la visita nunca se haya confirmado.
+export async function notifyVisitUpcoming(args: {
+  lead_phone: string | null | undefined;
+  vehicle_id: string | null | undefined;
+  requested_time: string | null | undefined;
+}): Promise<void> {
+  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
+  const vehicle = vehicleLabel(args.vehicle_id);
+  await notifyTeam(
+    "visita_proxima",
+    `⏰ En 30 min: visita de ${contact} -- ${vehicle} -- hoy a las ${args.requested_time ?? "?"}`,
+    args.lead_phone ?? null,
+  );
+}
+
 export async function notifyVisitScheduled(args: {
   lead_phone: string | null;
   vehicle_id: string | null | undefined;

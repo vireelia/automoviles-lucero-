@@ -6,7 +6,7 @@ import { isGoogleConnected, sendGmail } from "../integrations/google.js";
 // Avisos urgentes para Ramón y José. Cada aviso queda en el CRM (bloque de Hoy)
 // hasta que alguien lo marca como atendido, y además sale por correo desde la
 // cuenta del negocio si Google está conectado.
-export type AlertKind = "lead_caliente" | "handoff_urgente" | "reserva_pendiente" | "gestion_portal" | "visita_agendada" | "visita_cancelada";
+export type AlertKind = "lead_caliente" | "handoff_urgente" | "reserva_pendiente" | "gestion_portal" | "visita_agendada" | "visita_cancelada" | "visita_proxima";
 export type Alert = {
   id: string;
   kind: AlertKind;

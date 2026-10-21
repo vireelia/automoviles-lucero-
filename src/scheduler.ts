@@ -3,6 +3,7 @@ import { sendWhatsapp } from "./tools/delivery.js";
 import { createFollowup } from "./tools/leads.js";
 import { businessInfo } from "./data/business-info.js";
 import { deliverEmail } from "./email/agent.js";
+import { notifyVisitUpcoming } from "./tools/team-notify.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -24,6 +25,7 @@ type Appointment = {
   reminder_24h_sent?: boolean;
   reminder_6h_sent?: boolean;
   reminder_1h_sent?: boolean;
+  team_reminder_30m_sent?: boolean;
 };
 
 function parseAppointmentDateTime(a: Appointment): Date | null {
@@ -94,6 +96,35 @@ function checkAppointmentReminders() {
   if (changed) writeCollection("appointments", appointments);
 }
 
+// Aviso al equipo 30 min antes de cada visita (21/10/2026, petición real:
+// "a Ramón y a José que sea un poco más seguido, 30 min antes de las horas
+// de las visitas reales") -- independiente de los recordatorios al cliente
+// de arriba: aunque la visita siga sin confirmar, Ramón/José tienen que
+// saber que alguien llega en breve. Una sola vez por cita, con su propio
+// flag (team_reminder_30m_sent), nunca mezclado con reminder_1h_sent del
+// cliente.
+function checkTeamUpcomingVisits() {
+  const appointments = readCollection<Appointment>("appointments", []);
+  const now = Date.now();
+  let changed = false;
+
+  for (const appt of appointments) {
+    if (appt.status === "cancelled" || appt.team_reminder_30m_sent) continue;
+    const when = parseAppointmentDateTime(appt);
+    if (!when) continue;
+    const msUntil = when.getTime() - now;
+    if (msUntil <= 0) continue;
+
+    if (withinWindow(msUntil, 0.5)) {
+      void notifyVisitUpcoming({ lead_phone: appt.lead_phone ?? null, vehicle_id: appt.vehicle_id, requested_time: appt.requested_time });
+      appt.team_reminder_30m_sent = true;
+      changed = true;
+      console.log(`[scheduler] aviso de 30 min al equipo encolado para ${appt.id}`);
+    }
+  }
+  if (changed) writeCollection("appointments", appointments);
+}
+
 type Lead = {
   id: string;
   phone: string | null;
@@ -136,6 +167,7 @@ export function startScheduler() {
   setInterval(() => {
     try {
       checkAppointmentReminders();
+      checkTeamUpcomingVisits();
       checkStaleFollowups();
     } catch (err) {
       console.error("[scheduler] error:", err);
