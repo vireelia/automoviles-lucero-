@@ -574,6 +574,17 @@ function confirmButton(label: string, action: string, extra: string, question: s
 function button(label: string, action: string, extra = "") {
   return `<button class="btn ${extra}" name="accion" value="${esc(action)}">${esc(label)}</button>`;
 }
+// Tarjeta grande de filtro (21/10/2026, "misma organizacion que
+// influencers en klikar" -- grupos principales como tarjetas con icono +
+// contador, no pestañas de texto). `icon` es un emoji, nunca un icon-font
+// (coherente con el resto del CRM, que ya usa emoji sueltos como 🔴/✅).
+function toggleCard(href: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string, count: number, active: boolean): string {
+  return `<a href="${esc(href)}" class="toggle-card${active ? " active" : ""}">
+<span class="ticon" style="background:${iconBg};color:${iconColor}">${icon}</span>
+<span class="tbody"><b>${esc(label)}</b><span class="sub" style="margin:0">${esc(sub)}</span></span>
+<span class="tcount">${count}</span>
+</a>`;
+}
 
 // ---------- pantalla ----------
 // Reorganizado (20/10/2026, mejora integral del CRM, sección 4): agrupado
@@ -689,6 +700,21 @@ label{font-size:20px;font-weight:700}
 .stat{background:#fff;border-radius:16px;padding:16px;text-decoration:none;color:inherit;border-left:10px solid #1d2b44;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .stat b{display:block;font-size:44px;line-height:1}
 .stat span{font-size:20px}
+/* Tarjetas grandes de filtro (21/10/2026, a petición real: "usa la misma
+   organizacion que utilizamos para influencers en klikar" -- ahí los
+   grupos principales son tarjetas grandes clicables con icono y
+   contador, no pestañas de texto pequeñas). Mismo patrón aquí, en vez de
+   reimplementar el componente de Klikar (React) en un backend 100%
+   servidor sin framework -- misma idea visual, con las herramientas que
+   ya existen en este CRM. */
+.toggle-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px}
+.toggle-card{display:flex;align-items:center;gap:12px;background:#fff;border-radius:16px;padding:16px 18px;text-decoration:none;color:inherit;box-shadow:0 1px 3px rgba(0,0,0,.08);border:3px solid transparent}
+.toggle-card:hover{border-color:#c3c9d4}
+.toggle-card.active{border-color:#1d2b44;background:#eef1f6}
+.toggle-card .ticon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.toggle-card .tbody{flex:1;min-width:0}
+.toggle-card .tbody b{display:block;font-size:18px;line-height:1.25}
+.toggle-card .tcount{font-size:32px;font-weight:800;line-height:1}
 .t-hot{background:#dc2626;color:#fff;font-weight:700}
 .t-warm{background:#f97316;color:#fff;font-weight:700}
 .t-cold{background:#2563eb;color:#fff;font-weight:700}
@@ -1663,12 +1689,18 @@ crm.get("/incidencias", (req, res) => {
   // Tareas vencidas (20/10/2026, sección 19) -- solo un aviso con enlace a
   // Seguimiento, sin duplicar aquí la lista completa de tareas.
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
-  const tab = (key: string, label: string, n: number) =>
-    `<a href="/crm/incidencias?v=${key}" class="tag" style="text-decoration:none;${v === key ? "background:#1d2b44;color:#fff" : ""}">${label} (${n})</a>`;
+  // Tarjetas grandes en vez de pestañas de texto (21/10/2026, "misma
+  // organizacion que influencers en klikar" -- ahí Internos/Externos son
+  // 2 tarjetas grandes con icono y contador, no texto pequeño).
+  const vCard = (key: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string, n: number) =>
+    toggleCard(`/crm/incidencias?v=${key}`, icon, iconBg, iconColor, label, sub, n, v === key);
   const body = `<h1>Incidencias</h1>
 <p class="sub">Lo que Miguel, Carolina o Daniel no pueden resolver solos y no es una reserva (eso vive en Reservas). Cuando lo hayas atendido, pulsa el botón.</p>
 ${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">⏰ ${overdueTasks.length} tarea(s) de seguimiento vencida(s) -- <a class="link" href="/crm/seguimiento?f=vencidas">verlas</a></div>` : ""}
-<p>${tab("por_atender", "🔴 Por atender", pendientes.length)} ${tab("atendidos", "✅ Ya atendidas", atendidos.length)}</p>
+<div class="toggle-cards">
+${vCard("por_atender", "🔴", "#fee2e2", "#dc2626", "Por atender", "Necesitan una persona", pendientes.length)}
+${vCard("atendidos", "✅", "#dcfce7", "#16a34a", "Ya atendidas", "Resueltas, para auditoría", atendidos.length)}
+</div>
 <h2>${v === "atendidos" ? "Incidencias ya atendidas" : "Incidencias por atender"} (${handoffs.length})</h2>
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Se pueden recuperar luego desde la Papelera.") : ""}
 ${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay incidencias pendientes."}</div>` : handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}`;
@@ -2078,15 +2110,28 @@ crm.get("/entrada", (req, res) => {
     const priority = leadPriority(l, phase, hasOpenUrgentHandoff);
     return { lead: l, phase, quality, priority, duplicate: findPossibleDuplicate(l, all) };
   });
-  const filtered = rows
+  // Tarjetas grandes para la prioridad (21/10/2026, "misma organizacion
+  // que influencers en klikar"): los contadores reflejan el filtro de
+  // calidad activo (igual que en Klikar el país filtra antes de contar
+  // Internos/Externos), pero no el de prioridad -- así cada tarjeta
+  // muestra cuánto hay en SU grupo, no el resultado ya filtrado.
+  const calFiltered = rows.filter((r) => cal === "todas" || r.quality === cal);
+  const countByPrio = (k: string) => calFiltered.filter((r) => r.priority === k).length;
+  const filtered = calFiltered
     .filter((r) => p === "todas" || r.priority === p)
-    .filter((r) => cal === "todas" || r.quality === cal)
     .sort((a, b) => a.priority.localeCompare(b.priority) || (b.lead.updated_at ?? b.lead.created_at).localeCompare(a.lead.updated_at ?? a.lead.created_at));
-  const prioPill = (k: string, label: string) => `<a href="/crm/entrada?p=${k}&cal=${cal}" class="tag" style="text-decoration:none;${p === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const prioCard = (k: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string) =>
+    toggleCard(`/crm/entrada?p=${k}&cal=${cal}`, icon, iconBg, iconColor, label, sub, k === "todas" ? calFiltered.length : countByPrio(k), p === k);
   const calPill = (k: string, label: string) => `<a href="/crm/entrada?p=${p}&cal=${k}" class="tag" style="text-decoration:none;${cal === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Entrada de leads</h1>
 <p class="sub">Qué atiende ahora mismo, en orden de prioridad. Para el historial completo o buscar a alguien concreto, usa Clientes.</p>
-<div class="legend">${prioPill("todas", "Todas")} ${prioPill("P1", "P1 Urgente")} ${prioPill("P2", "P2 Alta")} ${prioPill("P3", "P3 Normal")} ${prioPill("P4", "P4 Diferida")}</div>
+<div class="toggle-cards">
+${prioCard("todas", "📋", "#e8ebf1", "#1d2b44", "Todas", "Toda la bandeja")}
+${prioCard("P1", "🔴", "#fee2e2", "#dc2626", "P1 -- Urgente", "Atender ya")}
+${prioCard("P2", "🟠", "#ffedd5", "#ea580c", "P2 -- Alta", "Pronto")}
+${prioCard("P3", "🟡", "#fef9c3", "#a16207", "P3 -- Normal", "Sin prisa")}
+${prioCard("P4", "⚪", "#f3f4f6", "#4b5563", "P4 -- Diferida", "Más adelante")}
+</div>
 <div class="legend">${calPill("todas", "Toda calidad")} ${calPill("completo", "Completo")} ${calPill("incompleto", "Incompleto")} ${calPill("dudoso", "Dudoso")} ${calPill("posible_duplicado", "Posible duplicado")} ${calPill("no_comercial", "No comercial")}</div>
 ${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate)).join("")}`;
   res.type("html").send(page("Entrada de leads", me(res), body, msgOf(req)));
@@ -2108,7 +2153,13 @@ crm.get("/clientes", (req, res) => {
     .filter((l) => (t === "archivados" ? l.archived : !l.archived && !l.marketing_list && (t === "todos" || l.temperature === t)))
     .filter((l) => matchesDateFilter(dateFilter, l.created_at, today))
     .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
-  const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}&d=${dateFilter}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
+  // Tarjetas grandes en vez de pestañas de texto (21/10/2026, "misma
+  // organizacion que influencers en klikar"): mismo filtro de siempre
+  // (?t=), solo con icono + contador real por grupo.
+  const activeLeadsForCount = all.filter((l) => !l.archived && !l.marketing_list);
+  const countByTemp = (temp: string) => activeLeadsForCount.filter((l) => l.temperature === temp).length;
+  const tempCard = (k: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string, count: number) =>
+    toggleCard(`/crm/clientes?t=${k}&d=${dateFilter}`, icon, iconBg, iconColor, label, sub, count, t === k);
   const datePill = (k: DateFilterKey) => `<a href="/crm/clientes?t=${t}&d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const isAdmin = me(res).role === "admin";
   const bulk = isAdmin && leads.length > 0
@@ -2129,7 +2180,13 @@ ${t === "archivados"
 <div><label>Teléfono</label><input name="telefono" required></div></div>
 <label>Coche de interés</label><input name="vehicle_interest">
 <button class="btn ok" type="submit">Añadir cliente</button></form></div>
-<div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")} ${pill("archivados", `Archivados (${archivedCount})`)}</div>
+<div class="toggle-cards">
+${tempCard("todos", "👥", "#e8ebf1", "#1d2b44", "Todos", "Clientes activos", activeLeadsForCount.length)}
+${tempCard("HOT", "🔥", "#fee2e2", "#dc2626", "Caliente", "Intención de compra clara", countByTemp("HOT"))}
+${tempCard("WARM", "🙂", "#ffedd5", "#ea580c", "Tibio", "Interés real, sin prisa", countByTemp("WARM"))}
+${tempCard("COLD", "❄️", "#e0f2fe", "#0369a1", "Frío", "Consulta exploratoria", countByTemp("COLD"))}
+${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin contacto hace tiempo", archivedCount)}
+</div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
 ${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}`;
