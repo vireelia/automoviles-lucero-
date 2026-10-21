@@ -324,3 +324,40 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
 
   return { outcome, reply: body, error };
 }
+
+// FALLO REAL detectado (21/10/2026, "los chicos de Automóviles Lucero no se
+// van a poner a enviarles las cosas manuales, créeme"): cuando se alcanza el
+// tope diario de correos automáticos, la respuesta ya queda redactada por
+// completo -- pero se queda esperando a que alguien entre a Pendientes y
+// pulse "Enviar" a mano, uno por uno. En la práctica nadie lo hace, y el
+// backlog solo crece (146 correos reales a fecha de hoy).
+//
+// Esta función recorre ese backlog y los envía ella sola en cuanto hay hueco
+// real bajo el tope diario de seguridad (sentTodayCount() sigue mandando --
+// nunca se salta el límite que protege la cuenta de Gmail de un bloqueo por
+// Google). Se llama desde el scheduler (cada 5 min), así que el backlog se
+// vacía solo, un poco cada día, sin que nadie tenga que entrar a hacer clic.
+export async function sendPendingDailyCapEmails(): Promise<number> {
+  if (!isEmailAutoSendEnabled()) return 0; // mismo interruptor de pruebas que el resto del envío automático.
+  const inbox = readCollection<InboxItem>("email_inbox");
+  const pending = inbox
+    .filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  let sentCount = 0;
+  for (const m of pending) {
+    if (sentTodayCount() >= DAILY_SEND_CAP) break;
+    const delivery = await deliverEmail(
+      m.from,
+      replySubject(m.subject),
+      m.draft_note!,
+      m.thread_id && m.in_reply_to ? { threadId: m.thread_id, inReplyTo: m.in_reply_to } : undefined,
+    );
+    if (delivery.status !== "sent") break; // Google desconectado u otro fallo real -- no tiene sentido seguir intentando esta pasada.
+    m.outcome = "sent";
+    m.answered = true;
+    m.answered_by = "ia";
+    sentCount++;
+  }
+  if (sentCount > 0) writeCollection("email_inbox", inbox);
+  return sentCount;
+}

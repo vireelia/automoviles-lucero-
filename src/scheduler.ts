@@ -2,7 +2,7 @@ import { readCollection, writeCollection } from "./store.js";
 import { sendWhatsapp } from "./tools/delivery.js";
 import { createFollowup } from "./tools/leads.js";
 import { businessInfo } from "./data/business-info.js";
-import { deliverEmail } from "./email/agent.js";
+import { deliverEmail, sendPendingDailyCapEmails } from "./email/agent.js";
 import { notifyVisitUpcoming } from "./tools/team-notify.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
@@ -165,13 +165,23 @@ function checkStaleFollowups() {
 
 export function startScheduler() {
   setInterval(() => {
-    try {
-      checkAppointmentReminders();
-      checkTeamUpcomingVisits();
-      checkStaleFollowups();
-    } catch (err) {
-      console.error("[scheduler] error:", err);
-    }
+    (async () => {
+      try {
+        checkAppointmentReminders();
+        checkTeamUpcomingVisits();
+        checkStaleFollowups();
+        // FALLO REAL detectado (21/10/2026, "los chicos de Automóviles
+        // Lucero no se van a poner a enviarles las cosas manuales"): el
+        // backlog de correos que chocaron con el tope diario se vaciaba
+        // solo si alguien entraba a Pendientes a pulsar "Enviar" a mano --
+        // en la práctica nadie lo hacía. Esto lo vacía solo, respetando
+        // siempre el mismo tope diario de seguridad (nunca manda de más).
+        const sent = await sendPendingDailyCapEmails();
+        if (sent > 0) console.log(`[scheduler] ${sent} correo(s) del backlog de tope diario enviados solos`);
+      } catch (err) {
+        console.error("[scheduler] error:", err);
+      }
+    })();
   }, CHECK_INTERVAL_MS);
   console.log(`[scheduler] activo, revisa cada ${CHECK_INTERVAL_MS / 60000} minutos`);
 }
