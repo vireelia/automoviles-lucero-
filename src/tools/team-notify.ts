@@ -95,17 +95,20 @@ function contactLine(phone: string | null | undefined, name: string): string {
 // "a Ramón y a José que sea un poco más seguido, 30 min antes de las horas
 // de las visitas reales") -- distinto del recordatorio al cliente
 // (scheduler.ts, 24h/6h/1h): este es solo para que Ramón/José sepan que
-// alguien llega en breve, aunque la visita nunca se haya confirmado.
+// alguien llega en breve, aunque la visita nunca se haya confirmado. Texto
+// natural a petición real: "recuerda que a las 11:30 tienes una reserva
+// con maria" / "recuerda que a las 16:30 tienes una reserva con lucia" --
+// si no hay nombre real, usa el teléfono (nunca "sin nombre" en el mensaje).
 export async function notifyVisitUpcoming(args: {
   lead_phone: string | null | undefined;
   vehicle_id: string | null | undefined;
   requested_time: string | null | undefined;
 }): Promise<void> {
-  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
-  const vehicle = vehicleLabel(args.vehicle_id);
+  const name = leadName(args.lead_phone);
+  const contact = name === "sin nombre" ? args.lead_phone ?? "un cliente" : name;
   await notifyTeam(
     "visita_proxima",
-    `⏰ En 30 min: visita de ${contact} -- ${vehicle} -- hoy a las ${args.requested_time ?? "?"}`,
+    `Recuerda que a las ${args.requested_time ?? "?"} tienes una visita con ${contact}.`,
     args.lead_phone ?? null,
   );
 }
