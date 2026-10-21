@@ -225,6 +225,34 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 
+// Migración puntual (21/10/2026, auditoría real de "estamos perdiendo
+// reservas/visitas"): varios registros antiguos de appointments/handoffs
+// quedaron con lead_phone sin normalizar ("632241696" en vez de
+// "+34632241696", de antes de que markCallerPhone normalizara). Esto no
+// crea datos nuevos ni borra nada -- solo reescribe el mismo teléfono en
+// el formato consistente que ya usan leads/reservations, para que las
+// búsquedas por teléfono (nombre del cliente, avisos al equipo, fichas)
+// dejen de fallar en silencio para estos registros concretos.
+app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
+  const report: Record<string, number> = {};
+  for (const name of ["appointments", "handoffs"] as const) {
+    const rows = readCollection<{ lead_phone?: string | null }>(name);
+    let changed = 0;
+    for (const row of rows) {
+      if (row.lead_phone && typeof row.lead_phone === "string") {
+        const normalized = normalizePhone(row.lead_phone);
+        if (normalized !== row.lead_phone) {
+          row.lead_phone = normalized;
+          changed++;
+        }
+      }
+    }
+    if (changed > 0) writeCollection(name, rows);
+    report[name] = changed;
+  }
+  res.json({ status: "ok", changed: report });
+});
+
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
 // (Ramón/José), nunca de un cliente -- a diferencia del resto de
 // conversaciones, que el propio webhook /webhooks/zernio-whatsapp aprende
