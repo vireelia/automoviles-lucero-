@@ -1,9 +1,9 @@
 import { appendToCollection, readCollection } from "../store.js";
 import { envelope } from "../response.js";
-import { raiseAlert } from "../alerts/alerts.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending } from "./reservations.js";
 import { createAutoTask } from "./tasks.js";
+import { notifyHandoffRequested } from "./team-notify.js";
 
 function now() {
   return new Date().toISOString();
@@ -132,26 +132,27 @@ export async function createHandoff(args: {
     created_at: now(),
   };
   appendToCollection("handoffs", handoff);
-  // Una derivación urgente (reserva de 500 € o compra inmediata) avisa a Ramón y José.
-  if (args.urgency === "alta") {
-    raiseAlert({
-      kind: args.reason_type === "reserva" ? "reserva_pendiente" : "handoff_urgente",
-      lead_phone: args.lead_phone ?? null,
-      name: lead?.name ?? null,
-      reason: args.reason ?? "Atención urgente",
-    });
-    // Seguimiento comercial (20/10/2026, sección 14): un handoff urgente
-    // crea su propia tarea de revisión -- deduplicada por el id real del
-    // handoff, nunca se repite si este mismo se reprocesa.
-    createAutoTask({
-      lead_phone: args.lead_phone ?? null,
-      type: "revisar_handoff",
-      reason: args.reason ?? "Atención urgente",
-      source_ref: handoff.id,
-      channel: args.channel ?? null,
-      priority: "alta",
-    });
-  }
+  // FALLO REAL detectado (21/10/2026, caso real de Lucía -- su queja de que
+  // no había nadie para ver el Tiguan se creó con urgencia "normal" y nunca
+  // avisó a nadie, ni por WhatsApp ni por correo, hasta que se revisó a
+  // mano un día después): toda solicitud de atención avisa SIEMPRE a Ramón
+  // y José -- la urgencia ya no decide si se avisa, solo la prioridad de la
+  // tarea de seguimiento.
+  await notifyHandoffRequested({
+    kind: args.reason_type === "reserva" ? "reserva_pendiente" : "handoff_urgente",
+    lead_phone: args.lead_phone ?? null,
+    reason: args.reason ?? (args.urgency === "alta" ? "Atención urgente" : "Solicitud de atención"),
+  });
+  // Seguimiento comercial (20/10/2026, sección 14): deduplicada por el id
+  // real del handoff, nunca se repite si este mismo se reprocesa.
+  createAutoTask({
+    lead_phone: args.lead_phone ?? null,
+    type: "revisar_handoff",
+    reason: args.reason ?? "Atención urgente",
+    source_ref: handoff.id,
+    channel: args.channel ?? null,
+    priority: args.urgency === "alta" ? "alta" : "normal",
+  });
   if (args.reason_type === "reserva" && args.lead_phone) {
     await tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest, args.channel);
   }

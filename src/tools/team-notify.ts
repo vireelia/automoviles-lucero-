@@ -145,6 +145,19 @@ export async function notifyVisitCancelled(args: {
   );
 }
 
+// FALLO REAL detectado (21/10/2026, caso real de Lucía): create_handoff solo
+// avisaba al equipo (WhatsApp + correo) cuando la urgencia era "alta" -- una
+// urgencia "normal" se quedaba solo en el CRM, sin avisar a nadie. Su queja
+// real de que no había nadie para ver el Tiguan ("incidencia visita",
+// urgencia normal) estuvo un día entero sin que Ramón/José se enteraran,
+// hasta que se revisó a mano. Ahora toda solicitud de atención avisa al
+// equipo por los mismos dos canales que una visita o reserva -- la urgencia
+// solo decide la prioridad de la tarea de seguimiento, nunca si se avisa o no.
+export async function notifyHandoffRequested(args: { kind: AlertKind; lead_phone: string | null | undefined; reason: string }): Promise<void> {
+  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
+  await notifyTeam(args.kind, `🔔 ${contact} -- ${args.reason}`, args.lead_phone ?? null);
+}
+
 export async function notifyReservation(args: { lead_phone: string | null | undefined; vehicle_id: string; amount_eur: number }): Promise<void> {
   const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
   const vehicle = vehicleLabel(args.vehicle_id);
