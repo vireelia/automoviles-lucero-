@@ -26,6 +26,19 @@ export type Alert = {
 };
 
 // Evita repetir el mismo aviso para el mismo cliente mientras siga pendiente.
+// FALLO GRAVÍSIMO detectado (21/10/2026, caso real de Ignacio): pidió visita
+// para el 20/10 a las 11:30 (alerta real creada y enviada), y poco después
+// (misma mañana, dentro de esta misma ventana de 6h) la REPROGRAMÓ al 21/10
+// a las 09:30 -- create_appointment volvió a llamar a raiseAlert con el
+// motivo nuevo, pero como ya había una alerta "pendiente" del mismo tipo
+// para el mismo teléfono dentro de las 6h, se descartó en silencio sin
+// crear la nueva. Resultado real: Ramón/José solo llegaron a saber de la
+// hora VIEJA (que ya no aplicaba) y nunca de la hora real -- el cliente se
+// presentó esta mañana ("Estoy aquí") sin que quedara ningún aviso nuevo en
+// el CRM para esa cita. El dedup solo tiene sentido para evitar RUIDO
+// (reintentos exactos del mismo aviso) -- nunca para tragarse información
+// nueva real (otra fecha/hora). Por eso ahora exige también que el motivo
+// sea literalmente el mismo texto, no solo el mismo tipo+teléfono.
 const DEDUP_HOURS = 6;
 
 // Destinatarios: los usuarios del CRM con rol de comercial o equipo (no el administrador),
@@ -98,6 +111,7 @@ export function raiseAlert(input: {
       a.status === "pendiente" &&
       a.kind === input.kind &&
       a.lead_phone === (input.lead_phone ?? null) &&
+      a.reason === input.reason &&
       new Date(a.created_at).getTime() > since,
   );
   if (repeated) return null;

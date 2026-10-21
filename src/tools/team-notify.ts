@@ -12,7 +12,8 @@
 // el CRM). Si WhatsApp falla, el aviso igualmente queda registrado por
 // correo -- nunca se pierde en silencio solo porque la ventana de WhatsApp
 // no estuviera abierta.
-import { readCollection } from "../store.js";
+import crypto from "crypto";
+import { readCollection, appendToCollection } from "../store.js";
 import { businessInfo } from "../data/business-info.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
@@ -35,16 +36,46 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
   return v ? `${v.make} ${v.model} ${v.version}` : vehicleId;
 }
 
+// FALLO REAL detectado (21/10/2026, "tenemos que notificar aparte del CRM, a
+// Ramón y a José, siempre siempre"): hasta ahora, si el WhatsApp a Ramón o
+// José fallaba, solo quedaba un console.warn -- invisible, nadie en el
+// equipo podía comprobar después si de verdad les llegó o no. Ahora cada
+// intento (a cada uno de los dos, por separado) queda registrado en
+// "team_notifications", igual que whatsapp_queue para clientes -- consultable
+// vía /debug/team_notifications.
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, reason: whatsappText });
   for (const member of TEAM) {
     try {
       const result = await sendWhatsappText(member.phone, whatsappText);
+      appendToCollection("team_notifications", {
+        id: crypto.randomUUID(),
+        kind,
+        to_name: member.name,
+        to_phone: member.phone,
+        lead_phone: leadPhone,
+        message: whatsappText,
+        delivery_status: result.ok ? "sent" : "failed",
+        error: result.ok ? null : result.error,
+        created_at: new Date().toISOString(),
+      });
       if (!result.ok) {
         console.warn(`[team-notify] no se pudo avisar a ${member.name} por WhatsApp (${result.error}) -- queda el aviso por correo/CRM.`);
       }
     } catch (err) {
-      console.warn(`[team-notify] fallo enviando WhatsApp a ${member.name}:`, err instanceof Error ? err.message : err);
+      const error = err instanceof Error ? err.message : String(err);
+      appendToCollection("team_notifications", {
+        id: crypto.randomUUID(),
+        kind,
+        to_name: member.name,
+        to_phone: member.phone,
+        lead_phone: leadPhone,
+        message: whatsappText,
+        delivery_status: "failed",
+        error,
+        created_at: new Date().toISOString(),
+      });
+      console.warn(`[team-notify] fallo enviando WhatsApp a ${member.name}:`, error);
     }
   }
 }

@@ -404,6 +404,10 @@ app.get("/debug/zernio_whatsapp_conversations", requireAdminToken, (_req, res) =
   res.json(readCollection<unknown>("zernio_whatsapp_conversations").slice(-200));
 });
 
+app.get("/debug/team_notifications", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("team_notifications").slice(-200));
+});
+
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
 // o cualquier web que conecte el negocio. Solo con el token de admin.
 app.post("/chat/message", requireAdminToken, async (req, res) => {
