@@ -1033,13 +1033,17 @@ ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 </div></div>`;
 }
 
-function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null): string {
+function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, volver?: string): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
   const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
+  // A petición real (21/10/2026, "cada vez que borre un lead que no me
+  // cambie de sección"): se lleva la lista filtrada actual (t/d, o la
+  // búsqueda) para volver exactamente ahí, no a la lista sin filtrar.
+  const volverField = volver ? `<input type="hidden" name="volver" value="${esc(volver)}">` : "";
   const del = user.role === "admin"
-    ? `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
+    ? `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
     : "";
-  const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline"><button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
+  const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}<button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
   const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk" style="position:absolute;top:18px;right:20px">` : "";
   // Origen (primera captación) y canal (último contacto) son dos conceptos
   // distintos que ya se guardan por separado (20/10/2026, sección 7) --
@@ -1176,7 +1180,7 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads))).join("")}
+${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -2128,7 +2132,7 @@ ${t === "archivados"
 <div class="legend">${pill("todos", "Todos")} ${pill("HOT", "Caliente", "t-hot")} ${pill("WARM", "Tibio", "t-warm")} ${pill("COLD", "Frío", "t-cold")} ${pill("archivados", `Archivados (${archivedCount})`)}</div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all))).join("")}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
@@ -2223,11 +2227,18 @@ crm.post("/clientes/:id", (req, res) => {
   const lead = leads.find((l) => l.id === req.params.id);
   if (!lead) return back(res, "/crm/clientes", "No encuentro ese cliente");
   const accion = String(req.body.accion ?? "guardar");
+  // A petición real (21/10/2026, "cada vez que borre un lead que no me
+  // cambie de sección"): al borrar/archivar desde una lista filtrada
+  // (Clientes con ?t=/?d=, Buscar con ?q=), antes siempre volvía a la
+  // lista sin filtrar o a la ficha -- un salto brusco. Mismo "volver" ya
+  // usado por Embudo/Entrada, ampliado a cualquier ruta propia del CRM
+  // (nunca externa, por seguridad) en vez de una lista cerrada de dos.
+  const safeVolver = typeof req.body.volver === "string" && req.body.volver.startsWith("/crm/") && !req.body.volver.startsWith("//") ? req.body.volver : null;
   if (accion === "eliminar") {
-    if (me(res).role !== "admin") return back(res, `/crm/clientes/${lead.id}`, "Solo el administrador puede eliminar clientes");
+    if (me(res).role !== "admin") return back(res, safeVolver ?? `/crm/clientes/${lead.id}`, "Solo el administrador puede eliminar clientes");
     moveToTrash("leads", lead, `Cliente: ${lead.name || lead.phone || "sin nombre"}`, me(res).email);
     save("leads", leads.filter((x) => x.id !== lead.id));
-    return back(res, "/crm/clientes", "Cliente movido a la papelera");
+    return back(res, safeVolver ?? "/crm/clientes", "Cliente movido a la papelera");
   }
   if (accion === "no_contactar") lead.do_not_contact = true;
   else if (accion === "reactivar") lead.do_not_contact = false;
@@ -2278,11 +2289,7 @@ crm.post("/clientes/:id", (req, res) => {
     reabrir: "Oportunidad reabierta",
     actualizar_embudo: "Responsable/próxima acción actualizados",
   };
-  const volver =
-    typeof req.body.volver === "string" && (req.body.volver === "/crm/embudo" || req.body.volver === "/crm/entrada")
-      ? req.body.volver
-      : `/crm/clientes/${lead.id}`;
-  back(res, volver, ACCION_MSG[accion] ?? "Listo");
+  back(res, safeVolver ?? `/crm/clientes/${lead.id}`, ACCION_MSG[accion] ?? "Listo");
 });
 
 // Eliminar varios clientes a la vez (a petición real, 18/10/2026: "la
