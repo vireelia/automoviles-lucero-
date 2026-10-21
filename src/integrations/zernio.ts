@@ -8,7 +8,7 @@
 //
 // Mismo patrón honesto que el resto de integraciones: sin credenciales no
 // se intenta nada, y un error de la API nunca se traduce en "enviado".
-import { Zernio, type SocialAccount } from "@zernio/node";
+import { Zernio, ZernioApiError, type SocialAccount } from "@zernio/node";
 import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
 
@@ -218,35 +218,46 @@ export type ZernioWhatsappSendResult = { ok: true; messageId: string } | { ok: f
 // conocida, Zernio exige una plantilla aprobada -- eso no se intenta aquí
 // (ver nota en whatsapp.ts), igual que la API de Meta directa tampoco
 // permite texto libre a un contacto nuevo.
+// FALLO REAL detectado (21/10/2026, prueba real contra la API de Zernio):
+// una conversación recordada de hace más de 24h se trataba igual que una
+// abierta -- se intentaba sendInboxMessage sobre ella, Meta la rechazaba en
+// silencio (sin excepción, solo sin messageId) y nunca se probaba el camino
+// de Direct Send de verdad. Ahora solo se usa la conversación existente si
+// su último mensaje real es de menos de 24h; en cualquier otro caso (sin
+// conversación, caducada, o el intento sobre ella no da messageId) se cae a
+// Direct Send como último intento real antes de rendirse.
+const WHATSAPP_WINDOW_HOURS = 24;
+
 export async function sendZernioWhatsappText(phone: string, body: string): Promise<ZernioWhatsappSendResult> {
   const zernio = getClient();
   const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
   if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
 
   const existing = findWhatsappConversation(phone);
-  if (!existing) {
-    // Petición real (20/10/2026, auditoría de llamadas de voz: "el agente no
-    // debería ofrecer [WhatsApp] en voz... busquemos la manera de que el
-    // agente... le envíe cogiendo el número de la llamada"): en vez de
-    // rendirse aquí, se intenta iniciar la conversación de verdad con Meta
-    // Direct Send (categoría "utility", sin plantilla aprobada -- ver
-    // sendZernioWhatsappNewConversation). Si la cuenta no es elegible para
-    // Direct Send, Meta/Zernio lo rechaza con un error real (nunca se finge
-    // un envío) y aquí se devuelve tal cual.
-    return sendZernioWhatsappNewConversation(zernio, accountId, phone, body);
+  const withinWindow = Boolean(existing) && Date.now() - new Date(existing!.updated_at).getTime() < WHATSAPP_WINDOW_HOURS * 60 * 60 * 1000;
+
+  if (existing && withinWindow) {
+    try {
+      const { data } = await zernio.messages.sendInboxMessage({
+        path: { conversationId: existing.conversation_id },
+        body: { accountId, message: body },
+      });
+      const messageId = data.messageId ?? data.messageIds?.[0];
+      if (messageId) return { ok: true, messageId };
+    } catch {
+      // Sigue al intento de Direct Send en vez de rendirse aquí -- puede ser
+      // que la ventana ya se hubiera cerrado justo en el lado de Meta.
+    }
   }
 
-  try {
-    const { data } = await zernio.messages.sendInboxMessage({
-      path: { conversationId: existing.conversation_id },
-      body: { accountId, message: body },
-    });
-    const messageId = data.messageId ?? data.messageIds?.[0];
-    if (!messageId) return { ok: false, error: "zernio_sin_message_id" };
-    return { ok: true, messageId };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  // Petición real (20/10/2026, auditoría de llamadas de voz: "el agente no
+  // debería ofrecer [WhatsApp] en voz... busquemos la manera de que el
+  // agente... le envíe cogiendo el número de la llamada"): en vez de
+  // rendirse, se intenta iniciar la conversación de verdad con Meta Direct
+  // Send (categoría "utility", sin plantilla aprobada). Si la cuenta no es
+  // elegible, Meta/Zernio lo rechaza con un error real (nunca se finge un
+  // envío) y aquí se devuelve tal cual.
+  return sendZernioWhatsappNewConversation(zernio, accountId, phone, body);
 }
 
 // Inicia una conversación de WhatsApp nueva con un número que nunca escribió
@@ -274,6 +285,9 @@ async function sendZernioWhatsappNewConversation(zernio: Zernio, accountId: stri
     rememberWhatsappConversation(phone, conversationId, accountId);
     return { ok: true, messageId };
   } catch (err) {
+    if (err instanceof ZernioApiError) {
+      return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
