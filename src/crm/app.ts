@@ -13,6 +13,7 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled } from "../tools/team-notify.js";
 import { normalizePhone } from "../tools/leads.js";
+import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
@@ -479,6 +480,30 @@ function extractLeadingPortal(reason: string): { portal: string | null; rest: st
   if (!m) return { portal: null, rest: reason };
   return { portal: m[1] ?? null, rest: reason.slice(m[0].length) };
 }
+// FALLO REAL detectado (21/10/2026, "es un caos, el texto se sale de la
+// pantalla, buscame que inquietud tiene cada cliente"): Correos mostraba el
+// correo entero de Coches.net tal cual -- enlaces de tracking kilométricos,
+// pies de firma, el bloque JSON al final -- en vez de lo único que importa:
+// quién es, su coche y qué pregunta de verdad. parseCochesNetJsonBlock ya
+// aísla ese bloque real; esto arma un resumen legible con lo que encuentre,
+// y solo cae al texto crudo (ya envuelto por CSS) si no hay nada que extraer.
+function emailPreviewBox(text: string): string {
+  const parsed = parseCochesNetJsonBlock(text);
+  if (!parsed || (!parsed.name && !parsed.inquiry && !parsed.car)) {
+    return `<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(text)}</div>`;
+  }
+  const vehicle = parsed.car ? [parsed.car.make, parsed.car.model, parsed.car.version].filter(Boolean).join(" ") : null;
+  const lines = [
+    parsed.name ? `<b>${esc(parsed.name)}</b>` : null,
+    parsed.phone ? `Tel: ${esc(parsed.phone)}` : null,
+    parsed.email ? `Correo: ${esc(parsed.email)}` : null,
+    vehicle ? `Coche: ${esc(vehicle)}${parsed.car?.price ? ` (${esc(String(parsed.car.price))}€)` : ""}` : null,
+  ].filter(Boolean).join(" · ");
+  return `<div class="box" style="background:#f7f8fa;font-size:19px">
+${lines ? `<p style="margin:0 0 8px">${lines}</p>` : ""}
+${parsed.inquiry ? `<p style="margin:0"><b>Dice:</b> "${esc(parsed.inquiry)}"</p>` : ""}
+</div>`;
+}
 function normalizePhoneDigits(p: string | null | undefined): string {
   return (p ?? "").replace(/\D/g, "");
 }
@@ -586,7 +611,7 @@ input,select,textarea{font:inherit;font-size:20px;padding:12px 14px;border:2px s
 label{font-size:20px;font-weight:700}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:640px){.row{grid-template-columns:1fr}h1{font-size:28px}}
-.box{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.box{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-wrap:break-word;word-break:break-word}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
 .stat{background:#fff;border-radius:16px;padding:16px;text-decoration:none;color:inherit;border-left:10px solid #1d2b44;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .stat b{display:block;font-size:44px;line-height:1}
@@ -1518,7 +1543,7 @@ ${mails.length === 0 ? `<div class="empty">No hay correos por contestar.</div>` 
 ${m.outcome === "pendiente_gestion_portal" ? `<p><b>Hay que responder desde ${esc(m.portal ?? "el portal")}, no por correo</b> -- este correo es solo un aviso, al comprador no le llega una respuesta aquí.</p>` : ""}
 ${m.outcome === "tope_diario_alcanzado" ? `<p><b>Hoy ya se alcanzó el tope de correos automáticos</b> -- por seguridad (para que Gmail no bloquee la cuenta por enviar de más), esta respuesta no se mandó sola. Revísala y envíala tú.</p>` : ""}
 ${m.outcome === "pendiente_whatsapp_manual" ? `<p><b>Este cliente pidió que le escriban solo por WhatsApp</b> -- el envío automático falló (todavía no hay un número real conectado y verificado), hace falta escribirle a mano.${extractWaLink(m.draft_note) ? ` ${waButton(extractWaLink(m.draft_note)!.replace("https://wa.me/", ""), "")}` : ""}</p>` : ""}
-<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(m.text)}</div>
+${emailPreviewBox(m.text)}
 ${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alcanzado" ? "Respuesta ya redactada" : `Borrador para copiar en ${esc(m.portal ?? "el portal")}`}:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.draft_note)}</div>` : ""}
 <form method="post" action="/crm/correos/${esc(m.id)}">
 <label>Tu respuesta (si no escribes nada, no se envía nada)</label>
@@ -1727,7 +1752,7 @@ ${msgCheckbox("/crm/correos", m.id)}
 ${m.outcome === "pendiente_gestion_portal" ? `<p><b>Hay que responder desde ${esc(platformLabel(m.portal))}, no por correo</b> -- este correo es solo un aviso, al comprador no le llega una respuesta aquí.</p>` : ""}
 ${m.outcome === "tope_diario_alcanzado" ? `<p><b>Hoy ya se alcanzó el tope de correos automáticos</b> -- por seguridad (para que Gmail no bloquee la cuenta por enviar de más), esta respuesta no se mandó sola. Revísala y envíala tú.</p>` : ""}
 ${m.outcome === "pendiente_whatsapp_manual" ? `<p><b>Este cliente pidió que le escriban solo por WhatsApp</b> -- el envío automático falló (todavía no hay un número real conectado y verificado), hace falta escribirle a mano.${extractWaLink(m.draft_note) ? ` ${waButton(extractWaLink(m.draft_note)!.replace("https://wa.me/", ""), "")}` : ""}</p>` : ""}
-<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(m.text)}</div>
+${emailPreviewBox(m.text)}
 ${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alcanzado" ? "Respuesta ya redactada" : `Borrador para copiar en ${esc(platformLabel(m.portal))}`}:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.draft_note)}</div>` : ""}
 <form method="post" action="/crm/correos/${esc(m.id)}">
 ${!m.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
@@ -1773,7 +1798,7 @@ ${msgCheckbox("/crm/whatsapp", m.id)}
 <h3>${esc(m.phone)}</h3>
 <p class="meta"><span class="tag">WhatsApp directo</span> · ${esc(fmtDate(m.created_at))}</p>
 <p>${answeredTag(m)}${m.answered && m.delivered === false ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">No entregado (WhatsApp no conectado)</span>` : ""}${m.archived ? ` <span class="tag">Archivado</span>` : ""}</p>
-<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(m.text)}</div>
+${emailPreviewBox(m.text)}
 ${m.reply_text ? `<p style="margin-top:10px"><b>Respuesta de la IA:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.reply_text)}</div>` : ""}
 <form method="post" action="/crm/whatsapp/${esc(m.id)}">${phoneLink(m.phone)}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}

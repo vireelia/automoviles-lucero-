@@ -190,6 +190,46 @@ export function extractCochesNetClientIdentity(text: string): { name: string | n
   return { name, email };
 }
 
+// FALLO REAL detectado (21/10/2026, "es un caos, el texto se sale de la
+// pantalla"): Correos mostraba el correo de Coches.net tal cual, con todo el
+// boilerplate del portal (enlaces de tracking kilométricos, pies de firma,
+// y el bloque JSON entero al final) -- ilegible, y los enlaces largos sin
+// espacios rompían el ancho de la página. El bloque JSON final es el mismo
+// en todas las plantillas reales de Coches.net (Mis mensajes / Email de
+// coches.net / Nuevo contacto por WhatsApp) -- aislarlo y parsearlo de
+// verdad (en vez de regex sueltas por campo) da un resumen limpio: nombre,
+// teléfono, coche real y la pregunta real del cliente, sin el ruido.
+export type CochesNetParsed = {
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  inquiry: string | null;
+  car: { make: string | null; model: string | null; version: string | null; price: number | string | null } | null;
+};
+export function parseCochesNetJsonBlock(text: string): CochesNetParsed | null {
+  const start = text.indexOf('{"client"');
+  if (start === -1) return null;
+  // El bloque puede venir seguido de basura (saltos de línea, texto cortado
+  // por el proveedor de correo) -- se recorta al último "}" real en vez de
+  // asumir que llega limpio hasta el final del texto.
+  const end = text.lastIndexOf("}");
+  if (end === -1 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    const client = parsed?.client ?? {};
+    const car = parsed?.sales_lead?.car ?? null;
+    return {
+      name: typeof client.first_name === "string" && client.first_name.trim() ? client.first_name.trim() : null,
+      phone: typeof client.phone === "string" && client.phone.trim() ? client.phone.trim() : null,
+      email: typeof client.email === "string" && client.email.trim() ? client.email.trim() : null,
+      inquiry: typeof parsed?.sales_lead?.inquiry === "string" && parsed.sales_lead.inquiry.trim() ? parsed.sales_lead.inquiry.trim() : null,
+      car: car ? { make: car.make ?? null, model: car.model ?? null, version: car.version ?? null, price: car.price ?? null } : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type PortalInfo = { portal: string | null; mustManageOnPortal: boolean };
 
 export function detectPortal(input: { from: string; subject: string; text: string }): PortalInfo {
