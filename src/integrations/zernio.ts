@@ -238,11 +238,18 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
 
   if (existing && withinWindow) {
     try {
+      // FALLO REAL detectado (21/10/2026, prueba real contra la API):
+      // la respuesta real viene anidada un nivel más de lo que el código
+      // leía -- {success, data:{messageId,...}} -- así que esto llevaba
+      // SIEMPRE devolviendo "sin message id" (zernio_sin_message_id) tal
+      // cual, incluso cuando Meta entregó el mensaje de verdad: confirmado
+      // con un envío real a José, Meta devolvió un wamid real y el código
+      // lo seguía contando como fallo. Hay que leer data.data, no data.
       const { data } = await zernio.messages.sendInboxMessage({
         path: { conversationId: existing.conversation_id },
         body: { accountId, message: body },
       });
-      const messageId = data.messageId ?? data.messageIds?.[0];
+      const messageId = data.data?.messageId ?? data.data?.messageIds?.[0];
       if (messageId) return { ok: true, messageId };
     } catch {
       // Sigue al intento de Direct Send en vez de rendirse aquí -- puede ser
@@ -279,8 +286,8 @@ async function sendZernioWhatsappNewConversation(zernio: Zernio, accountId: stri
       const message = (error as { error?: string })?.error;
       return { ok: false, error: `zernio_direct_send_rechazado${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
     }
-    const messageId = data?.messageId;
-    const conversationId = data?.conversationId;
+    const messageId = data?.data?.messageId;
+    const conversationId = data?.data?.conversationId;
     if (!messageId || !conversationId) return { ok: false, error: "zernio_sin_message_id_direct_send" };
     rememberWhatsappConversation(phone, conversationId, accountId);
     return { ok: true, messageId };
