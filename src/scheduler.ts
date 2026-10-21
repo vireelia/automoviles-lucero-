@@ -28,11 +28,26 @@ type Appointment = {
   team_reminder_30m_sent?: boolean;
 };
 
+// FALLO REAL detectado (21/10/2026, "no podemos perder reservas" -- el aviso
+// de 30 min al equipo para la visita de las 16:30 seguía sin enviarse a las
+// 17:15): `new Date("2026-10-21T16:30")` sin zona se interpreta en la zona
+// LOCAL del proceso Node, y este contenedor corre en UTC, no en
+// Europe/Madrid. España está en UTC+2 en octubre (CEST), así que "16:30"
+// (hora real de Madrid) se leía como "16:30 UTC" = 18:30 Madrid -- cada
+// recordatorio (24h/6h/1h al cliente y 30 min al equipo) disparaba con 2h de
+// retraso real, después de que la visita ya hubiera pasado. Confirmado con
+// team_notifications reales: la visita de las 09:30 avisó a las 09:05 UTC
+// (11:05 Madrid), 1h35 tarde. Se corrige interpretando explícitamente
+// requested_date+requested_time como hora de Madrid (truco de doble
+// conversión vía Intl, igual de robusto en invierno con CET).
 function parseAppointmentDateTime(a: Appointment): Date | null {
   if (!a.requested_date || !a.requested_time) return null;
-  const iso = `${a.requested_date}T${a.requested_time}`;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const guess = new Date(`${a.requested_date}T${a.requested_time}:00Z`);
+  if (Number.isNaN(guess.getTime())) return null;
+  const madridReading = guess.toLocaleString("sv-SE", { timeZone: "Europe/Madrid" }).replace(" ", "T") + "Z";
+  const madridReadingAsUtc = new Date(madridReading).getTime();
+  const offsetMs = madridReadingAsUtc - guess.getTime();
+  return new Date(guess.getTime() - offsetMs);
 }
 
 // Ventana de disparo de cada aviso: ±10 minutos sobre el objetivo exacto, para
