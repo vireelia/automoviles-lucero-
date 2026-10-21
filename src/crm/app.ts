@@ -661,6 +661,16 @@ label{font-size:20px;font-weight:700}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:640px){.row{grid-template-columns:1fr}h1{font-size:28px}}
 .box{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-wrap:break-word;word-break:break-word}
+/* Integraciones en dos columnas (21/10/2026, a petición real: "ponlas en
+   un lado como el crm de klikar") -- lista lateral de secciones a la
+   izquierda (ancla a cada caja), contenido a la derecha. Solo esta
+   página la usa, no toca el resto del CSS compartido. */
+.side-layout{display:flex;gap:24px;align-items:flex-start}
+.side-nav{flex:0 0 220px;position:sticky;top:20px;display:flex;flex-direction:column;gap:4px}
+.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:#1d2b44;font-weight:700;font-size:17px}
+.side-nav a:hover{background:#e4e7ec}
+.side-content{flex:1;min-width:0}
+@media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
 .stat{background:#fff;border-radius:16px;padding:16px;text-decoration:none;color:inherit;border-left:10px solid #1d2b44;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .stat b{display:block;font-size:44px;line-height:1}
@@ -2664,18 +2674,32 @@ ${toReview.length === 0
 <p class="sub">Última actividad: ${ultima ? esc(fmtDate(ultima.updated_at ?? ultima.created_at)) : "ninguna todavía"}</p>
 </div>`;
   }
-  const agentCards = `<h2>Agentes IA</h2>
+  const agentCards = `<h2 id="agentes" style="margin-top:0">Agentes IA</h2>
 <div class="row">
 ${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", voiceOn ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"])}
 ${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"])}
 ${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"])}
 </div>
 <p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
+  // Lista lateral (21/10/2026, a petición real: "ponlas en un lado como el
+  // crm de klikar") -- mismas cajas de siempre, reorganizadas en dos
+  // columnas en vez de una sola lista larga de arriba a abajo.
+  const sideNav = `<nav class="side-nav">
+<a href="#agentes">Agentes IA</a>
+<a href="#google">Google</a>
+<a href="#correo">Correo</a>
+<a href="#whatsapp">WhatsApp</a>
+<a href="#telefono">Teléfono -- voz</a>
+<a href="#calidad">Calidad de llamadas</a>
+</nav>`;
   const body = `<h1>Integraciones</h1>
 <p class="sub">Conexión con la cuenta de Google del negocio: correo y calendario de citas.</p>
-${agentCards}
 ${config}
-<div class="box"><h3 style="margin-top:0">Google</h3>
+<div class="side-layout">
+${sideNav}
+<div class="side-content">
+${agentCards}
+<div class="box" id="google"><h3 style="margin-top:0">Google</h3>
 <p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
 <p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
 ${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
@@ -2683,10 +2707,12 @@ ${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` :
 <p>${connectButton} ${disconnectButton}</p>
 </div>
 ${tests}
-${emailModeBox}
-${whatsappZernioBox(req)}
-${voiceBox}
-${qualityBox}`;
+<div id="correo">${emailModeBox}</div>
+<div id="whatsapp">${whatsappZernioBox(req)}</div>
+<div id="telefono">${voiceBox}</div>
+<div id="calidad">${qualityBox}</div>
+</div>
+</div>`;
   res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
 });
 
