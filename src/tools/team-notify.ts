@@ -49,18 +49,29 @@ async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: stri
   }
 }
 
+// FALLO REAL detectado (21/10/2026, "¿estás enviando mensajes al teléfono de
+// Ramón y José... con el número de los clientes?"): los tres avisos llevaban
+// fecha y datos del vehículo, pero nunca el teléfono real del cliente -- solo
+// el nombre (a menudo "sin nombre", sobre todo en leads de coches.net sin
+// nombre capturado). Ramón/José tenían que abrir el CRM solo para poder
+// llamar de vuelta. contactLine lo añade siempre, con el nombre si lo hay.
+function contactLine(phone: string | null | undefined, name: string): string {
+  if (!phone) return name;
+  return name === "sin nombre" ? phone : `${name} (${phone})`;
+}
+
 export async function notifyVisitScheduled(args: {
   lead_phone: string | null;
   vehicle_id: string | null | undefined;
   requested_date: string | null | undefined;
   requested_time: string | null | undefined;
 }): Promise<void> {
-  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
   const vehicle = vehicleLabel(args.vehicle_id);
   const when = args.requested_date && args.requested_time ? `${args.requested_date} a las ${args.requested_time}` : args.requested_date || "fecha por confirmar";
   await notifyTeam(
     "visita_agendada",
-    `📅 Nueva visita -- ${name} -- ${vehicle} -- ${when}`,
+    `📅 Nueva visita -- ${contact} -- ${vehicle} -- ${when}`,
     args.lead_phone ?? null,
   );
 }
@@ -71,22 +82,22 @@ export async function notifyVisitCancelled(args: {
   requested_date: string | null | undefined;
   requested_time: string | null | undefined;
 }): Promise<void> {
-  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
   const vehicle = vehicleLabel(args.vehicle_id);
   const when = args.requested_date && args.requested_time ? `${args.requested_date} a las ${args.requested_time}` : args.requested_date || "sin fecha";
   await notifyTeam(
     "visita_cancelada",
-    `❌ Visita cancelada -- ${name} -- ${vehicle} -- ${when}`,
+    `❌ Visita cancelada -- ${contact} -- ${vehicle} -- ${when}`,
     args.lead_phone ?? null,
   );
 }
 
 export async function notifyReservation(args: { lead_phone: string | null | undefined; vehicle_id: string; amount_eur: number }): Promise<void> {
-  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
   const vehicle = vehicleLabel(args.vehicle_id);
   await notifyTeam(
     "reserva_pendiente",
-    `💰 Nueva reserva -- ${name} -- ${vehicle} -- señal de ${args.amount_eur} €`,
+    `💰 Nueva reserva -- ${contact} -- ${vehicle} -- señal de ${args.amount_eur} €`,
     args.lead_phone ?? null,
   );
 }
