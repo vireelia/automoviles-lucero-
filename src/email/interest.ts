@@ -168,6 +168,28 @@ export function extractCochesNetContact(
   };
 }
 
+// FALLO REAL detectado (21/10/2026, caso real de un cliente llamado Ignacio
+// y otro ZAKARIA): el bloque JSON de Coches.net trae su nombre real y su
+// correo personal real (client.first_name/client.email), pero
+// extractCochesNetContact exige que haya "phone" dentro del bloque -- las
+// notificaciones normales de "alguien está interesado en tu anuncio" casi
+// nunca lo traen, así que ese nombre/correo real se perdía sin usar en el
+// lead (quedaba con phone = el relay anónimo de coches.net y name = null).
+// Esta función no exige teléfono -- solo mira el bloque "client" y saca lo
+// que haya, para enriquecer el lead sin tocar su clave de identidad (el
+// relay sigue siendo el "phone" del lead, evitando duplicarlo).
+export function extractCochesNetClientIdentity(text: string): { name: string | null; email: string | null } | null {
+  const clientBlockMatch = /"client":\s*\{([^}]*)\}/.exec(text);
+  if (!clientBlockMatch) return null;
+  const block = clientBlockMatch[1];
+  const nameMatch = /"first_name":"([^"]*)"/.exec(block);
+  const emailMatch = /"email":"([^"]*)"/.exec(block);
+  const name = nameMatch?.[1]?.trim() || null;
+  const email = emailMatch?.[1]?.trim() || null;
+  if (!name && !email) return null;
+  return { name, email };
+}
+
 export type PortalInfo = { portal: string | null; mustManageOnPortal: boolean };
 
 export function detectPortal(input: { from: string; subject: string; text: string }): PortalInfo {

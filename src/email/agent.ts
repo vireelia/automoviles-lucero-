@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
 import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
-import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact } from "./interest.js";
+import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
@@ -242,6 +242,17 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     recordInbox(sensitive ? { ...email, text: "[contenido sensible -- no almacenado]" } : email, "automated_no_reply", { portal: portalInfo.portal });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "automated_no_reply", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
     return { outcome: "automated_no_reply" };
+  }
+
+  // Enriquece el lead con el nombre/correo real que Coches.net ya manda en
+  // su propio bloque "client", antes de que corra el agente -- nunca se
+  // toca el "phone" del lead (sigue siendo el relay, la clave real), solo
+  // se añaden name/email si faltaban. Ver extractCochesNetClientIdentity.
+  if (portalInfo.portal === "Coches.net") {
+    const identity = extractCochesNetClientIdentity(email.text);
+    if (identity?.name || identity?.email) {
+      upsertLead({ phone: email.from, name: identity.name ?? undefined, email: identity.email ?? undefined, channel: "EMAIL" });
+    }
   }
 
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
