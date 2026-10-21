@@ -1740,6 +1740,7 @@ crm.get("/correos", (req, res) => {
   const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const body = `<h1>Correos</h1>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Daniel</span></p>
 <p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
 ${filterPills("/crm/correos", f, q, true)}
 ${searchBox("/crm/correos", f, q, "Buscar por remitente, asunto o portal")}
@@ -1789,7 +1790,8 @@ crm.get("/whatsapp", (req, res) => {
   const all = list<WhatsappMessage>("whatsapp_inbox");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const body = `<h1>WhatsApp</h1>
-<p class="sub">Mensajes entrantes por WhatsApp. El envío automático sigue desactivado hasta verificar la conexión -- aquí solo se lee y se ordena.</p>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Carolina</span></p>
+<p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
 ${filterPills("/crm/whatsapp", f, q, true)}
 ${searchBox("/crm/whatsapp", f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/whatsapp", f, q, items.length, true) : ""}
@@ -1848,6 +1850,7 @@ crm.get("/llamadas", (req, res) => {
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from_number, m.summary)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const dur = (ms: number | null | undefined) => (ms == null ? "—" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
   const body = `<h1>Llamadas</h1>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Miguel</span></p>
 <p class="sub">Llamadas atendidas por Miguel, con el resultado del análisis automático.</p>
 ${filterPills("/crm/llamadas", f, q, false)}
 ${searchBox("/crm/llamadas", f, q, "Buscar por número de teléfono")}

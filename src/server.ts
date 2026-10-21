@@ -590,6 +590,23 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
 
     rememberWhatsappConversation(phone, conversationId, accountId);
 
+    // FALLO REAL detectado (21/10/2026, "en la sección de whatsapp no salen
+    // los whatsapp"): este webhook (el real, el que de verdad usa Zernio)
+    // nunca dejaba constancia en whatsapp_inbox -- solo el webhook viejo de
+    // n8n (/channels/whatsapp/inbound, sin tráfico real desde que se conectó
+    // Zernio) lo hacía. /crm/whatsapp leía siempre esa colección, así que
+    // mostraba vacío aunque los mensajes reales sí estuvieran llegando y
+    // respondiéndose. Mismo patrón que el webhook de n8n: registro aditivo
+    // en su propio try/catch, nunca toca la respuesta real del agente.
+    const whatsappInboxId = crypto.randomUUID();
+    try {
+      const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
+      inbox.push({ id: whatsappInboxId, phone, text: text.trim().slice(0, 2000), read: false, answered: false, archived: false, created_at: new Date().toISOString() });
+      writeCollection("whatsapp_inbox", inbox.slice(-500));
+    } catch (err) {
+      console.error("[zernio-whatsapp] no se pudo registrar el mensaje entrante en el CRM:", err instanceof Error ? err.message : err);
+    }
+
     // Interruptor nuevo (19/10/2026, "todavía no actives Miguel" justo al
     // dejar el canal conectado): con el agente en pausa, el mensaje real del
     // cliente nunca se pierde -- se avisa al equipo para que responda a mano
@@ -607,6 +624,19 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone);
     const sent = await sendWhatsappText(phone, result.reply);
     if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta:", sent.error);
+    try {
+      const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
+      const rec = inbox.find((m) => m.id === whatsappInboxId);
+      if (rec) {
+        rec.reply_text = result.reply;
+        rec.delivered = sent.ok;
+        rec.answered = true;
+        rec.answered_by = "ia";
+        writeCollection("whatsapp_inbox", inbox);
+      }
+    } catch (err) {
+      console.error("[zernio-whatsapp] no se pudo actualizar el registro del CRM:", err instanceof Error ? err.message : err);
+    }
   } catch (err) {
     console.error("[zernio-whatsapp] inbound:", err instanceof Error ? err.message : err);
   }
