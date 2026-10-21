@@ -1065,11 +1065,21 @@ ${duplicateWarning}
 }
 
 // ---------- Hoy ----------
+// Fase A (21/10/2026, a petición real: "esto más organizado, así se ve
+// feo"): antes era una sola frase larga, con el correo-relay de
+// Coches.net en crudo y "sin contacto" repetido -- ahora una lista real,
+// una visita por línea, reutilizando contactLabel (mismo que ya limpia
+// esto en Reservas/Pendientes) en vez del teléfono/correo sin tratar.
 function todaySummary(today: string): string {
   const list2 = list<Appointment>("appointments").filter((a) => a.status !== "cancelled" && a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
-  if (list2.length === 0) return "Hoy no tienes visitas.";
-  const parts = list2.map((a) => `a las ${a.requested_time ?? "?"} ${vehicleName(a.vehicle_id)} (${a.lead_phone ?? "sin contacto"})`);
-  return `Hoy tienes ${list2.length} ${list2.length === 1 ? "visita" : "visitas"}: ${parts.join("; ")}.`;
+  if (list2.length === 0) return `<p style="margin:0;font-size:22px"><b>Hoy no tienes visitas.</b></p>`;
+  const leads = list<Lead>("leads");
+  const rows = list2.map((a) => {
+    const lead = a.lead_phone ? leads.find((l) => l.phone === a.lead_phone) : null;
+    return `<li><b>${esc(a.requested_time ?? "?")}</b> -- ${esc(vehicleName(a.vehicle_id))} -- ${esc(contactLabel(a.lead_phone, lead?.name))}</li>`;
+  });
+  return `<p style="margin:0 0 8px;font-size:22px"><b>Hoy tienes ${list2.length} ${list2.length === 1 ? "visita" : "visitas"}</b></p>
+<ul style="margin:0;padding-left:22px;font-size:20px;line-height:1.7">${rows.join("")}</ul>`;
 }
 
 crm.get("/", (req, res) => {
@@ -1134,7 +1144,7 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
 <div class="box noprint"><button class="btn ok" type="button" onclick="window.lucerosonar && window.lucerosonar()">🔔 Activar y probar el sonido de avisos</button><p class="sub" style="margin:8px 0 0">Púlsalo una vez al abrir el CRM cada día -- oirás un pitido de prueba ahora mismo. A partir de ahí, sonará solo cuando llegue un aviso urgente, sin que tengas que hacer nada más.</p></div>
 <form class="search noprint" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit">Buscar</button></form>
-<div class="box"><p style="margin:0;font-size:22px"><b>${esc(todaySummary(today))}</b></p></div>
+<div class="box">${todaySummary(today)}</div>
 <div class="stats">
 <a class="stat" href="/crm/citas"><b>${todayAppts.length}</b><span>visitas hoy</span></a>
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
