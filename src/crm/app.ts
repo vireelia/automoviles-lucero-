@@ -614,12 +614,26 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
 <style>
 *{box-sizing:border-box}
 body{margin:0;font:20px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f3f4f6;color:#1d1f24}
-header{background:#1d2b44;color:#fff;padding:14px 18px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
-header strong{font-size:24px}
-nav{display:flex;flex-wrap:wrap;gap:8px}
-nav a{color:#fff;text-decoration:none;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:19px}
+/* Menú lateral (21/10/2026, a petición real: "esto en vez de que salga
+   arriba que salga organizado en un lado", pegado a Klikar como
+   referencia) -- header/nav/main son los mismos elementos de siempre
+   (softRefreshHoy sigue buscando el texto literal <main>/</main>, sin
+   tocar), solo se reordenan con flexbox. En móvil (<=900px) vuelve a la
+   barra horizontal de siempre, que es más usable con poco ancho. */
+body{display:flex;min-height:100vh}
+header{background:#1d2b44;color:#fff;padding:20px 16px;display:flex;flex-direction:column;gap:16px;flex:0 0 230px;width:230px;min-height:100vh;position:sticky;top:0;align-self:flex-start}
+header strong{font-size:22px}
+header form{margin-top:auto}
+nav{display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto}
+nav a{color:#fff;text-decoration:none;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:18px}
 nav a.on{background:#f0b429;color:#1d2b44;font-weight:700}
-main{max-width:980px;margin:0 auto;padding:18px}
+main{flex:1;min-width:0;max-width:980px;margin:0 auto;padding:18px}
+@media(max-width:900px){
+body{display:block}
+header{position:static;width:auto;flex:none;min-height:0;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
+header form{margin-top:0}
+nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
+}
 h1{font-size:34px;margin:6px 0 4px}
 h2{font-size:24px;margin:22px 0 10px}
 .sub{color:#4b5563;margin:0 0 16px;font-size:20px}
