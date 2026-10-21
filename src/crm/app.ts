@@ -1060,6 +1060,22 @@ ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 </div></div>`;
 }
 
+// Visitas y reservas del canal (22/10/2026, a petición real: "las
+// reservas o visitas de llamada se meten en llamadas, los de whatsapp en
+// whatsapp y los de gmail en gmail") -- cada página de canal (Llamadas,
+// WhatsApp, Correos) muestra también lo que ese mismo canal generó de
+// verdad, reutilizando apptCard/reservationCard tal cual, nunca una
+// vista paralela. Solo lo activo (citas no canceladas, reservas no
+// cerradas) -- lo histórico sigue en Visitas/Reservas.
+function channelActivitySection(channel: "VOICE" | "WHATSAPP" | "EMAIL", user: CrmUser): string {
+  const appts = list<Appointment>("appointments").filter((a) => a.channel === channel && a.status !== "cancelled");
+  const resv = list<Reservation>("reservations").filter((r) => r.channel === channel && r.status !== "cancelled" && r.status !== "expired");
+  if (appts.length === 0 && resv.length === 0) return "";
+  return `<div class="box"><h3 style="margin-top:0">Visitas y reservas de este canal</h3>
+${resv.length > 0 ? resv.map((r) => reservationCard(r, user)).join("") : ""}
+${appts.length > 0 ? appts.map(apptCard).join("") : ""}
+</div>`;
+}
 function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, volver?: string): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
   const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
@@ -1910,6 +1926,7 @@ crm.get("/correos", (req, res) => {
   const body = `<h1>Correos</h1>
 <p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Daniel</span></p>
 <p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
+${channelActivitySection("EMAIL", me(res))}
 ${filterPills("/crm/correos", f, q, true)}
 ${searchBox("/crm/correos", f, q, "Buscar por remitente, asunto o portal")}
 ${items.length > 0 ? bulkBar("/crm/correos", f, q, items.length, true) : ""}
@@ -1960,6 +1977,7 @@ crm.get("/whatsapp", (req, res) => {
   const body = `<h1>WhatsApp</h1>
 <p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Carolina</span></p>
 <p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
+${channelActivitySection("WHATSAPP", me(res))}
 ${filterPills("/crm/whatsapp", f, q, true)}
 ${searchBox("/crm/whatsapp", f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/whatsapp", f, q, items.length, true) : ""}
@@ -2020,6 +2038,7 @@ crm.get("/llamadas", (req, res) => {
   const body = `<h1>Llamadas</h1>
 <p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Miguel</span></p>
 <p class="sub">Llamadas atendidas por Miguel, con el resultado del análisis automático.</p>
+${channelActivitySection("VOICE", me(res))}
 ${filterPills("/crm/llamadas", f, q, false)}
 ${searchBox("/crm/llamadas", f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/llamadas", f, q, items.length, false) : ""}
