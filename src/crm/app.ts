@@ -707,13 +707,14 @@ label{font-size:20px;font-weight:700}
    reimplementar el componente de Klikar (React) en un backend 100%
    servidor sin framework -- misma idea visual, con las herramientas que
    ya existen en este CRM. */
-.toggle-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px}
+.toggle-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px}
 .toggle-card{display:flex;align-items:center;gap:12px;background:#fff;border-radius:16px;padding:16px 18px;text-decoration:none;color:inherit;box-shadow:0 1px 3px rgba(0,0,0,.08);border:3px solid transparent}
 .toggle-card:hover{border-color:#c3c9d4}
 .toggle-card.active{border-color:#1d2b44;background:#eef1f6}
 .toggle-card .ticon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
 .toggle-card .tbody{flex:1;min-width:0}
 .toggle-card .tbody b{display:block;font-size:18px;line-height:1.25}
+.toggle-card .tbody .sub{display:block;font-size:14px;line-height:1.3;color:#6b7280;margin:2px 0 0}
 .toggle-card .tcount{font-size:32px;font-weight:800;line-height:1}
 .t-hot{background:#dc2626;color:#fff;font-weight:700}
 .t-warm{background:#f97316;color:#fff;font-weight:700}
