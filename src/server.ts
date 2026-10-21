@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
-import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads } from "./tools/leads.js";
+import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone } from "./tools/leads.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
@@ -155,11 +155,22 @@ function markVoiceOrigin(req: express.Request, _res: express.Response, next: exp
 // `call.from_number` -- nunca hace falta que el cliente lo repita en voz ni
 // que el modelo lo adivine. Solo rellena si el modelo no puso ya un
 // lead_phone explícito (mismo criterio que markVoiceOrigin con el canal).
+// FALLO REAL detectado (21/10/2026, caso real de Lucía y de varias reservas
+// nunca convertidas -- Mohamed/Tiguan, Fran/Fiat, cliente/Citroën -- todas
+// con el mismo patrón): el teléfono de Retell llega sin normalizar ("632241696"
+// o "34626304959", sin el "+") mientras el lead ya está guardado como
+// "+34632241696" -- cualquier búsqueda exacta por teléfono aguas abajo
+// (createHandoff, team-notify, tryAutoCreateReservation) fallaba en
+// silencio, perdiendo el nombre del cliente Y la reserva automática. Se
+// normaliza aquí, una sola vez, en el único sitio por el que pasan las
+// cuatro rutas que dependen del teléfono real de la llamada.
 function markCallerPhone(req: express.Request, _res: express.Response, next: express.NextFunction) {
   const body = req.body ?? {};
   const fromNumber = body.call?.from_number;
   if (typeof fromNumber === "string" && fromNumber && body.args && typeof body.args === "object" && !body.args.lead_phone) {
-    body.args.lead_phone = fromNumber;
+    body.args.lead_phone = normalizePhone(fromNumber);
+  } else if (body.args && typeof body.args === "object" && typeof body.args.lead_phone === "string") {
+    body.args.lead_phone = normalizePhone(body.args.lead_phone);
   }
   next();
 }

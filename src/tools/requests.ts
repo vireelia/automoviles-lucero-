@@ -4,6 +4,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending } from "./reservations.js";
 import { createAutoTask } from "./tasks.js";
 import { notifyHandoffRequested } from "./team-notify.js";
+import { normalizePhone } from "./leads.js";
 
 function now() {
   return new Date().toISOString();
@@ -34,10 +35,24 @@ export async function tryAutoCreateReservation(leadPhone: string, vehicleInteres
   try {
     if (!vehicleInterest || !vehicleInterest.trim()) return;
     const wanted = normalizeText(vehicleInterest);
-    const matches = currentVehicles().filter((v) => {
+    const vehicles = currentVehicles();
+    let matches = vehicles.filter((v) => {
       const full = normalizeText(`${v.make} ${v.model} ${v.version}`);
       return full.includes(wanted) || wanted.includes(full);
     });
+    if (matches.length !== 1) {
+      // FALLO REAL detectado (21/10/2026): un lead HOT con un Maserati Ghibli
+      // disponible y único en catálogo se quedó sin reserva automática porque
+      // el texto del lead traía "2016" (año del anuncio original) y la ficha
+      // del catálogo "410cv" (potencia) -- ninguna cadena era substring
+      // literal de la otra pese a ser sin duda el mismo coche. Antes de
+      // rendirse, se prueba solo por marca+modelo -- y se acepta ÚNICAMENTE
+      // si en todo el catálogo activo hay una sola unidad de esa marca+modelo
+      // (si hubiera otra versión del mismo modelo, sí sería adivinar, y eso
+      // sigue prohibido).
+      const byMakeModel = vehicles.filter((v) => wanted.includes(normalizeText(`${v.make} ${v.model}`)));
+      if (byMakeModel.length === 1) matches = byMakeModel;
+    }
     if (matches.length !== 1) return; // ambiguo o sin match -- no se adivina
     const vehicleId = matches[0].id;
 
@@ -123,10 +138,20 @@ export async function createHandoff(args: {
   // aviso real -- Ángel, Nissan Qashqai -- se quedó sin nombre en la ficha
   // porque create_handoff nunca lo guardaba, aunque create_lead sí lo tenía
   // bien registrado un segundo antes en la misma llamada).
-  const lead = readCollection<{ phone: string | null; name: string | null; vehicle_interest?: string | null }>("leads").find((l) => l.phone === args.lead_phone);
+  //
+  // FALLO REAL detectado otra vez (21/10/2026): la causa de fondo seguía sin
+  // arreglar -- el teléfono llegaba sin normalizar ("632241696" en vez de
+  // "+34632241696") y la búsqueda exacta nunca encontraba el lead, aunque
+  // existiera. Esto rompía en cadena el nombre, el aviso al equipo Y la
+  // reserva automática (tryAutoCreateReservation necesita lead.vehicle_interest,
+  // que quedaba undefined). Se normaliza aquí también, no solo en el
+  // middleware de la ruta, por si algún día llega por otro camino (chat/WhatsApp).
+  const leadPhone = args.lead_phone ? normalizePhone(args.lead_phone) : args.lead_phone;
+  const lead = readCollection<{ phone: string | null; name: string | null; vehicle_interest?: string | null }>("leads").find((l) => l.phone === leadPhone);
   const handoff = {
     id: crypto.randomUUID(),
     ...args,
+    lead_phone: leadPhone,
     lead_name: lead?.name ?? null,
     status: "requested",
     created_at: now(),
@@ -140,21 +165,21 @@ export async function createHandoff(args: {
   // tarea de seguimiento.
   await notifyHandoffRequested({
     kind: args.reason_type === "reserva" ? "reserva_pendiente" : "handoff_urgente",
-    lead_phone: args.lead_phone ?? null,
+    lead_phone: leadPhone ?? null,
     reason: args.reason ?? (args.urgency === "alta" ? "Atención urgente" : "Solicitud de atención"),
   });
   // Seguimiento comercial (20/10/2026, sección 14): deduplicada por el id
   // real del handoff, nunca se repite si este mismo se reprocesa.
   createAutoTask({
-    lead_phone: args.lead_phone ?? null,
+    lead_phone: leadPhone ?? null,
     type: "revisar_handoff",
     reason: args.reason ?? "Atención urgente",
     source_ref: handoff.id,
     channel: args.channel ?? null,
     priority: args.urgency === "alta" ? "alta" : "normal",
   });
-  if (args.reason_type === "reserva" && args.lead_phone) {
-    await tryAutoCreateReservation(args.lead_phone, lead?.vehicle_interest, args.channel);
+  if (args.reason_type === "reserva" && leadPhone) {
+    await tryAutoCreateReservation(leadPhone, lead?.vehicle_interest, args.channel);
   }
   return envelope({
     status: "ok",
