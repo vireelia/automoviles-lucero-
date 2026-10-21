@@ -51,6 +51,12 @@ type Lead = {
   // "ocultar/archivar, no borrar"): nunca se borra nada aquí, solo deja de
   // salir en la lista principal.
   archived?: boolean;
+  // Clientes para publicidad (21/10/2026, petición real: vehículo que varios
+  // pedían ya no está en el catálogo real -- vendido -- y no les interesa
+  // otro modelo distinto. No son un lead activo de ventas ni tampoco "sin
+  // interés" (archived) -- son un contacto real para remarketing el día que
+  // entre un coche parecido. Lista propia, fuera de Clientes y Pendientes.
+  marketing_list?: boolean;
   // Venta cerrada/perdida (20/10/2026, mejora integral del CRM, sección 6.3:
   // esto SÍ es una decisión humana que ningún dato derivado puede inferir
   // -- a diferencia de la "fase" (visita concertada, reserva pendiente...),
@@ -505,6 +511,7 @@ function button(label: string, action: string, extra = "") {
 const MENU: [string, string][] = [
   ["/crm", "Hoy"],
   ["/crm/clientes", "Clientes y oportunidades"],
+  ["/crm/publicidad", "Clientes para publicidad"],
   ["/crm/pendientes", "Pendientes"],
   ["/crm/llamadas", "Llamadas"],
   ["/crm/whatsapp", "WhatsApp"],
@@ -1880,7 +1887,7 @@ crm.get("/clientes", (req, res) => {
   const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const archivedCount = all.filter((l) => l.archived).length;
   const leads = all
-    .filter((l) => (t === "archivados" ? l.archived : !l.archived && (t === "todos" || l.temperature === t)))
+    .filter((l) => (t === "archivados" ? l.archived : !l.archived && !l.marketing_list && (t === "todos" || l.temperature === t)))
     .filter((l) => matchesDateFilter(dateFilter, l.created_at, today))
     .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
   const pill = (k: string, label: string, cls = "") => `<a href="/crm/clientes?t=${k}&d=${dateFilter}" class="tag ${cls}" style="text-decoration:none;padding:10px 16px;${t === k ? "outline:4px solid #1d2b44" : ""}">${label}</a>`;
@@ -2011,6 +2018,8 @@ crm.post("/clientes/:id", (req, res) => {
   else if (accion === "reactivar") lead.do_not_contact = false;
   else if (accion === "archivar") lead.archived = true;
   else if (accion === "desarchivar") lead.archived = false;
+  else if (accion === "mover_publicidad") lead.marketing_list = true;
+  else if (accion === "quitar_publicidad") lead.marketing_list = false;
   else if (accion === "venta_cerrada") {
     lead.sale_outcome = "cerrada";
     lead.lost_reason = null;
@@ -2043,6 +2052,8 @@ crm.post("/clientes/:id", (req, res) => {
     reactivar: "Listo: sí se le puede escribir",
     archivar: "Cliente archivado",
     desarchivar: "Cliente desarchivado",
+    mover_publicidad: "Movido a Clientes para publicidad",
+    quitar_publicidad: "Quitado de Clientes para publicidad",
     venta_cerrada: "Venta marcada como cerrada",
     venta_perdida: "Venta marcada como perdida",
     reabrir: "Oportunidad reabierta",
@@ -2092,6 +2103,25 @@ crm.post("/clientes-masivo", (req, res) => {
   for (const l of targets) moveToTrash("leads", l, `Cliente: ${l.name || l.phone || "sin nombre"}`, me(res).email);
   save("leads", leads.filter((l) => !ids.includes(l.id)));
   back(res, "/crm/clientes", targets.length === 0 ? "No había nada que hacer" : `${targets.length} cliente(s) movido(s) a la papelera`);
+});
+
+// ---------- Clientes para publicidad ----------
+// Petición real (21/10/2026): varios clientes preguntaron por un coche que
+// ya no está en el inventario real (vendido) y no les interesa otro modelo
+// distinto -- no son un lead activo de ventas, pero tampoco "sin interés"
+// (archivados): son un contacto real para remarketing el día que entre un
+// coche parecido. Lista propia, fuera de Clientes/Pendientes/Visitas.
+crm.get("/publicidad", (req, res) => {
+  const leads = list<Lead>("leads").filter((l) => l.marketing_list).sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
+  const body = `<h1>Clientes para publicidad</h1>
+<p class="sub">Preguntaron por un coche que ya no está disponible y no quieren otro modelo -- no son una oportunidad activa, pero sí un contacto real para cuando entre algo parecido. Nunca se les escribe desde aquí solos: esto es solo una lista para campañas futuras.</p>
+${leads.length === 0 ? `<div class="empty">No hay clientes en esta lista.</div>` : leads.map((l) => `<div class="card"><div class="info">
+<h3>${esc(l.name || l.phone || "Sin datos de contacto")}</h3>
+<p>${l.phone ? `<b>${esc(l.phone)}</b> · ` : ""}${esc(l.vehicle_interest || "Sin vehículo registrado")}</p>
+${l.notes ? `<p>${esc(l.notes)}</p>` : ""}
+<form method="post" action="/crm/clientes/${esc(l.id)}">${phoneLink(l.phone)}<button class="btn light" type="submit" name="accion" value="quitar_publicidad">Quitar de esta lista</button></form>
+</div></div>`).join("")}`;
+  res.type("html").send(page("Clientes para publicidad", me(res), body, msgOf(req)));
 });
 
 // ---------- Coches ----------
