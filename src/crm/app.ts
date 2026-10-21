@@ -586,7 +586,7 @@ const MENU: [string, string][] = [
   ["/crm/entrada", "Entrada de leads"],
   ["/crm/clientes", "Clientes y oportunidades"],
   ["/crm/publicidad", "Clientes para publicidad"],
-  ["/crm/pendientes", "Pendientes"],
+  ["/crm/incidencias", "Incidencias"],
   ["/crm/llamadas", "Llamadas"],
   ["/crm/whatsapp", "WhatsApp"],
   ["/crm/correos", "Correos"],
@@ -1088,8 +1088,8 @@ crm.get("/", (req, res) => {
   const todo: { href: string; text: string }[] = [
     ...toAttend.filter((r) => r.status === "pending_verification").map((r) => ({ href: "/crm/reservas", text: `Confirmar la reserva de ${vehicleName(r.vehicle_id)}` })),
     ...todayAppts.filter((a) => a.status === "requested").map((a) => ({ href: "/crm/citas", text: `Confirmar la visita de hoy a las ${a.requested_time ?? "?"}` })),
-    ...handoffs.map((h) => ({ href: "/crm/pendientes", text: `Atender: ${h.reason ?? "un cliente necesita una persona"}` })),
-    ...mails.map((m) => ({ href: "/crm/pendientes", text: `Contestar a ${m.from}` })),
+    ...handoffs.map((h) => ({ href: h.reason_type === "reserva" ? "/crm/reservas" : "/crm/incidencias", text: `Atender: ${h.reason ?? "un cliente necesita una persona"}` })),
+    ...mails.map((m) => ({ href: "/crm/correos", text: `Contestar a ${m.from}` })),
     ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
   const d = dayLabel(today);
@@ -1138,7 +1138,8 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
 <div class="stats">
 <a class="stat" href="/crm/citas"><b>${todayAppts.length}</b><span>visitas hoy</span></a>
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
-<a class="stat" href="/crm/pendientes"><b>${handoffs.length + mails.length}</b><span>pendientes</span></a>
+<a class="stat" href="/crm/incidencias"><b>${handoffs.filter((h) => h.reason_type !== "reserva").length}</b><span>incidencias</span></a>
+<a class="stat" href="/crm/correos"><b>${mails.length}</b><span>correos por contestar</span></a>
 </div>
 ${alertBlock}
 ${todoBlock}
@@ -1296,7 +1297,7 @@ crm.post("/citas-masivo", (req, res) => {
 });
 
 // ---------- Reservas ----------
-crm.get("/reservas", (req, res) => {
+crm.get("/reservas", async (req, res) => {
   const c = typeof req.query.c === "string" ? req.query.c : "todos";
   let reservations = list<Reservation>("reservations").sort((a, b) => b.created_at.localeCompare(a.created_at));
   if (c !== "todos") reservations = reservations.filter((r) => channelBucket(r.channel) === c);
@@ -1304,9 +1305,33 @@ crm.get("/reservas", (req, res) => {
   // Solo las cerradas (canceladas/caducadas) se pueden borrar -- mismo
   // criterio que el borrado individual, ninguna reserva viva se cuenta.
   const bulkEligible = me(res).role === "admin" ? reservations.filter((r) => r.status === "cancelled" || r.status === "expired").length : 0;
+  // Interesados en reservar, sin confirmar aún (21/10/2026, "si hay
+  // reservas de 500€ que se metan en reservas" -- antes vivían mezclados
+  // en Pendientes). El backfill automático de reservas (18/10/2026) se
+  // mueve aquí también -- Reservas es ahora el único dueño de este dato.
+  const interesHandoffs = list<Handoff>("handoffs").filter((h) => h.reason_type === "reserva" && h.status === "requested");
+  for (const h of interesHandoffs) {
+    if (h.lead_phone) {
+      const lead = list<Lead>("leads").find((l) => l.phone === h.lead_phone);
+      await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
+    }
+  }
+  // Tras el backfill, solo quedan como "interés sin confirmar" los que de
+  // verdad no tienen ninguna reserva real todavía (ambiguos o sin match
+  // único de vehículo -- la función nunca adivina, ver tools/requests.ts).
+  const allReservationsForCheck = list<Reservation>("reservations");
+  const interesados = interesHandoffs.filter((h) => !allReservationsForCheck.some((r) => r.lead_phone === h.lead_phone));
   const canalPill = (k: string, label: string) => `<a href="/crm/reservas?c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Reservas</h1>
 <p class="sub">Una reserva aparta un coche con 500 €. Cuando el cliente paga, compruébalo y pulsa "Confirmar la reserva".</p>
+${interesados.length > 0 ? `<h2>Interesados en reservar, sin confirmar (${interesados.length})</h2>
+<p class="sub">Pidieron reservar pero no se pudo identificar un único coche real en el catálogo -- confírmalo a mano con el cliente y crea la reserva abajo.</p>
+${interesados.map((h) => `<div class="card urgent" style="position:relative"><div class="info">
+<h3>${esc(h.reason ?? "Quiere reservar")}</h3>
+<p><span class="tag t-hot">RESERVA 500€ -- sin confirmar</span></p>
+<p>Cliente: <b>${esc(contactLabel(h.lead_phone, h.lead_name))}</b> · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
+<form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waButton(h.lead_phone, "Hola, le escribe Automóviles Lucero sobre su reserva.")}</form>
+</div></div>`).join("")}` : ""}
 <div class="box"><h3 style="margin-top:0">Hacer una reserva a mano</h3>
 <form method="post" action="/crm/reservas">
 <label>Nombre del cliente</label><input name="nombre" placeholder="Si no lo escribes, queda sin nombre en el CRM">
@@ -1606,96 +1631,84 @@ ${isAdmin ? simpleCheckbox("avisos-bulk", h.id) : ""}
 <form method="post" action="/crm/avisos/${esc(h.id)}">${actions}</form>
 </div></div>`;
 }
-crm.get("/pendientes", async (req, res) => {
+// Fase A -- limpieza del "cajón de sastre" (21/10/2026, petición real: "en
+// pendientes hay de todo... quítala, quiero que cada cosa tenga su sección
+// diferente"): Pendientes mezclaba reservas, incidencias y correos en una
+// sola lista. Ahora cada tipo vive donde ya se gestiona de verdad --
+// reservas (reason_type:"reserva") en /crm/reservas, el resto de avisos
+// (reason_type "otro"/"compra_inmediata") aquí en Incidencias, y los
+// correos ya tenían su propia página en /crm/correos. /crm/pendientes
+// sigue existiendo solo como redirección, por si queda algún enlace viejo.
+crm.get("/incidencias", (req, res) => {
   const isAdmin = me(res).role === "admin";
   const v = typeof req.query.v === "string" ? req.query.v : "por_atender";
-  const allHandoffs = list<Handoff>("handoffs");
+  const allHandoffs = list<Handoff>("handoffs").filter((h) => h.reason_type !== "reserva");
   const pendientes = allHandoffs.filter((h) => h.status === "requested").sort((a, b) => b.created_at.localeCompare(a.created_at));
   const atendidos = allHandoffs.filter((h) => h.status === "done").sort((a, b) => b.created_at.localeCompare(a.created_at));
   const handoffs = v === "atendidos" ? atendidos : pendientes;
-  // Backfill automático (18/10/2026, "es una automatizacion, no nada para
-  // hacer a mano"): cualquier aviso de reserva ya existente que se quedara
-  // sin su reserva real (de antes de este arreglo) se completa solo la
-  // próxima vez que alguien abra Pendientes -- nadie tiene que pulsar nada.
-  // Idempotente (tryAutoCreateReservation no duplica si ya existe), barato
-  // (pocos avisos reales a la vez), y nunca rompe la carga de la página.
-  for (const h of pendientes) {
-    if (h.reason_type === "reserva" && h.lead_phone) {
-      const lead = list<Lead>("leads").find((l) => l.phone === h.lead_phone);
-      await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
-    }
-  }
-  const mails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  // Tareas vencidas (20/10/2026, sección 19: "mejorar Pendientes para
-  // incluir tareas vencidas") -- solo un aviso con enlace a Seguimiento,
-  // sin duplicar aquí la lista completa de tareas.
+  // Tareas vencidas (20/10/2026, sección 19) -- solo un aviso con enlace a
+  // Seguimiento, sin duplicar aquí la lista completa de tareas.
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
   const tab = (key: string, label: string, n: number) =>
-    `<a href="/crm/pendientes?v=${key}" class="tag" style="text-decoration:none;${v === key ? "background:#1d2b44;color:#fff" : ""}">${label} (${n})</a>`;
-  const body = `<h1>Pendientes</h1>
-<p class="sub">Aquí aparece lo que Miguel, Carolina o Daniel no pueden resolver solos. Cuando lo hayas atendido, pulsa el botón.</p>
+    `<a href="/crm/incidencias?v=${key}" class="tag" style="text-decoration:none;${v === key ? "background:#1d2b44;color:#fff" : ""}">${label} (${n})</a>`;
+  const body = `<h1>Incidencias</h1>
+<p class="sub">Lo que Miguel, Carolina o Daniel no pueden resolver solos y no es una reserva (eso vive en Reservas). Cuando lo hayas atendido, pulsa el botón.</p>
 ${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">⏰ ${overdueTasks.length} tarea(s) de seguimiento vencida(s) -- <a class="link" href="/crm/seguimiento?f=vencidas">verlas</a></div>` : ""}
-<p>${tab("por_atender", "🔴 Clientes por atender", pendientes.length)} ${tab("atendidos", "✅ Clientes ya atendidos", atendidos.length)}</p>
-<h2>${v === "atendidos" ? "Clientes ya atendidos" : "Clientes por atender"} (${handoffs.length})</h2>
+<p>${tab("por_atender", "🔴 Por atender", pendientes.length)} ${tab("atendidos", "✅ Ya atendidas", atendidos.length)}</p>
+<h2>${v === "atendidos" ? "Incidencias ya atendidas" : "Incidencias por atender"} (${handoffs.length})</h2>
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Se pueden recuperar luego desde la Papelera.") : ""}
-${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay nada pendiente -- todo atendido."}</div>` : handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}
-${v === "por_atender" ? `<h2>Correos para contestar (${mails.length})</h2>
-${mails.length === 0 ? `<div class="empty">No hay correos por contestar.</div>` : mails.map((m) => `<div class="card ${m.outcome === "pendiente_gestion_portal" ? "urgent" : "pending"}"><div class="info">
-<h3>${esc(m.subject || "(sin asunto)")}</h3>
-<p>De: <b>${esc(m.from)}</b>${m.portal ? ` · <span class="tag">${esc(m.portal)}</span>` : ""} · ${esc(fmtDate(m.created_at))}</p>
-${m.outcome === "pendiente_gestion_portal" ? `<p><b>Hay que responder desde ${esc(m.portal ?? "el portal")}, no por correo</b> -- este correo es solo un aviso, al comprador no le llega una respuesta aquí.</p>` : ""}
-${m.outcome === "tope_diario_alcanzado" ? `<p><b>Hoy ya se alcanzó el tope de correos automáticos</b> -- por seguridad (para que Gmail no bloquee la cuenta por enviar de más), esta respuesta no se mandó sola. Revísala y envíala tú.</p>` : ""}
-${m.outcome === "pendiente_whatsapp_manual" ? `<p><b>Este cliente pidió que le escriban solo por WhatsApp</b> -- el envío automático falló (todavía no hay un número real conectado y verificado), hace falta escribirle a mano.${extractWaLink(m.draft_note) ? ` ${waButton(extractWaLink(m.draft_note)!.replace("https://wa.me/", ""), "")}` : ""}</p>` : ""}
-${emailPreviewBox(m.text)}
-${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alcanzado" ? "Respuesta ya redactada" : `Borrador para copiar en ${esc(m.portal ?? "el portal")}`}:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.draft_note)}</div>` : ""}
-<form method="post" action="/crm/correos/${esc(m.id)}">
-<label>Tu respuesta (si no escribes nada, no se envía nada)</label>
-<textarea name="respuesta" rows="4"></textarea>
-<button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button>
-<button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>
-</form></div></div>`).join("")}` : ""}`;
-  res.type("html").send(page("Pendientes", me(res), body, msgOf(req)));
+${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay incidencias pendientes."}</div>` : handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}`;
+  res.type("html").send(page("Incidencias", me(res), body, msgOf(req)));
 });
 
+crm.get("/pendientes", (_req, res) => res.redirect("/crm/incidencias"));
+
+// Destino de vuelta según el tipo de aviso (21/10/2026): una reserva vive
+// en Reservas, el resto en Incidencias -- cada botón de este formulario
+// genérico vuelve a donde de verdad se gestiona ese tipo.
+function avisoHome(h: Handoff): string {
+  return h.reason_type === "reserva" ? "/crm/reservas" : "/crm/incidencias";
+}
 crm.post("/avisos/:id", (req, res) => {
   const accion = String(req.body.accion ?? "atendido");
   const items = list<Handoff>("handoffs");
   const h = items.find((x) => x.id === req.params.id);
-  if (!h) return back(res, "/crm/pendientes", "No encuentro ese aviso");
+  if (!h) return back(res, "/crm/incidencias", "No encuentro ese aviso");
+  const home = avisoHome(h);
   if (accion === "eliminar") {
-    if (me(res).role !== "admin") return back(res, "/crm/pendientes", "Solo el administrador puede eliminar avisos");
+    if (me(res).role !== "admin") return back(res, home, "Solo el administrador puede eliminar avisos");
     moveToTrash("handoffs", h, `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})`, me(res).email);
     save("handoffs", items.filter((x) => x.id !== h.id));
-    return back(res, "/crm/pendientes", "Aviso movido a la papelera");
+    return back(res, home, "Aviso movido a la papelera");
   }
   if (accion === "reabrir") {
     h.status = "requested";
     save("handoffs", items);
-    return back(res, "/crm/pendientes?v=por_atender", "Aviso reabierto");
+    return back(res, `${home}${home === "/crm/incidencias" ? "?v=por_atender" : ""}`, "Aviso reabierto");
   }
   h.status = "done";
   save("handoffs", items);
-  back(res, "/crm/pendientes?v=atendidos", "Aviso atendido");
+  back(res, `${home}${home === "/crm/incidencias" ? "?v=atendidos" : ""}`, "Aviso atendido");
 });
 
 // Borrado masivo de avisos (18/10/2026, "el borrar masivo lo quiero en
 // todas las secciones") -- solo administrador, papelera recuperable.
 crm.post("/avisos-masivo", (req, res) => {
-  if (me(res).role !== "admin") return back(res, "/crm/pendientes", "Solo el administrador puede eliminar avisos");
+  if (me(res).role !== "admin") return back(res, "/crm/incidencias", "Solo el administrador puede eliminar avisos");
   const ids = ([] as string[]).concat(req.body.ids ?? []);
-  if (ids.length === 0) return back(res, "/crm/pendientes", "No seleccionaste ningún aviso");
+  if (ids.length === 0) return back(res, "/crm/incidencias", "No seleccionaste ningún aviso");
   const items = list<Handoff>("handoffs");
   const targets = items.filter((h) => ids.includes(h.id));
   for (const h of targets) moveToTrash("handoffs", h, `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})`, me(res).email);
   save("handoffs", items.filter((h) => !ids.includes(h.id)));
-  back(res, "/crm/pendientes", targets.length === 0 ? "No había nada que hacer" : `${targets.length} aviso(s) movido(s) a la papelera`);
+  back(res, "/crm/incidencias", targets.length === 0 ? "No había nada que hacer" : `${targets.length} aviso(s) movido(s) a la papelera`);
 });
 
 crm.post("/correos/:id", async (req, res) => {
   const accion = String(req.body.accion ?? "");
   const inbox = list<InboxMail>("email_inbox");
   const m = inbox.find((x) => x.id === req.params.id);
-  if (!m) return back(res, "/crm/pendientes", "No encuentro ese correo");
+  if (!m) return back(res, "/crm/correos", "No encuentro ese correo");
   // Acciones nuevas del módulo mensajes/clientes (18/10/2026), solo
   // alcanzables desde /crm/correos -- Pendientes no tiene botones para
   // ellas, así que no cambia nada de lo que ya funcionaba ahí.
@@ -1715,22 +1728,22 @@ crm.post("/correos/:id", async (req, res) => {
     m.answered = true;
     m.answered_by = "equipo";
     save("email_inbox", inbox);
-    return back(res, "/crm/pendientes", "Hecho");
+    return back(res, "/crm/correos", "Hecho");
   }
   const text = String(req.body.respuesta ?? "").trim();
-  if (!text) return back(res, "/crm/pendientes", "Escribe la respuesta antes de enviarla");
+  if (!text) return back(res, "/crm/correos", "Escribe la respuesta antes de enviarla");
   const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "su consulta"}`;
   const thread = m.thread_id && m.in_reply_to ? { threadId: m.thread_id, inReplyTo: m.in_reply_to } : undefined;
   const delivery = await deliverEmail(m.from, subject, `${text}\n\nAutomóviles Lucero`, thread);
   m.answered = true;
   m.answered_by = "equipo";
   save("email_inbox", inbox);
-  if (delivery.status === "sent") back(res, "/crm/pendientes", "Respuesta enviada");
-  else if (delivery.status === "queued") back(res, "/crm/pendientes", "Respuesta guardada: se enviará cuando Gmail esté conectado");
-  else back(res, "/crm/pendientes", "No se pudo enviar. Inténtalo otra vez");
+  if (delivery.status === "sent") back(res, "/crm/correos", "Respuesta enviada");
+  else if (delivery.status === "queued") back(res, "/crm/correos", "Respuesta guardada: se enviará cuando Gmail esté conectado");
+  else back(res, "/crm/correos", "No se pudo enviar. Inténtalo otra vez");
 });
 
-crm.get("/avisos", (_req, res) => res.redirect("/crm/pendientes"));
+crm.get("/avisos", (_req, res) => res.redirect("/crm/incidencias"));
 
 // ---------- Mensajes: filtros, estados y acciones masivas compartidas ----------
 // Módulo CRM mensajes/clientes (18/10/2026). Las tres bandejas (Correos,
