@@ -621,7 +621,7 @@ body{margin:0;font:20px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;b
    tocar), solo se reordenan con flexbox. En móvil (<=900px) vuelve a la
    barra horizontal de siempre, que es más usable con poco ancho. */
 body{display:flex;min-height:100vh}
-header{background:#1d2b44;color:#fff;padding:20px 16px;display:flex;flex-direction:column;gap:16px;flex:0 0 230px;width:230px;min-height:100vh;position:sticky;top:0;align-self:flex-start}
+header{background:#1d2b44;color:#fff;padding:20px 16px;display:flex;flex-direction:column;gap:16px;flex:0 0 230px;width:230px;height:100vh;position:sticky;top:0;align-self:flex-start}
 header strong{font-size:22px}
 header form{margin-top:auto}
 nav{display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto}
@@ -630,7 +630,7 @@ nav a.on{background:#f0b429;color:#1d2b44;font-weight:700}
 main{flex:1;min-width:0;max-width:980px;margin:0 auto;padding:18px}
 @media(max-width:900px){
 body{display:block}
-header{position:static;width:auto;flex:none;min-height:0;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
+header{position:static;width:auto;flex:none;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
 header form{margin-top:0}
 nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
 }
