@@ -97,6 +97,19 @@ async function sendAlertEmail(alert: Alert) {
   }
 }
 
+// FALLO REAL detectado (21/10/2026, "esto de llamar ya no entiendo qué
+// significa... no sé a qué 84 clientes tengo que llamar ya"): el banner
+// "Llamar ya" del Hoy cuenta TODAS las alertas "pendiente", incluyendo
+// avisos puramente informativos que notifyTeam ya manda por WhatsApp/correo
+// en el momento (nueva visita agendada, recordatorio de 30 min, visita
+// cancelada) -- esos no necesitan que nadie los "atienda" aparte, ya
+// cumplieron su función al enviarse, y como nadie los marcaba nunca se
+// acumulaban sin parar hasta inflar el número a 84 sin que hubiera 84
+// llamadas reales pendientes. Se resuelven solos al crearse -- siguen
+// quedando registrados (para el correo de respaldo y la Papelera), solo
+// que no cuentan como "pendiente de llamar".
+const SELF_RESOLVING_KINDS: AlertKind[] = ["visita_agendada", "visita_proxima", "visita_cancelada"];
+
 export function raiseAlert(input: {
   kind: AlertKind;
   lead_phone?: string | null;
@@ -115,6 +128,7 @@ export function raiseAlert(input: {
       new Date(a.created_at).getTime() > since,
   );
   if (repeated) return null;
+  const selfResolving = SELF_RESOLVING_KINDS.includes(input.kind);
   const alert: Alert = {
     id: crypto.randomUUID(),
     kind: input.kind,
@@ -122,10 +136,10 @@ export function raiseAlert(input: {
     name: input.name ?? null,
     reason: input.reason,
     draft_note: input.draft_note ?? null,
-    status: "pendiente",
+    status: selfResolving ? "atendida" : "pendiente",
     email_status: "pendiente",
     created_at: new Date().toISOString(),
-    done_at: null,
+    done_at: selfResolving ? new Date().toISOString() : null,
   };
   appendToCollection("alerts", alert);
   // No se espera al correo: el aviso ya queda registrado aunque falle el envío.

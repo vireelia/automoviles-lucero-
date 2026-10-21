@@ -253,6 +253,27 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", changed: report });
 });
 
+// Limpieza puntual (21/10/2026, misma auditoría -- "no sé a qué 84 clientes
+// tengo que llamar ya"): las alertas ya existentes de visita_agendada/
+// visita_proxima/visita_cancelada se habían acumulado como "pendiente" desde
+// antes de que raiseAlert las auto-resolviera (ver alerts.ts) -- se marcan
+// aquí una sola vez como atendidas, sin borrarlas, para que el conteo de
+// "Llamar ya" refleje de verdad llamadas pendientes, no avisos ya enviados.
+app.post("/admin/resolve_routine_alerts", requireAdminToken, (_req, res) => {
+  const SELF_RESOLVING = new Set(["visita_agendada", "visita_proxima", "visita_cancelada"]);
+  const alerts = readCollection<{ kind: string; status: string; done_at: string | null }>("alerts");
+  let changed = 0;
+  for (const a of alerts) {
+    if (a.status === "pendiente" && SELF_RESOLVING.has(a.kind)) {
+      a.status = "atendida";
+      a.done_at = new Date().toISOString();
+      changed++;
+    }
+  }
+  if (changed > 0) writeCollection("alerts", alerts);
+  res.json({ status: "ok", changed });
+});
+
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
 // (Ramón/José), nunca de un cliente -- a diferencia del resto de
 // conversaciones, que el propio webhook /webhooks/zernio-whatsapp aprende

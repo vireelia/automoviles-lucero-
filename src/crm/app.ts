@@ -1024,7 +1024,7 @@ crm.get("/", (req, res) => {
     error: "error al enviar",
   };
   const alertBlock = alerts.length
-    ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>Llamar ya (${alerts.length})</b></div>` +
+    ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>Llamar ya (${alerts.length})</b> -- las tarjetas de abajo, con el motivo y el botón para llamar o escribir a cada una.</div>` +
       (me(res).role === "admin" ? simpleBulkBar("alertas-bulk", "/crm/alertas-masivo", alerts.length, "¿Eliminar las alertas seleccionadas? Úsalo solo para pruebas; se pueden recuperar luego desde la Papelera.") : "") +
       alerts
         .map(
@@ -1493,16 +1493,43 @@ crm.get("/alertas-activas.json", (_req, res) => {
   res.json({ ids: pendingAlerts().map((a) => a.id) });
 });
 
+// Avisos ya atendidos (21/10/2026, petición real: "que no me sigan
+// apareciendo tantos números en pendientes" -- con 28+ avisos reales
+// acumulados, la lista única se volvía inmanejable). Antes, al pulsar "Ya
+// lo he atendido" el aviso simplemente desaparecía sin dejar rastro en el
+// CRM (solo quedaba en el JSON crudo) -- ahora tiene su propia sección,
+// separada de "por atender", igual que Clientes para publicidad separó los
+// leads de coches vendidos sin perderlos de vista.
+function handoffCard(h: Handoff, isAdmin: boolean, attended: boolean): string {
+  const reasonRaw = h.reason ?? "Aviso";
+  const waLink = extractWaLink(reasonRaw);
+  const afterWaStrip = waLink ? reasonRaw.replace(waLink, "").replace(/\s*[:.]\s*$/, "").trim() : reasonRaw;
+  const { portal, rest: reasonClean } = extractLeadingPortal(afterWaStrip);
+  const actions = attended
+    ? `${isAdmin ? `<button class="btn light" type="submit" name="accion" value="reabrir">Reabrir</button>` : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre?')">Eliminar</button>` : ""}`
+    : `<button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), "") : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre? Úsalo solo para pruebas, no para avisos reales ya atendidos.')">Eliminar</button>` : ""}`;
+  return `<div class="card ${attended ? "off" : h.reason_type === "reserva" ? "urgent" : h.urgency === "alta" ? "urgent" : "pending"}" style="position:relative"><div class="info">
+${isAdmin ? simpleCheckbox("avisos-bulk", h.id) : ""}
+<h3>${esc(reasonClean || "Aviso")}</h3>
+<p><span class="tag ${h.reason_type === "reserva" || h.reason_type === "compra_inmediata" || h.urgency === "alta" ? "t-hot" : ""}">${h.reason_type === "reserva" ? "RESERVA 500€" : h.reason_type === "compra_inmediata" ? "Compra inmediata" : h.urgency === "alta" ? "Urgente" : "Normal"}</span> ${portal ? platformTag(portal) : ""}</p>
+<p>Cliente: <b>${esc(contactLabel(h.lead_phone, h.lead_name))}${h.lead_name && h.lead_phone && !isCochesNetRelay(h.lead_phone) ? ` (${esc(h.lead_phone)})` : ""}</b> · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
+<form method="post" action="/crm/avisos/${esc(h.id)}">${actions}</form>
+</div></div>`;
+}
 crm.get("/pendientes", async (req, res) => {
   const isAdmin = me(res).role === "admin";
-  const handoffs = list<Handoff>("handoffs").filter((h) => h.status === "requested").sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const v = typeof req.query.v === "string" ? req.query.v : "por_atender";
+  const allHandoffs = list<Handoff>("handoffs");
+  const pendientes = allHandoffs.filter((h) => h.status === "requested").sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const atendidos = allHandoffs.filter((h) => h.status === "done").sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const handoffs = v === "atendidos" ? atendidos : pendientes;
   // Backfill automático (18/10/2026, "es una automatizacion, no nada para
   // hacer a mano"): cualquier aviso de reserva ya existente que se quedara
   // sin su reserva real (de antes de este arreglo) se completa solo la
   // próxima vez que alguien abra Pendientes -- nadie tiene que pulsar nada.
   // Idempotente (tryAutoCreateReservation no duplica si ya existe), barato
   // (pocos avisos reales a la vez), y nunca rompe la carga de la página.
-  for (const h of handoffs) {
+  for (const h of pendientes) {
     if (h.reason_type === "reserva" && h.lead_phone) {
       const lead = list<Lead>("leads").find((l) => l.phone === h.lead_phone);
       await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
@@ -1513,30 +1540,16 @@ crm.get("/pendientes", async (req, res) => {
   // incluir tareas vencidas") -- solo un aviso con enlace a Seguimiento,
   // sin duplicar aquí la lista completa de tareas.
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
+  const tab = (key: string, label: string, n: number) =>
+    `<a href="/crm/pendientes?v=${key}" class="tag" style="text-decoration:none;${v === key ? "background:#1d2b44;color:#fff" : ""}">${label} (${n})</a>`;
   const body = `<h1>Pendientes</h1>
 <p class="sub">Aquí aparece lo que Miguel, Carolina o Daniel no pueden resolver solos. Cuando lo hayas atendido, pulsa el botón.</p>
 ${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">⏰ ${overdueTasks.length} tarea(s) de seguimiento vencida(s) -- <a class="link" href="/crm/seguimiento?f=vencidas">verlas</a></div>` : ""}
-<h2>Avisos de los agentes (${handoffs.length})</h2>
-${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Úsalo solo para avisos ya atendidos; se pueden recuperar luego desde la Papelera.") : ""}
-${handoffs.length === 0 ? `<div class="empty">No hay avisos.</div>` : handoffs.map((h) => {
-  // Misma limpieza ya aplicada a las alertas de Hoy (18/10/2026, "estas
-  // fichas de pendiente organizalas bien"): el motivo a veces trae el
-  // portal y un enlace wa.me incrustados como texto plano -- se separan
-  // en su propia etiqueta/botón en vez de un título larguísimo con una
-  // URL suelta dentro.
-  const reasonRaw = h.reason ?? "Aviso";
-  const waLink = extractWaLink(reasonRaw);
-  const afterWaStrip = waLink ? reasonRaw.replace(waLink, "").replace(/\s*[:.]\s*$/, "").trim() : reasonRaw;
-  const { portal, rest: reasonClean } = extractLeadingPortal(afterWaStrip);
-  return `<div class="card ${h.reason_type === "reserva" ? "urgent" : h.urgency === "alta" ? "urgent" : "pending"}" style="position:relative"><div class="info">
-${isAdmin ? simpleCheckbox("avisos-bulk", h.id) : ""}
-<h3>${esc(reasonClean || "Aviso")}</h3>
-<p><span class="tag ${h.reason_type === "reserva" || h.reason_type === "compra_inmediata" || h.urgency === "alta" ? "t-hot" : ""}">${h.reason_type === "reserva" ? "RESERVA 500€" : h.reason_type === "compra_inmediata" ? "Compra inmediata" : h.urgency === "alta" ? "Urgente" : "Normal"}</span> ${portal ? platformTag(portal) : ""}</p>
-<p>Cliente: <b>${esc(contactLabel(h.lead_phone, h.lead_name))}${h.lead_name && h.lead_phone && !isCochesNetRelay(h.lead_phone) ? ` (${esc(h.lead_phone)})` : ""}</b> · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
-<form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), "") : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre? Úsalo solo para pruebas, no para avisos reales ya atendidos.')">Eliminar</button>` : ""}</form>
-</div></div>`;
-}).join("")}
-<h2>Correos para contestar (${mails.length})</h2>
+<p>${tab("por_atender", "🔴 Clientes por atender", pendientes.length)} ${tab("atendidos", "✅ Clientes ya atendidos", atendidos.length)}</p>
+<h2>${v === "atendidos" ? "Clientes ya atendidos" : "Clientes por atender"} (${handoffs.length})</h2>
+${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Se pueden recuperar luego desde la Papelera.") : ""}
+${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay nada pendiente -- todo atendido."}</div>` : handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}
+${v === "por_atender" ? `<h2>Correos para contestar (${mails.length})</h2>
 ${mails.length === 0 ? `<div class="empty">No hay correos por contestar.</div>` : mails.map((m) => `<div class="card ${m.outcome === "pendiente_gestion_portal" ? "urgent" : "pending"}"><div class="info">
 <h3>${esc(m.subject || "(sin asunto)")}</h3>
 <p>De: <b>${esc(m.from)}</b>${m.portal ? ` · <span class="tag">${esc(m.portal)}</span>` : ""} · ${esc(fmtDate(m.created_at))}</p>
@@ -1550,7 +1563,7 @@ ${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alc
 <textarea name="respuesta" rows="4"></textarea>
 <button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button>
 <button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>
-</form></div></div>`).join("")}`;
+</form></div></div>`).join("")}` : ""}`;
   res.type("html").send(page("Pendientes", me(res), body, msgOf(req)));
 });
 
@@ -1565,9 +1578,14 @@ crm.post("/avisos/:id", (req, res) => {
     save("handoffs", items.filter((x) => x.id !== h.id));
     return back(res, "/crm/pendientes", "Aviso movido a la papelera");
   }
+  if (accion === "reabrir") {
+    h.status = "requested";
+    save("handoffs", items);
+    return back(res, "/crm/pendientes?v=por_atender", "Aviso reabierto");
+  }
   h.status = "done";
   save("handoffs", items);
-  back(res, "/crm/pendientes", "Aviso atendido");
+  back(res, "/crm/pendientes?v=atendidos", "Aviso atendido");
 });
 
 // Borrado masivo de avisos (18/10/2026, "el borrar masivo lo quiero en
