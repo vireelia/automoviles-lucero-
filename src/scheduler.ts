@@ -140,6 +140,51 @@ function checkTeamUpcomingVisits() {
   if (changed) writeCollection("appointments", appointments);
 }
 
+// Aviso de "buen final de día" al equipo (22/10/2026, a petición real:
+// "buscar una manera de que el agente contacte al final del día... para
+// que no se cierre la ventana"). Un mensaje nuestro NO reabre la ventana
+// de 24h de Meta por sí solo -- solo lo hace un mensaje REAL de Ramón/José
+// hacia el número del negocio. Lo que sí hace este aviso es invitar a una
+// respuesta rápida (un emoji basta) -- si contestan, esa respuesta SÍ es
+// un mensaje suyo real y les reabre la ventana para el día siguiente. Una
+// sola vez al día, cerca del cierre de la tarde (19:00), nunca de madrugada.
+const DAILY_KEEPALIVE_TARGET_MINUTES = 18 * 60 + 45; // 18:45 Madrid
+
+function madridNowMinutes(): number {
+  const [h, m] = new Date().toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+  return h * 60 + m;
+}
+
+function madridTodayStr(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+}
+
+type KeepaliveState = { last_sent_date?: string };
+
+async function checkDailyTeamKeepalive() {
+  const today = madridTodayStr();
+  const state = readCollection<KeepaliveState>("daily_keepalive_state", [{}]);
+  if (state[0]?.last_sent_date === today) return;
+  if (Math.abs(madridNowMinutes() - DAILY_KEEPALIVE_TARGET_MINUTES) > 10) return;
+
+  const team = [
+    { name: "Ramón", phone: businessInfo.responsables.ramon.transfer_number },
+    { name: "José", phone: businessInfo.responsables.jose.transfer_number },
+  ];
+  for (const member of team) {
+    try {
+      const result = await sendWhatsapp({
+        lead_phone: member.phone,
+        message: `Buenas tardes, ${member.name}. Todo bien por hoy -- si puedes, respóndeme aunque sea con un 👍 para que no se te cierre el WhatsApp con el sistema. ¡Buen final de día!`,
+      });
+      console.log(`[scheduler] keepalive de fin de día a ${member.name}: ${result.data?.delivery_status ?? "sin respuesta"}`);
+    } catch (err) {
+      console.error(`[scheduler] error en keepalive a ${member.name}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  writeCollection("daily_keepalive_state", [{ last_sent_date: today }]);
+}
+
 type Lead = {
   id: string;
   phone: string | null;
@@ -185,6 +230,7 @@ export function startScheduler() {
         checkAppointmentReminders();
         checkTeamUpcomingVisits();
         checkStaleFollowups();
+        await checkDailyTeamKeepalive();
         // FALLO REAL detectado (21/10/2026, "los chicos de Automóviles
         // Lucero no se van a poner a enviarles las cosas manuales"): el
         // backlog de correos que chocaron con el tope diario se vaciaba
