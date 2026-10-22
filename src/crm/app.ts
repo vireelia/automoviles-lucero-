@@ -663,6 +663,12 @@ h2{font-size:24px;margin:22px 0 10px}
 .sub{color:#4b5563;margin:0 0 16px;font-size:20px}
 .msg{background:#e3f6e8;border:3px solid #2e9e55;padding:14px 18px;border-radius:14px;margin-bottom:16px;font-size:21px;font-weight:600}
 .card{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.08);display:flex;gap:16px;flex-wrap:wrap;position:relative}
+/* Fichas de clientes en horizontal, varias por fila (22/10/2026, petición
+   real: "ese orden usalo para los clientes... en todas las secciones" --
+   mismo criterio visto en el CRM de Klikar: grid que reparte en columnas
+   según el ancho, en vez de una lista apilada de una sola columna). */
+.cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:14px}
+.cards-grid .card{margin:0}
 .card .info{flex:1;min-width:220px}
 .card h3{margin:0 0 6px;font-size:23px}
 .card p{margin:4px 0;font-size:20px}
@@ -1094,8 +1100,10 @@ function channelActivitySection(channel: "VOICE" | "WHATSAPP" | "EMAIL", user: C
   const resv = list<Reservation>("reservations").filter((r) => r.channel === channel && r.status !== "cancelled" && r.status !== "expired");
   if (appts.length === 0 && resv.length === 0) return "";
   return `<div class="box"><h3 style="margin-top:0">Visitas y reservas de este canal</h3>
+<div class="cards-grid">
 ${resv.length > 0 ? resv.map((r) => reservationCard(r, user)).join("") : ""}
 ${appts.length > 0 ? appts.map(apptCard).join("") : ""}
+</div>
 </div>`;
 }
 // Mensaje del botón "Escribir por WhatsApp" con contexto real (22/10/2026,
@@ -1253,9 +1261,9 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
 ${alertBlock}
 ${todoBlock}
 ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", todayAppts.length + upcoming.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-<h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : todayAppts.map(apptCard).join("")}
-<h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : upcoming.map(apptCard).join("")}
-<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : toAttend.map((r) => reservationCard(r, me(res))).join("")}`;
+<h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="cards-grid">${todayAppts.map(apptCard).join("")}</div>`}
+<h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="cards-grid">${upcoming.map(apptCard).join("")}</div>`}
+<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="cards-grid">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
   res.type("html").send(page("Hoy", me(res), body, msgOf(req)));
 });
 
@@ -1275,10 +1283,12 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
+<div class="cards-grid">
 ${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
+</div>
 ${q && found === 0 ? `<div class="empty">No encuentro nada con eso.</div>` : ""}`;
   res.type("html").send(page("Hoy", me(res), body));
 });
@@ -1296,7 +1306,7 @@ crm.get("/semana", (req, res) => {
     .sort((x, y) => `${x.requested_date}${x.requested_time}`.localeCompare(`${y.requested_date}${y.requested_time}`));
   const body = `<div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h1 style="margin:0">Visitas de esta semana</h1><button class="btn ok" onclick="window.print()">Imprimir</button></div>
 <p class="sub">Próximos siete días.</p>
-${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : appts.map(apptCard).join("")}`;
+${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : `<div class="cards-grid">${appts.map(apptCard).join("")}</div>`}`;
   res.type("html").send(page("Visitas", me(res), body));
 });
 
@@ -1329,7 +1339,7 @@ crm.get("/citas", (req, res) => {
 <p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 <p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} ${pill("no_presentado", "No presentado")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
 ${items.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", items.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : items.map(apptCard).join("")}`;
+${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : `<div class="cards-grid">${items.map(apptCard).join("")}</div>`}`;
   res.type("html").send(page("Visitas", me(res), body, msgOf(req)));
 });
 
@@ -1435,12 +1445,14 @@ crm.get("/reservas", async (req, res) => {
 <p class="sub">Una reserva aparta un coche con 500 €. Cuando el cliente paga, compruébalo y pulsa "Confirmar la reserva".</p>
 ${interesados.length > 0 ? `<h2>Interesados en reservar, sin confirmar (${interesados.length})</h2>
 <p class="sub">Pidieron reservar pero no se pudo identificar un único coche real en el catálogo -- confírmalo a mano con el cliente y crea la reserva abajo.</p>
+<div class="cards-grid">
 ${interesados.map((h) => `<div class="card urgent" style="position:relative"><div class="info">
 <h3>${esc(h.reason ?? "Quiere reservar")}</h3>
 <p><span class="tag t-hot">RESERVA 500€ -- sin confirmar</span></p>
 <p>Cliente: <b>${esc(contactLabel(h.lead_phone, h.lead_name))}</b> · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
 <form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waButton(h.lead_phone, waMessageFor(h.lead_phone, h.lead_name, "¿En qué le podemos ayudar con la reserva?"))}</form>
-</div></div>`).join("")}` : ""}
+</div></div>`).join("")}
+</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Hacer una reserva a mano</h3>
 <form method="post" action="/crm/reservas">
 <label>Nombre del cliente</label><input name="nombre" placeholder="Si no lo escribes, queda sin nombre en el CRM">
@@ -1449,7 +1461,7 @@ ${interesados.map((h) => `<div class="card urgent" style="position:relative"><di
 <button class="btn ok" type="submit">Crear la reserva</button></form></div>
 <p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 ${bulkEligible > 0 ? simpleBulkBar("reservas-bulk", "/crm/reservas-masivo", bulkEligible, "¿Eliminar las reservas canceladas/caducadas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-${reservations.length === 0 ? `<div class="empty">No hay reservas en esta lista.</div>` : reservations.map((r) => reservationCard(r, me(res))).join("")}`;
+${reservations.length === 0 ? `<div class="empty">No hay reservas en esta lista.</div>` : `<div class="cards-grid">${reservations.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
   res.type("html").send(page("Reservas", me(res), body, msgOf(req)));
 });
 
@@ -1616,7 +1628,7 @@ ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;bord
 <div><label>Fecha límite (opcional)</label><input type="date" name="due_at"></div></div>
 <button class="btn ok" type="submit">Crear tarea</button></form></div>
 <p>${pill("pendientes", "Pendientes")} ${pill("vencidas", "Vencidas")} ${pill("completadas", "Completadas")} ${pill("todas", "Todas")}</p>
-${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : items.map(taskCard).join("")}`;
+${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : `<div class="cards-grid">${items.map(taskCard).join("")}</div>`}`;
   res.type("html").send(page("Seguimiento", me(res), body, msgOf(req)));
 });
 crm.post("/seguimiento", (req, res) => {
@@ -1772,7 +1784,7 @@ ${vCard("atendidos", "✅", "#dcfce7", "#16a34a", "Ya atendidas", "Resueltas, pa
 </div>
 <h2>${v === "atendidos" ? "Incidencias ya atendidas" : "Incidencias por atender"} (${handoffs.length})</h2>
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Se pueden recuperar luego desde la Papelera.") : ""}
-${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay incidencias pendientes."}</div>` : handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}`;
+${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay incidencias pendientes."}</div>` : `<div class="cards-grid">${handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}</div>`}`;
   res.type("html").send(page("Incidencias", me(res), body, msgOf(req)));
 });
 
@@ -1982,7 +1994,7 @@ ${channelActivitySection("EMAIL", me(res))}
 ${filterPills("/crm/correos", f, q, true)}
 ${searchBox("/crm/correos", f, q, "Buscar por remitente, asunto o portal")}
 ${items.length > 0 ? bulkBar("/crm/correos", f, q, items.length, true) : ""}
-${items.length === 0 ? `<div class="empty">No hay correos en esta vista.</div>` : items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
+${items.length === 0 ? `<div class="empty">No hay correos en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/correos", m.id)}
 <h3>${esc(m.subject || "(sin asunto)")}</h3>
 <p class="meta">De: <b>${esc(m.from)}</b> · ${platformTag(m.portal)} · ${esc(fmtDate(m.created_at))}</p>
@@ -1996,7 +2008,7 @@ ${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alc
 ${!m.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
-</form></div></div>`).join("")}`;
+</form></div></div>`).join("")}</div>`}`;
   res.type("html").send(page("Correos", me(res), body, msgOf(req)));
 });
 
@@ -2033,7 +2045,7 @@ ${channelActivitySection("WHATSAPP", me(res))}
 ${filterPills("/crm/whatsapp", f, q, true)}
 ${searchBox("/crm/whatsapp", f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/whatsapp", f, q, items.length, true) : ""}
-${items.length === 0 ? `<div class="empty">No hay mensajes de WhatsApp en esta vista.</div>` : items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
+${items.length === 0 ? `<div class="empty">No hay mensajes de WhatsApp en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/whatsapp", m.id)}
 <h3>${esc(m.phone)}</h3>
 <p class="meta"><span class="tag">WhatsApp directo</span> · ${esc(fmtDate(m.created_at))}</p>
@@ -2044,7 +2056,7 @@ ${m.reply_text ? `<p style="margin-top:10px"><b>Respuesta de la IA:</b></p><div 
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
-</form></div></div>`).join("")}`;
+</form></div></div>`).join("")}</div>`}`;
   res.type("html").send(page("WhatsApp", me(res), body, msgOf(req)));
 });
 
@@ -2094,7 +2106,7 @@ ${channelActivitySection("VOICE", me(res))}
 ${filterPills("/crm/llamadas", f, q, false)}
 ${searchBox("/crm/llamadas", f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/llamadas", f, q, items.length, false) : ""}
-${items.length === 0 ? `<div class="empty">No hay llamadas en esta vista.</div>` : items.map((m) => `<div class="card ${m.needs_review ? "urgent" : ""} ${m.read ? "msg-read" : "msg-unread"}" style="position:relative"><div class="info">
+${items.length === 0 ? `<div class="empty">No hay llamadas en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="card ${m.needs_review ? "urgent" : ""} ${m.read ? "msg-read" : "msg-unread"}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/llamadas", m.id)}
 <h3>${esc(m.from_number || "Número desconocido")}</h3>
 <p class="meta"><span class="tag">${esc(m.channel === "VOICE" ? "Voz" : "Chat")}</span> · Duración ${dur(m.duration_ms)} · ${esc(fmtDate(m.created_at))}</p>
@@ -2104,7 +2116,7 @@ ${m.summary ? `<div class="box" style="background:#f7f8fa;white-space:pre-wrap;f
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar esta llamada? Se puede recuperar luego desde la Papelera.")}
-</form></div></div>`).join("")}`;
+</form></div></div>`).join("")}</div>`}`;
   res.type("html").send(page("Llamadas", me(res), body, msgOf(req)));
 });
 
@@ -2205,7 +2217,7 @@ ${prioCard("P3", "🟡", "#fef9c3", "#a16207", "P3 -- Normal", "Sin prisa")}
 ${prioCard("P4", "⚪", "#f3f4f6", "#4b5563", "P4 -- Diferida", "Más adelante")}
 </div>
 <div class="legend">${calPill("todas", "Toda calidad")} ${calPill("completo", "Completo")} ${calPill("incompleto", "Incompleto")} ${calPill("dudoso", "Dudoso")} ${calPill("posible_duplicado", "Posible duplicado")} ${calPill("no_comercial", "No comercial")}</div>
-${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate, appts)).join("")}`;
+${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : `<div class="cards-grid">${filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate, appts)).join("")}</div>`}`;
   res.type("html").send(page("Entrada de leads", me(res), body, msgOf(req)));
 });
 
@@ -2261,7 +2273,7 @@ ${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin con
 </div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
@@ -2473,12 +2485,12 @@ crm.get("/publicidad", (req, res) => {
   const leads = list<Lead>("leads").filter((l) => l.marketing_list).sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
   const body = `<h1>Clientes para publicidad</h1>
 <p class="sub">Preguntaron por un coche que ya no está disponible y no quieren otro modelo -- no son una oportunidad activa, pero sí un contacto real para cuando entre algo parecido. Nunca se les escribe desde aquí solos: esto es solo una lista para campañas futuras.</p>
-${leads.length === 0 ? `<div class="empty">No hay clientes en esta lista.</div>` : leads.map((l) => `<div class="card"><div class="info">
+${leads.length === 0 ? `<div class="empty">No hay clientes en esta lista.</div>` : `<div class="cards-grid">${leads.map((l) => `<div class="card"><div class="info">
 <h3>${esc(l.name || l.phone || "Sin datos de contacto")}</h3>
 <p>${l.phone ? `<b>${esc(l.phone)}</b> · ` : ""}${esc(l.vehicle_interest || "Sin vehículo registrado")}</p>
 ${l.notes ? `<p>${esc(l.notes)}</p>` : ""}
 <form method="post" action="/crm/clientes/${esc(l.id)}">${phoneLink(l.phone)}<button class="btn light" type="submit" name="accion" value="quitar_publicidad">Quitar de esta lista</button></form>
-</div></div>`).join("")}`;
+</div></div>`).join("")}</div>`}`;
   res.type("html").send(page("Clientes para publicidad", me(res), body, msgOf(req)));
 });
 
