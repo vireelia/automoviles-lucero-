@@ -651,7 +651,7 @@ header form{margin-top:auto}
 nav{display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto}
 nav a{color:#fff;text-decoration:none;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:18px}
 nav a.on{background:#f0b429;color:#1d2b44;font-weight:700}
-main{flex:1;min-width:0;max-width:980px;margin:0 auto;padding:18px}
+main{flex:1;min-width:0;max-width:1440px;margin:0 auto;padding:18px}
 @media(max-width:900px){
 body{display:block}
 header{position:static;width:auto;flex:none;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
