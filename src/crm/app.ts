@@ -670,8 +670,17 @@ h2{font-size:24px;margin:22px 0 10px}
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:14px}
 .cards-grid .card{margin:0}
 .card .info{flex:1;min-width:220px}
-.card h3{margin:0 0 6px;font-size:23px}
-.card p{margin:4px 0;font-size:20px}
+.card h3{margin:0 0 6px;font-size:18px}
+.card p{margin:3px 0;font-size:15px}
+/* Fichas más pequeñas dentro de .cards-grid (22/10/2026, petición real:
+   "me gusta asi [el contenido]... pero que sea un poco mas pequeño no ta
+   grande") -- mismo contenido/orden de siempre, solo más compacto: no se
+   toca el tamaño de letra/botones del resto del CRM (serían demasiado
+   pequeños para pulsar fuera de una ficha). */
+.card .tag{font-size:13px;padding:4px 10px;margin:3px 4px 3px 0}
+.card .tletra{width:26px;height:26px;font-size:13px}
+.card .origen{font-size:13px;padding:3px 8px}
+.card .btn{font-size:14px;padding:8px 14px;margin:4px 6px 4px 0}
 .when{background:#1d2b44;color:#fff;border-radius:14px;padding:12px 16px;text-align:center;min-width:112px}
 .when b{display:block;font-size:40px;line-height:1}
 .when span{font-size:18px;display:block}
