@@ -18,6 +18,16 @@ import { businessInfo } from "../data/business-info.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { currentVehicles } from "../data/vehicles-current.js";
+import { callUrgentAlert } from "../integrations/twilio-voice.js";
+
+// Solo para esto se llama por voz si falla el WhatsApp (22/10/2026, caso
+// real de Ramón: el número de WhatsApp del negocio ES su número personal,
+// avisarle a él por WhatsApp desde esa misma cuenta nunca puede funcionar
+// -- se estaría enviando un mensaje de su cuenta a su propia cuenta. La
+// llamada no depende de ninguna ventana ni cuenta, así que es el único
+// canal que de verdad siempre llega -- pero solo para lo urgente de
+// verdad, nunca para un recordatorio rutinario de visita.
+const URGENT_ALERT_KINDS: AlertKind[] = ["handoff_urgente", "reserva_pendiente", "lead_caliente"];
 
 const TEAM: { name: string; phone: string }[] = [
   { name: "Ramón", phone: businessInfo.responsables.ramon.transfer_number },
@@ -46,8 +56,10 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, reason: whatsappText });
   for (const member of TEAM) {
+    let whatsappOk = false;
     try {
       const result = await sendWhatsappText(member.phone, whatsappText);
+      whatsappOk = result.ok;
       appendToCollection("team_notifications", {
         id: crypto.randomUUID(),
         kind,
@@ -76,6 +88,24 @@ async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: stri
         created_at: new Date().toISOString(),
       });
       console.warn(`[team-notify] fallo enviando WhatsApp a ${member.name}:`, error);
+    }
+    if (!whatsappOk && URGENT_ALERT_KINDS.includes(kind)) {
+      const callResult = await callUrgentAlert(member.phone, whatsappText);
+      appendToCollection("team_notifications", {
+        id: crypto.randomUUID(),
+        kind,
+        to_name: member.name,
+        to_phone: member.phone,
+        lead_phone: leadPhone,
+        message: whatsappText,
+        delivery_status: callResult.ok ? "sent" : "failed",
+        error: callResult.ok ? null : callResult.error,
+        via: "voz",
+        created_at: new Date().toISOString(),
+      });
+      if (!callResult.ok) {
+        console.warn(`[team-notify] tampoco se pudo llamar a ${member.name} (${callResult.error}) -- queda el aviso por correo/CRM.`);
+      }
     }
   }
 }

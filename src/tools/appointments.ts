@@ -1,10 +1,12 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
-import { isGoogleConnected, calendarBusy, calendarCreateEvent } from "../integrations/google.js";
+import { isGoogleConnected, calendarBusy, calendarCreateEvent, sendGmail } from "../integrations/google.js";
 import { isMadridHoliday } from "../data/holidays-madrid-2026.js";
 import { withAppointmentLock } from "./appointment-lock.js";
 import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
+import { sendWhatsapp } from "./delivery.js";
+import { currentVehicles } from "../data/vehicles-current.js";
 
 function now() {
   return new Date().toISOString();
@@ -43,10 +45,43 @@ function withinWeekdayWindow(minutes: number): boolean {
   return WEEKDAY_WINDOWS.some((w) => minutes >= w.start && minutes <= w.end);
 }
 
-// Sin agenda conectada, una cita nunca puede quedar "confirmed" -- como
-// mucho "requested" (Sección 22: CITA != RESERVA, y no hay autoridad de
-// agenda todavía). Se valida el horario confirmado para no aceptar una
-// solicitud claramente fuera de lo que el negocio ya dijo que no atiende.
+function vehicleLabel(vehicleId: string | undefined): string {
+  if (!vehicleId) return "el vehículo";
+  const v = currentVehicles().find((x) => x.id === vehicleId);
+  return v ? `${v.make} ${v.model} ${v.version}`.trim() : "el vehículo";
+}
+
+function formatVisitDate(dateStr: string): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Madrid" });
+}
+
+// Mensaje de confirmación con la hora al cliente (22/10/2026, a petición
+// real: "crea un sistema de automatizacion que confirme visitas y le
+// envie mensajes de asistencia con la hora"). Solo cuando la cita queda de
+// verdad confirmada automáticamente -- nunca para el caso de fin de
+// semana/festivo ni cuando falta día u hora, porque ahí no hay nada real
+// que confirmar todavía.
+async function sendVisitConfirmationMessage(contact: string | undefined, vehicleId: string | undefined, dateStr: string, timeStr: string): Promise<void> {
+  if (!contact) return;
+  const message = `Hola, le escribe Automóviles Lucero. Su visita para ver ${vehicleLabel(vehicleId)} queda confirmada para el ${formatVisitDate(dateStr)} a las ${timeStr}. Le esperamos.`;
+  try {
+    if (contact.includes("@")) {
+      if (isGoogleConnected()) await sendGmail(contact, "Visita confirmada -- Automóviles Lucero", message);
+    } else {
+      await sendWhatsapp({ lead_phone: contact, message });
+    }
+  } catch (err) {
+    console.error("[appointments] no se pudo enviar el mensaje de confirmación de visita:", err instanceof Error ? err.message : err);
+  }
+}
+
+// Con día y hora reales dentro de horario laboral se confirma sola (ver
+// decisión real del negocio más abajo, 22/10/2026) -- sin eso, como mucho
+// queda "requested" (Sección 22: CITA != RESERVA). Se valida el horario
+// confirmado para no aceptar una solicitud claramente fuera de lo que el
+// negocio ya dijo que no atiende.
 export async function createAppointment(args: {
   lead_phone?: string;
   vehicle_id?: string;
@@ -95,27 +130,44 @@ export async function createAppointment(args: {
     });
   }
 
+  // FALLO REAL detectado y decisión real del negocio (22/10/2026, "que
+  // confirme la visita porque el equipo no puede comprobar si el coche
+  // esta disponible, lo hacemos asi"): antes toda cita quedaba "requested"
+  // esperando que una persona la confirmara a mano -- en la práctica eso
+  // nunca llegaba a pasar a tiempo (ver caso real de Lucía/Ignacio esta
+  // misma semana, visitas perdidas por falta de confirmación a tiempo).
+  // Con día y hora reales dentro de horario laboral, se confirma sola --
+  // el negocio decide asumir el riesgo de disponibilidad del coche en vez
+  // del riesgo de perder la visita por no confirmarla nadie. Día/hora no
+  // conocidos (ej. fin de semana/festivo, ya cubierto arriba, o cuando el
+  // cliente aún no ha dicho cuándo) siguen "requested" -- no hay nada real
+  // que confirmar todavía.
+  const canAutoConfirm = Boolean(args.requested_date && args.requested_time);
   const appointment = {
     id: crypto.randomUUID(),
     ...args,
-    status: "requested" as const,
+    status: (canAutoConfirm ? "confirmed" : "requested") as "confirmed" | "requested",
     created_at: now(),
   };
   appendToCollection("appointments", appointment);
   await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
-  createAutoTask({
-    lead_phone: args.lead_phone ?? null,
-    type: "confirmar_visita",
-    reason: `Confirmar visita del ${args.requested_date ?? "día por fijar"} ${args.requested_time ?? ""}.`,
-    source_ref: appointment.id,
-    channel: args.channel ?? null,
-    due_at: args.requested_date && args.requested_time ? `${args.requested_date}T${args.requested_time}:00` : null,
-  });
+  if (canAutoConfirm) {
+    await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
+  } else {
+    createAutoTask({
+      lead_phone: args.lead_phone ?? null,
+      type: "confirmar_visita",
+      reason: `Confirmar visita del ${args.requested_date ?? "día por fijar"} ${args.requested_time ?? ""}.`,
+      source_ref: appointment.id,
+      channel: args.channel ?? null,
+      due_at: null,
+    });
+  }
   return envelope({
     status: "ok",
     data: appointment,
     source: "registro interno (sin agenda real conectada)",
-    conflicts: ["Cita NO confirmada -- solo solicitada. Pendiente de que el negocio la confirme manualmente."],
+    conflicts: canAutoConfirm ? [] : ["Cita NO confirmada -- falta día u hora. Pendiente de que el cliente concrete cuándo."],
   });
 }
 

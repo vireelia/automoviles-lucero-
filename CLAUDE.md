@@ -42,6 +42,7 @@ Backend único (Node.js + TypeScript, Express) que da servicio a un concesionari
 | `FACEBOOK_WEBHOOK_VERIFY_TOKEN`, `FACEBOOK_APP_SECRET`, `FACEBOOK_PAGE_ACCESS_TOKEN` | Messenger |
 | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API |
 | `TWILIO_AUTH_TOKEN`, `TWILIO_VOICE_WEBHOOK_URL` | Telefonía |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_VOICE_FROM_NUMBER` | Llamada saliente de aviso urgente al equipo (`callUrgentAlert`, `integrations/twilio-voice.ts`) -- `TWILIO_VOICE_FROM_NUMBER` es el número real de Twilio que hace la llamada (el mismo de voz entrante, `+34 919 58 88 87`) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | OAuth Gmail + Calendar |
 | `N8N_VOZ_WEBHOOK_URL` | Reenvío de análisis de llamadas de voz |
 | `CRM_ADMIN_EMAIL`, `CRM_ADMIN_PASSWORD`, `CRM_FORCE_ADMIN_RESET` | Bootstrap del admin del CRM |
@@ -76,6 +77,7 @@ Piezas:
 - **Conectar el número**: `/crm/integraciones` → caja "WhatsApp -- vía Zernio" → botón que abre el Embedded Signup. Al volver, Zernio da un `accountId` que hay que copiar a `ZERNIO_WHATSAPP_ACCOUNT_ID` (variable de entorno, no hay sitio en disco para guardarlo) y redesplegar.
 - **Webhook de mensajes entrantes**: `POST /webhooks/zernio-whatsapp` — hay que darle esta URL a Zernio (panel de webhooks) suscrita al evento `message.received`, con un secreto que va también en `ZERNIO_WEBHOOK_SECRET`. Verifica la firma HMAC-SHA256 sobre el cuerpo crudo, guarda qué `conversationId` corresponde a cada teléfono (`zernio_whatsapp_conversations`, en `zernio.ts`) y responde con el mismo agente de chat (`handleChatMessage`) que WhatsApp directo/Facebook/email.
 - **Limitación real de WhatsApp (de Meta, no de Zernio)**: sólo se puede responder con texto libre dentro de las 24h desde el último mensaje del cliente, y sólo si ya hay una conversación conocida (el cliente escribió primero). Para iniciar una conversación nueva haría falta una plantilla aprobada por Meta — no implementado, por ahora `sendZernioWhatsappText` devuelve error controlado (`sin_conversacion_abierta`) en ese caso, nunca finge un envío.
+- **El número de WhatsApp del negocio ES el número personal de Ramón, cuenta en modo "Coexistence" con la app real de WhatsApp Business** (confirmado 22/10/2026 vía `zernio.accounts.listAccounts` → `metadata.isCoexistence: true`). Esto significa que **avisar a Ramón por WhatsApp desde ese mismo número nunca puede funcionar** -- sería su propia cuenta enviándose un mensaje a sí misma, no es un problema de plantilla pendiente ni de ventana de 24h. Por eso `notifyTeam` (`tools/team-notify.ts`) llama por voz (`integrations/twilio-voice.ts`, `callUrgentAlert`) cuando el WhatsApp falla en un aviso urgente de verdad (`URGENT_ALERT_KINDS`) -- la llamada no depende de ninguna cuenta ni ventana. Para José (contacto externo real a esa cuenta) la plantilla/ventana de 24h sigue siendo la vía correcta.
 
 ## Comandos útiles
 
