@@ -385,6 +385,25 @@ function contactLabel(phone: string | null | undefined, name: string | null | un
   return "Cliente de Coches.net (sin nombre)";
 }
 
+// Igual que whatsappGreetingFor (Clientes), pero para Avisos/Reservas/
+// Incidencias que solo tienen un aviso suelto (sin el Lead completo a mano)
+// -- a petición real (22/10/2026, "aqui y en todos los mensajes que
+// especifique el motivo el coche todo, porque estoy probando y no me
+// aparece el cambio"): el mensaje de WhatsApp debe llevar nombre y coche
+// real, nunca un saludo genérico tipo "sobre su reserva". A propósito NO se
+// usa el texto interno del aviso (`reason`/`notes`) como mensaje -- ese
+// texto está escrito para el equipo (p. ej. "la transferencia a Ramón
+// falló y nadie le ha llamado de vuelta todavía") y nunca debe llegar al
+// cliente tal cual, aunque mencione el coche correcto.
+function waMessageFor(phone: string | null | undefined, name: string | null | undefined, closing?: string): string {
+  const lead = phone ? findLeadByContact(phone) : undefined;
+  const realName = name || lead?.name;
+  const greeting = realName ? `Hola ${realName}` : "Hola";
+  const vehicle = lead?.vehicle_interest;
+  const vehiclePart = vehicle ? ` sobre ${vehicle}` : "";
+  return `${greeting}, le escribe Automóviles Lucero${vehiclePart}. ${closing ?? "¿En qué le podemos ayudar?"}`;
+}
+
 // Frase con lo que quiere el cliente, sacada de sus visitas y reservas reales.
 function situation(l: Lead): string {
   const key = l.phone ?? "";
@@ -561,19 +580,6 @@ ${parsed.inquiry ? `<p style="margin:0"><b>Dice:</b> "${esc(parsed.inquiry)}"</p
 }
 function normalizePhoneDigits(p: string | null | undefined): string {
   return (p ?? "").replace(/\D/g, "");
-}
-// Si la alerta no trae nombre, se busca en Clientes por el mismo teléfono
-// (normalizado, con o sin "+") -- a petición real (18/10/2026: "que salga
-// el nombre"). Nunca se inventa: si tampoco hay lead con nombre, se queda
-// en el teléfono, nunca un nombre puesto a mano.
-function alertDisplayName(a: { name: string | null; lead_phone: string | null }): string {
-  if (a.name) return a.name;
-  if (a.lead_phone) {
-    const digits = normalizePhoneDigits(a.lead_phone);
-    const lead = digits ? list<Lead>("leads").find((l) => normalizePhoneDigits(l.phone) === digits) : undefined;
-    if (lead?.name) return lead.name;
-  }
-  return a.lead_phone || "Cliente sin nombre";
 }
 function confirmButton(label: string, action: string, extra: string, question: string): string {
   return `<button class="btn ${extra}" name="accion" value="${esc(action)}" onclick="return confirm('${esc(question)}')">${esc(label)}</button>`;
@@ -1178,7 +1184,20 @@ crm.get("/", (req, res) => {
   const todo: { href: string; text: string }[] = [
     ...toAttend.filter((r) => r.status === "pending_verification").map((r) => ({ href: "/crm/reservas", text: `Confirmar la reserva de ${vehicleName(r.vehicle_id)}` })),
     ...todayAppts.filter((a) => a.status === "requested").map((a) => ({ href: "/crm/citas", text: `Confirmar la visita de hoy a las ${a.requested_time ?? "?"}` })),
-    ...handoffs.map((h) => ({ href: h.reason_type === "reserva" ? "/crm/reservas" : "/crm/incidencias", text: `Atender: ${h.reason ?? "un cliente necesita una persona"}` })),
+    // FALLO REAL detectado (22/10/2026, "al darle a enviar mensaje de
+    // whatsapp, no envia nada"): cuando el motivo traía un enlace wa.me
+    // incrustado como texto plano, toda la fila quedaba envuelta en un único
+    // <a> hacia /crm/incidencias -- el "enlace" de WhatsApp que se veía no
+    // era clicable de verdad, solo texto dentro de otro enlace. Ahora, si hay
+    // wa.me real, el href va directo a WhatsApp (con el motivo real como
+    // mensaje) y se abre en pestaña nueva; si no, sigue yendo a su sección.
+    ...handoffs.map((h) => {
+      const reasonRaw = h.reason ?? "un cliente necesita una persona";
+      const waLink = extractWaLink(reasonRaw);
+      const text = waLink ? reasonRaw.replace(waLink, "").replace(/\s*[:.]\s*$/, "").trim() : reasonRaw;
+      const href = waLink ? `${waLink}?text=${encodeURIComponent(waMessageFor(h.lead_phone, h.lead_name))}` : h.reason_type === "reserva" ? "/crm/reservas" : "/crm/incidencias";
+      return { href, text: `Atender: ${text}` };
+    }),
     ...mails.map((m) => ({ href: "/crm/correos", text: `Contestar a ${m.from}` })),
     ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
@@ -1206,11 +1225,11 @@ crm.get("/", (req, res) => {
             const { portal, rest: reasonClean } = extractLeadingPortal(afterWaStrip);
             return `<div class="card" style="position:relative"><div class="info">
 ${me(res).role === "admin" ? simpleCheckbox("alertas-bulk", a.id) : ""}
-<h3>${esc(alertDisplayName(a))}</h3>
+<h3>${esc(contactLabel(a.lead_phone, a.name))}</h3>
 <p><span class="tletra t-hot">${a.kind === "lead_caliente" ? "C" : a.kind === "reserva_pendiente" ? "R" : "!"}</span><span class="tag t-hot">${a.kind === "lead_caliente" ? "Caliente" : a.kind === "reserva_pendiente" ? "RESERVA 500€" : "Urgente"}</span> ${portal ? platformTag(portal) : ""} ${esc(fmtDate(a.created_at))}</p>
 <p>${esc(reasonClean)}</p>
 <p>Aviso por correo: ${esc(emailLabels[a.email_status] ?? a.email_status)}</p>
-${phoneLink(a.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), "") : ""}
+${phoneLink(a.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), waMessageFor(a.lead_phone, a.name)) : ""}
 <form method="post" action="/crm/alertas/${esc(a.id)}" style="display:inline"><button class="btn ok" type="submit">Ya le he llamado</button></form>
 ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.id)}" style="display:inline"><button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar esta alerta para siempre? Úsalo solo para pruebas.')">Eliminar</button></form>` : ""}
 </div></div>`;
@@ -1219,7 +1238,7 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
         .join("")
     : "";
   const todoBlock = todo.length
-    ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${t.href}">→ ${esc(t.text)}</a>`).join("")}</div>`
+    ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${esc(t.href)}"${t.href.startsWith("https://wa.me/") ? ' target="_blank" rel="noopener"' : ""}>→ ${esc(t.text)}</a>`).join("")}</div>`
     : `<div class="allok">Todo hecho. No hay nada pendiente.</div>`;
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
 <div class="box noprint"><button class="btn ok" type="button" onclick="window.lucerosonar && window.lucerosonar()">🔔 Activar y probar el sonido de avisos</button><p class="sub" style="margin:8px 0 0">Púlsalo una vez al abrir el CRM cada día -- oirás un pitido de prueba ahora mismo. A partir de ahí, sonará solo cuando llegue un aviso urgente, sin que tengas que hacer nada más.</p></div>
@@ -1420,7 +1439,7 @@ ${interesados.map((h) => `<div class="card urgent" style="position:relative"><di
 <h3>${esc(h.reason ?? "Quiere reservar")}</h3>
 <p><span class="tag t-hot">RESERVA 500€ -- sin confirmar</span></p>
 <p>Cliente: <b>${esc(contactLabel(h.lead_phone, h.lead_name))}</b> · ${esc(fmtDate(h.created_at))}</p>${h.notes ? `<p>${esc(h.notes)}</p>` : ""}
-<form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waButton(h.lead_phone, "Hola, le escribe Automóviles Lucero sobre su reserva.")}</form>
+<form method="post" action="/crm/avisos/${esc(h.id)}"><button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waButton(h.lead_phone, waMessageFor(h.lead_phone, h.lead_name, "¿En qué le podemos ayudar con la reserva?"))}</form>
 </div></div>`).join("")}` : ""}
 <div class="box"><h3 style="margin-top:0">Hacer una reserva a mano</h3>
 <form method="post" action="/crm/reservas">
@@ -1712,7 +1731,7 @@ function handoffCard(h: Handoff, isAdmin: boolean, attended: boolean): string {
   const { portal, rest: reasonClean } = extractLeadingPortal(afterWaStrip);
   const actions = attended
     ? `${isAdmin ? `<button class="btn light" type="submit" name="accion" value="reabrir">Reabrir</button>` : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre?')">Eliminar</button>` : ""}`
-    : `<button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), "") : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre? Úsalo solo para pruebas, no para avisos reales ya atendidos.')">Eliminar</button>` : ""}`;
+    : `<button class="btn ok" type="submit">Ya lo he atendido</button>${phoneLink(h.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), waMessageFor(h.lead_phone, h.lead_name)) : ""}${isAdmin ? `<button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar este aviso para siempre? Úsalo solo para pruebas, no para avisos reales ya atendidos.')">Eliminar</button>` : ""}`;
   return `<div class="card ${attended ? "off" : h.reason_type === "reserva" ? "urgent" : h.urgency === "alta" ? "urgent" : "pending"}" style="position:relative"><div class="info">
 ${isAdmin ? simpleCheckbox("avisos-bulk", h.id) : ""}
 <h3>${esc(reasonClean || "Aviso")}</h3>
