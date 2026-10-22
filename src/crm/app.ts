@@ -5,13 +5,13 @@ import { readCollection, writeCollection } from "../store.js";
 import { userForSession, createSession, destroySession, verifyPassword, hashPassword, listUsers, saveUsers, type CrmUser } from "./auth.js";
 import { vehiclesSeed } from "../data/vehicles-seed.js";
 import { currentVehicles } from "../data/vehicles-current.js";
-import { createReservationPending, confirmReservation, cancelReservation } from "../tools/reservations.js";
+import { createReservationPending, confirmReservation, cancelReservation, reopenReservation } from "../tools/reservations.js";
 import { getOfficialStatus, setOfficialStatus, type OfficialVehicleStatus } from "../tools/vehicle-state.js";
 import { deliverEmail } from "../email/agent.js";
 import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
 import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
-import { notifyVisitCancelled } from "../tools/team-notify.js";
+import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
 import { normalizePhone } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
@@ -1029,6 +1029,12 @@ function apptCard(a: Appointment): string {
     a.status === "requested" ? button("Confirmar la visita", "confirmar", "ok") : "",
     a.status === "confirmed" ? button("No se presentó", "no_presentado", "light") : "",
     a.status !== "cancelled" ? confirmButton("Cancelar la visita", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
+    // "Devolver" (22/10/2026, petición real: "asi como hayan botones de
+    // cancelar... que hayan botones de devolver") -- reactiva una visita
+    // cancelada por error, vuelve a pendiente de confirmar (no se asume
+    // directamente "confirmed": el equipo la confirma con el botón de al
+    // lado si de verdad quiere auto-confirmarla).
+    a.status === "cancelled" ? button("Devolver la visita", "devolver", "ok") : "",
     // A petición real (16/10/2026, "en esta sección quiero que añadas la
     // papelera, para borrar consultas antiguas"): disponible siempre, no
     // solo cuando está cancelada -- una consulta vieja pendiente de
@@ -1063,6 +1069,12 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(confirmButton("Coche vendido y entregado", "vendido", "ok", "¿Seguro que el coche ya está vendido y entregado?"));
   if (sold) actions.unshift(`<span class="tag" style="background:#e5e7eb">Coche vendido y entregado</span>`);
   if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(confirmButton("Cancelar la reserva", "cancelar", "danger", "¿Seguro que quieres cancelar esta reserva?"));
+  // "Devolver" (22/10/2026, petición real: "asi como hayan botones de
+  // cancelar... que hayan botones de devolver") -- reactiva una reserva
+  // cancelada por error, con 15 días de plazo nuevos (nunca el plazo ya
+  // vencido). No se ofrece si el coche ya se vendió de verdad mientras
+  // tanto (reopenReservation también lo bloquea del lado del servidor).
+  if (r.status === "cancelled" && !sold) actions.push(confirmButton("Devolver la reserva", "devolver", "ok", "¿Volver a activar esta reserva? Empieza de nuevo con 15 días de plazo."));
   // Papelera real (13/10/2026): solo para reservas ya cerradas (canceladas o
   // caducadas) y solo el administrador -- una reserva viva nunca se borra
   // sin pasar antes por cancelar/confirmar, para no perder el rastro de un
@@ -1378,6 +1390,9 @@ crm.post("/citas/:id", async (req, res) => {
     // existe y se usa desde el agente, pero cancelar a mano desde el CRM
     // nunca pasaba por ahí. Mismo aviso, mismo sitio, sin duplicar lógica.
     await notifyVisitCancelled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
+  } else if (accion === "devolver") {
+    a.status = "requested";
+    await notifyVisitScheduled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
   } else if (accion === "no_presentado") {
     a.status = "no_presentado";
     // Seguimiento comercial (20/10/2026, sección 14, "un cliente no se
@@ -1404,9 +1419,11 @@ crm.post("/citas/:id", async (req, res) => {
       ? "Visita confirmada"
       : accion === "cancelar"
         ? "Visita cancelada"
-        : accion === "no_presentado"
-          ? "Marcada como no presentado"
-          : "Día y hora cambiados",
+        : accion === "devolver"
+          ? "Visita devuelta: vuelve a estar pendiente de confirmar"
+          : accion === "no_presentado"
+            ? "Marcada como no presentado"
+            : "Día y hora cambiados",
   );
 });
 
@@ -1543,6 +1560,13 @@ crm.post("/reservas/:id", (req, res) => {
   if (accion === "cancelar") {
     cancelReservation({ reservation_id: r.id, reason: "cancelada desde el CRM" });
     return back(res, "/crm/reservas", "Reserva cancelada: el coche vuelve a estar disponible");
+  }
+  if (accion === "devolver") {
+    const result = reopenReservation({ reservation_id: r.id });
+    if (result.status !== "ok") {
+      return back(res, "/crm/reservas", result.error_code === "vehicle_already_sold" ? "No se puede devolver: el coche ya se vendió" : "No se pudo devolver esta reserva");
+    }
+    return back(res, "/crm/reservas", "Reserva devuelta: vuelve a estar activa con 15 días de plazo");
   }
   if (accion === "vendido") {
     setOfficialStatus(r.vehicle_id, "SOLD", r.id);

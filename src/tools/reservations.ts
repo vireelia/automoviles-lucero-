@@ -159,3 +159,29 @@ export function cancelReservation(args: { reservation_id: string; reason?: strin
 
   return envelope({ status: "ok", data: { ...reservation, cancel_reason: args.reason ?? null }, source: "acción manual del equipo" });
 }
+
+// "Devolver" una reserva cancelada por error (22/10/2026, petición real:
+// "asi como hayan botones de cancelar... que hayan botones de devolver") --
+// la reactiva desde cero (nueva caducidad de 15 días, igual que una
+// reserva nueva, nunca el plazo ya vencido de la cancelada). No se puede
+// devolver si el coche ya quedó vendido mientras tanto -- no se pisa una
+// venta real.
+export function reopenReservation(args: { reservation_id: string }) {
+  const reservations = readReservations();
+  const reservation = reservations.find((r) => r.id === args.reservation_id);
+  if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
+  if (reservation.status !== "cancelled") {
+    return envelope({ status: "denied", error_code: "reservation_not_cancelled", data: reservation });
+  }
+  if (getOfficialStatus(reservation.vehicle_id) === "SOLD") {
+    return envelope({ status: "denied", error_code: "vehicle_already_sold" });
+  }
+
+  const durationDays = businessInfo.reservation.duration_days;
+  reservation.status = "pending_payment";
+  reservation.expires_at = new Date(now().getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+  writeCollection("reservations", reservations);
+  setOfficialStatus(reservation.vehicle_id, "RESERVATION_PENDING", reservation.id);
+
+  return envelope({ status: "ok", data: reservation, source: "acción manual del equipo" });
+}
