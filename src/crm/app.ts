@@ -91,6 +91,13 @@ type Reservation = {
   // Ausente en reservas históricas -- se muestran como "Origen desconocido",
   // nunca se adivina.
   channel?: string | null;
+  // Caducidad real de la señal (22/10/2026, a petición real: "tenemos que
+  // poner caducidad") -- ya la calcula createReservationPending (15 días,
+  // ver business-info.ts) pero nunca se mostraba en el CRM, así que Ramón
+  // y José no tenían forma de saber cuándo se acababa el plazo sin mirar
+  // el JSON a mano. Ausente en reservas muy antiguas -- se omite la fecha
+  // en vez de inventarla.
+  expires_at?: string | null;
 };
 type Appointment = {
   id: string;
@@ -1046,12 +1053,21 @@ function reservationCard(r: Reservation, user: CrmUser): string {
     ? waButton(r.lead_phone, `Hola, le escribe Automóviles Lucero. Para apartar el ${veh} necesitamos 500 €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.`)
     : "";
   const canBulkDelete = (r.status === "cancelled" || r.status === "expired") && user.role === "admin";
+  // Caducidad visible (22/10/2026): solo importa mientras la reserva sigue
+  // viva (pagada/por verificar) -- una vez confirmada, cancelada o
+  // caducada, el plazo ya no significa nada. Aviso en rojo si quedan 3
+  // días o menos, para que el equipo no se entere tarde.
+  const daysLeft = r.expires_at ? Math.ceil((new Date(r.expires_at).getTime() - Date.now()) / 86400000) : null;
+  const expiryLine = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification")
+    ? `<p>${daysLeft <= 3 ? `<b style="color:#b3261e">⏰ Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} día${daysLeft === 1 ? "" : "s"})</b>` : `Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} días)`}</p>`
+    : "";
   return `<div class="card ${tone}" id="r-${esc(r.id)}" style="position:relative"><div class="info">
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <h3>${esc(veh)}</h3>
 <p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span> <span class="tag">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></p>
 <p>Cliente: <b>${esc(contactLabel(r.lead_phone, null))}</b></p>
 <p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
+${expiryLine}
 <form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}
 <div class="row"><div><label>✏️ Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
 <div><label>✏️ Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div></div>
