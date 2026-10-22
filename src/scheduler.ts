@@ -148,7 +148,7 @@ function checkTeamUpcomingVisits() {
 // respuesta rápida (un emoji basta) -- si contestan, esa respuesta SÍ es
 // un mensaje suyo real y les reabre la ventana para el día siguiente. Una
 // sola vez al día, cerca del cierre de la tarde (19:00), nunca de madrugada.
-const DAILY_KEEPALIVE_TARGET_MINUTES = 18 * 60 + 45; // 18:45 Madrid
+const DAILY_KEEPALIVE_TARGET_MINUTES = 19 * 60 + 30; // 19:30 Madrid (a petición real)
 
 function madridNowMinutes(): number {
   const [h, m] = new Date().toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
