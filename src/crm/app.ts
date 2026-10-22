@@ -1092,9 +1092,26 @@ ${resv.length > 0 ? resv.map((r) => reservationCard(r, user)).join("") : ""}
 ${appts.length > 0 ? appts.map(apptCard).join("") : ""}
 </div>`;
 }
-function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, volver?: string): string {
+// Mensaje del botón "Escribir por WhatsApp" con contexto real (22/10/2026,
+// petición real de Ramón: "que también salga el coche por el que está
+// interesado, y hora y fecha") -- antes era un saludo genérico sin ningún
+// dato, igual para todos los clientes. Ahora, si el lead tiene coche de
+// interés guardado y/o una cita real (no cancelada, con día y hora) se
+// añaden -- nunca se inventa ninguno de los dos si no existen de verdad.
+function whatsappGreetingFor(l: Lead, appts: Appointment[]): string {
+  const greeting = l.name ? `Hola ${l.name}` : "Hola";
+  const vehiclePart = l.vehicle_interest ? ` sobre ${l.vehicle_interest}` : "";
+  const myAppt = l.phone ? appts.find((a) => a.lead_phone === l.phone && a.status !== "cancelled" && a.requested_date && a.requested_time) : undefined;
+  let visitPart = "";
+  if (myAppt) {
+    const d = dayLabel(myAppt.requested_date);
+    visitPart = ` Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${myAppt.requested_time}.`;
+  }
+  return `${greeting}, le escribe Automóviles Lucero${vehiclePart}.${visitPart} ¿En qué le podemos ayudar?`;
+}
+function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, appts: Appointment[], volver?: string): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
-  const whatsapp = waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?");
+  const whatsapp = waButton(l.phone, whatsappGreetingFor(l, appts));
   // A petición real (21/10/2026, "cada vez que borre un lead que no me
   // cambie de sección"): se lleva la lista filtrada actual (t/d, o la
   // búsqueda) para volver exactamente ahí, no a la lista sin filtrar.
@@ -1239,7 +1256,7 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}
+${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -2110,7 +2127,7 @@ crm.post("/llamadas-masivo", (req, res) => {
 // orden" -- distinto de Clientes, que es el listado histórico completo
 // para buscar a alguien. Sin acciones masivas en esta v1: toda edición
 // real sigue pasando por "Ver ficha" hacia /crm/clientes/:id, donde ya vive.
-function entradaCard(l: Lead, phase: LeadPhase, quality: DataQuality, priority: LeadPriority, duplicate: Lead | null): string {
+function entradaCard(l: Lead, phase: LeadPhase, quality: DataQuality, priority: LeadPriority, duplicate: Lead | null, appts: Appointment[]): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
   const prioCls = priority === "P1" ? "t-hot" : priority === "P2" ? "t-warm" : "";
   const qualityNote = quality === "posible_duplicado" && duplicate
@@ -2122,7 +2139,7 @@ function entradaCard(l: Lead, phase: LeadPhase, quality: DataQuality, priority: 
 <p>${qualityNote}</p>
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${waButton(l.phone, "Hola, le escribe Automóviles Lucero. ¿En qué le podemos ayudar?")}
+<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${waButton(l.phone, whatsappGreetingFor(l, appts))}
 </div></div>`;
 }
 crm.get("/entrada", (req, res) => {
@@ -2169,7 +2186,7 @@ ${prioCard("P3", "🟡", "#fef9c3", "#a16207", "P3 -- Normal", "Sin prisa")}
 ${prioCard("P4", "⚪", "#f3f4f6", "#4b5563", "P4 -- Diferida", "Más adelante")}
 </div>
 <div class="legend">${calPill("todas", "Toda calidad")} ${calPill("completo", "Completo")} ${calPill("incompleto", "Incompleto")} ${calPill("dudoso", "Dudoso")} ${calPill("posible_duplicado", "Posible duplicado")} ${calPill("no_comercial", "No comercial")}</div>
-${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate)).join("")}`;
+${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : filtered.map((r) => entradaCard(r.lead, r.phase, r.quality, r.priority, r.duplicate, appts)).join("")}`;
   res.type("html").send(page("Entrada de leads", me(res), body, msgOf(req)));
 });
 
@@ -2225,7 +2242,7 @@ ${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin con
 </div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
