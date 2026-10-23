@@ -27,6 +27,9 @@ export const businessInfo = {
     note: "Ampliado 29/09/2026 en llamada real con Ramón: detectar y responder en el idioma del cliente cuando sea un idioma de la UE, no solo español/inglés.",
     validation_status: "owner_confirmed",
   },
+  // cochesnet también está escrita tal cual, a mano, en prompt-chat.md (enlace
+  // del primer contacto, 23/10/2026) -- si este valor cambia, hay que
+  // actualizar el prompt también, no solo aquí.
   profiles: {
     cochesnet: "https://www.coches.net/concesionario/autolunaslagunamadrid/",
     wallapop: "https://es.wallapop.com/user/autolunaslagunam-355383125",
