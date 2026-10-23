@@ -275,6 +275,31 @@ app.post("/admin/resolve_routine_alerts", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", changed });
 });
 
+// Corrección puntual (23/10/2026, "siguen sin salirme los leads"): 108 de
+// 119 leads reales aparecieron archivados en producción, la mayoría a los
+// 0-1 días de creados -- imposible por el corte real de
+// LEAD_ARCHIVE_INACTIVE_DAYS (45 días), así que no es un archivado legítimo.
+// Nada se perdió (archivado solo oculta de la vista principal, nunca
+// borra), pero no tenía sentido obligar a desarchivar uno por uno. Solo
+// desarchiva los que no llevan de verdad 45 días reales sin actividad --
+// un archivado legítimo (si alguno lo fuera) se queda como está.
+app.post("/admin/fix_bad_auto_archive", requireAdminToken, (_req, res) => {
+  const DAYS = 45;
+  const cutoff = Date.now() - DAYS * 24 * 60 * 60 * 1000;
+  const leads = readCollection<{ archived?: boolean; updated_at?: string; created_at: string }>("leads");
+  let changed = 0;
+  for (const l of leads) {
+    if (!l.archived) continue;
+    const lastActivity = new Date(l.updated_at ?? l.created_at).getTime();
+    if (Number.isFinite(lastActivity) && lastActivity >= cutoff) {
+      l.archived = false;
+      changed++;
+    }
+  }
+  if (changed > 0) writeCollection("leads", leads);
+  res.json({ status: "ok", changed, total_leads: leads.length });
+});
+
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
 // (Ramón/José), nunca de un cliente -- a diferencia del resto de
 // conversaciones, que el propio webhook /webhooks/zernio-whatsapp aprende
