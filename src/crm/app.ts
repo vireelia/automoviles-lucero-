@@ -2269,7 +2269,9 @@ crm.get("/clientes", (req, res) => {
   const leads = all
     .filter((l) => (t === "archivados" ? l.archived : !l.archived && !l.marketing_list && (t === "todos" || l.temperature === t)))
     .filter((l) => matchesDateFilter(dateFilter, l.created_at, today))
-    .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
+    // Petición real (23/10/2026, "organizalos de primeros a ultimos segun las
+    // fechas"): de más antiguo a más reciente (antes era al revés).
+    .sort((a, b) => (a.updated_at ?? a.created_at).localeCompare(b.updated_at ?? b.created_at));
   // Tarjetas grandes en vez de pestañas de texto (21/10/2026, "misma
   // organizacion que influencers en klikar"): mismo filtro de siempre
   // (?t=), solo con icono + contador real por grupo.
