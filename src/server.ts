@@ -509,6 +509,14 @@ app.get("/debug/zernio_whatsapp_conversations", requireAdminToken, (_req, res) =
   res.json(readCollection<unknown>("zernio_whatsapp_conversations").slice(-200));
 });
 
+app.get("/debug/whatsapp_inbox", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("whatsapp_inbox").slice(-50));
+});
+
+app.get("/debug/zernio_whatsapp_processed", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("zernio_whatsapp_processed").slice(-50));
+});
+
 app.get("/debug/team_notifications", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("team_notifications").slice(-200));
 });
