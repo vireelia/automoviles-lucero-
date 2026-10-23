@@ -147,10 +147,15 @@ export function raiseAlert(input: {
   return alert;
 }
 
+// FALLO REAL detectado (23/10/2026, petición real: "estos clientes que
+// aparecen de ultimo, con la fecha, que aparezcan primeros, porque arriba
+// salen solo los antiguos"): ordenaba de más antiguo a más reciente -- lo
+// más urgente (lo que acaba de llegar) quedaba enterrado al final de la
+// lista. Mismo criterio que el resto del CRM (más reciente primero).
 export function pendingAlerts(): Alert[] {
   return readCollection<Alert>("alerts")
     .filter((a) => a.status === "pendiente")
-    .sort((x, y) => x.created_at.localeCompare(y.created_at));
+    .sort((x, y) => y.created_at.localeCompare(x.created_at));
 }
 
 export function markAlertDone(id: string): boolean {

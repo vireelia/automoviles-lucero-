@@ -6,7 +6,7 @@ import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, cr
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
-import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation } from "./tools/reservations.js";
+import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation, reopenReservation } from "./tools/reservations.js";
 import { requestFinancing } from "./tools/financing.js";
 import { handleRetellWebhook } from "./tools/webhooks.js";
 import { verifyRetellSignature } from "./integrations/retell-signature.js";
@@ -224,6 +224,7 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 }
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
+app.post("/admin/reopen_reservation", requireAdminToken, route((a) => reopenReservation(a)));
 
 // Migración puntual (21/10/2026, auditoría real de "estamos perdiendo
 // reservas/visitas"): varios registros antiguos de appointments/handoffs
