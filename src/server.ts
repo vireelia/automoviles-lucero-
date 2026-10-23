@@ -27,7 +27,7 @@ import {
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled } from "./tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled } from "./tools/agent-toggle.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { businessInfo } from "./data/business-info.js";
@@ -310,6 +310,13 @@ app.post("/admin/restore_from_trash", requireAdminToken, (req, res) => {
     if (restoreFromTrash(id)) restored++;
   }
   res.json({ status: "ok", restored, requested: ids.length });
+});
+
+// Mismo interruptor que "Activar a Carolina aquí" en /crm/integraciones,
+// sin pasar por sesión (23/10/2026, tras reponer Zernio).
+app.post("/admin/whatsapp_agent/:enabled", requireAdminToken, (req, res) => {
+  setWhatsappZernioAgentEnabled(req.params.enabled === "activar", "admin-token");
+  res.json({ status: "ok", whatsapp_agent_enabled: isWhatsappZernioAgentEnabled(), email_auto_send_enabled: isEmailAutoSendEnabled() });
 });
 
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
