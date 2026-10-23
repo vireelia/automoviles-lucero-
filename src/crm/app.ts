@@ -1210,9 +1210,16 @@ crm.get("/", (req, res) => {
   // aparecían en Hoy, el único sitio pensado para "qué hago ahora mismo" --
   // aunque ya se veían en /crm/seguimiento. Mismo patrón {href,text}.
   const urgentTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString())));
-  const todo: { href: string; text: string }[] = [
+  // Petición real (23/10/2026, "separa las visitas de hoy y las reservas...
+  // pero con las visitas y reservas por confirmar"): antes todo iba junto en
+  // una sola lista -- confirmar una reserva se perdía entre avisos de
+  // incidencias, correos y tareas. Ahora "por confirmar" (lo que de verdad
+  // hay que decidir hoy) vive separado del resto.
+  const todoConfirmar: { href: string; text: string }[] = [
     ...toAttend.filter((r) => r.status === "pending_verification").map((r) => ({ href: "/crm/reservas", text: `Confirmar la reserva de ${vehicleName(r.vehicle_id)}` })),
     ...todayAppts.filter((a) => a.status === "requested").map((a) => ({ href: "/crm/citas", text: `Confirmar la visita de hoy a las ${a.requested_time ?? "?"}` })),
+  ];
+  const todoOtros: { href: string; text: string }[] = [
     // FALLO REAL detectado (22/10/2026, "al darle a enviar mensaje de
     // whatsapp, no envia nada"): cuando el motivo traía un enlace wa.me
     // incrustado como texto plano, toda la fila quedaba envuelta en un único
@@ -1266,9 +1273,11 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
         )
         .join("")
     : "";
-  const todoBlock = todo.length
-    ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todo.slice(0, 8).map((t) => `<a href="${esc(t.href)}"${t.href.startsWith("https://wa.me/") ? ' target="_blank" rel="noopener"' : ""}>→ ${esc(t.text)}</a>`).join("")}</div>`
-    : `<div class="allok">Todo hecho. No hay nada pendiente.</div>`;
+  const todoLinks = (items: { href: string; text: string }[]) =>
+    items.slice(0, 8).map((t) => `<a href="${esc(t.href)}"${t.href.startsWith("https://wa.me/") ? ' target="_blank" rel="noopener"' : ""}>→ ${esc(t.text)}</a>`).join("");
+  const todoBlock = `${todoConfirmar.length ? `<div class="todo"><h2 style="margin-top:0">Visitas y reservas por confirmar</h2>${todoLinks(todoConfirmar)}</div>` : ""}
+${todoOtros.length ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todoLinks(todoOtros)}</div>` : ""}
+${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Todo hecho. No hay nada pendiente.</div>` : ""}`;
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
 <div class="box noprint"><button class="btn ok" type="button" onclick="window.lucerosonar && window.lucerosonar()">🔔 Activar y probar el sonido de avisos</button><p class="sub" style="margin:8px 0 0">Púlsalo una vez al abrir el CRM cada día -- oirás un pitido de prueba ahora mismo. A partir de ahí, sonará solo cuando llegue un aviso urgente, sin que tengas que hacer nada más.</p></div>
 <form class="search noprint" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit">Buscar</button></form>
