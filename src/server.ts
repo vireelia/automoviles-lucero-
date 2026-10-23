@@ -14,6 +14,7 @@ import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
+import { restoreFromTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -298,6 +299,17 @@ app.post("/admin/fix_bad_auto_archive", requireAdminToken, (_req, res) => {
   }
   if (changed > 0) writeCollection("leads", leads);
   res.json({ status: "ok", changed, total_leads: leads.length });
+});
+
+// Mismo camino que el botón "Restaurar" de /crm/papelera, pero sin sesión
+// del CRM -- para restaurar puntualmente desde fuera (23/10/2026).
+app.post("/admin/restore_from_trash", requireAdminToken, (req, res) => {
+  const ids: string[] = Array.isArray(req.body?.trash_ids) ? req.body.trash_ids : [];
+  let restored = 0;
+  for (const id of ids) {
+    if (restoreFromTrash(id)) restored++;
+  }
+  res.json({ status: "ok", restored, requested: ids.length });
 });
 
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
