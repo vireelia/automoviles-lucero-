@@ -738,7 +738,18 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       return;
     }
 
-    const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone);
+    // Petición real (23/10/2026, "que responda con sentido" -- tras
+    // reenviar mensajes reales atascados días por el webhook caído): si el
+    // mensaje real del cliente es de hace horas de verdad (sentAt real,
+    // nunca inventado), que Carolina lo sepa y se disculpe por la tardanza
+    // en vez de responder como si acabara de llegar.
+    const sentAtMs = typeof body.message?.sentAt === "string" ? new Date(body.message.sentAt).getTime() : NaN;
+    const delayHours = Number.isFinite(sentAtMs) ? (Date.now() - sentAtMs) / 3600000 : 0;
+    const realDelayNote =
+      delayHours >= 1
+        ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
+        : undefined;
+    const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone, realDelayNote);
     const sent = await sendWhatsappText(phone, result.reply);
     if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta:", sent.error);
     try {

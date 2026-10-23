@@ -122,6 +122,13 @@ export async function handleChatMessage(
   userText: string,
   channel: Channel = "CHAT",
   contact: string = sessionId,
+  // Petición real (23/10/2026, tras reenviar 170 mensajes reales atascados
+  // 19-23/10 por el webhook caído: "que responda con sentido"): sin esto,
+  // el agente respondía a un mensaje de hace días como si acabara de
+  // llegar -- ni una disculpa por la tardanza. Dato REAL (el tiempo que de
+  // verdad pasó), nunca inventado -- quien llama lo calcula con la fecha
+  // real del mensaje original.
+  realDelayNote?: string,
 ): Promise<{ reply: string; tool_runs: number }> {
   const conversation = loadConversation(sessionId);
   const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
@@ -158,7 +165,7 @@ export async function handleChatMessage(
   // reenviando los datos de un cliente real) como "phone" en create_lead,
   // creando una ficha de cliente duplicada y fragmentada -- y gastando
   // turnos de herramienta de más intentando corregirlo. Regla reforzada.
-  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]}. Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.`;
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]}. Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}`;
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() + context }, ...history, ...turn];
 
   let toolRuns = 0;
