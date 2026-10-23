@@ -1179,21 +1179,6 @@ ${duplicateWarning}
 </div></div>`;
 }
 
-// Aviso de canales caídos (23/10/2026, petición real: "no esperes a que te
-// lo diga yo" -- tras la caída real de WhatsApp/correo, el equipo no tenía
-// forma de saber, sin preguntarme, que los avisos automáticos a Ramón/José
-// no estaban llegando). raiseAlert() ya deja cada aviso visible en esta
-// misma página pase lo que pase (ver pendingAlerts), pero nada avisaba de
-// que el envío EN SÍ llevaba un día entero fallando en todos los canales.
-// Si los últimos intentos de las últimas 24h fallaron todos, se avisa aquí
-// arriba para que se note a simple vista, sin tener que mirar /debug.
-function teamNotificationsDown(): boolean {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const recent = readCollection<{ delivery_status: string; created_at: string }>("team_notifications", [])
-    .filter((n) => new Date(n.created_at).getTime() >= cutoff);
-  return recent.length > 0 && recent.every((n) => n.delivery_status === "failed");
-}
-
 // ---------- Hoy ----------
 // Fase A (21/10/2026, a petición real: "esto más organizado, así se ve
 // feo"): antes era una sola frase larga, con el correo-relay de
@@ -1294,7 +1279,6 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
 ${todoOtros.length ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todoLinks(todoOtros)}</div>` : ""}
 ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Todo hecho. No hay nada pendiente.</div>` : ""}`;
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
-${teamNotificationsDown() ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>⚠️ Avisos automáticos caídos</b> -- en las últimas 24h, ningún aviso a Ramón/José se ha podido entregar (ni WhatsApp ni llamada). Revisa esta página a mano hasta que se solucione.</div>` : ""}
 <div class="box noprint"><button class="btn ok" type="button" onclick="window.lucerosonar && window.lucerosonar()">🔔 Activar y probar el sonido de avisos</button><p class="sub" style="margin:8px 0 0">Púlsalo una vez al abrir el CRM cada día -- oirás un pitido de prueba ahora mismo. A partir de ahí, sonará solo cuando llegue un aviso urgente, sin que tengas que hacer nada más.</p></div>
 <form class="search noprint" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit">Buscar</button></form>
 <div class="box">${todaySummary(today)}</div>
