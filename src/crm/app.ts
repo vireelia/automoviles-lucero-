@@ -804,15 +804,26 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 // mensaje) después del redirect. Genérico: funciona en cualquier lista del
 // CRM, no solo en Clientes.
 (function () {
+  // FALLO REAL detectado (23/10/2026, "cada vez que borro algo en clientes la
+  // pagina se mueve"): guardar window.scrollY en crudo solo funciona si el
+  // alto de la página es el mismo antes y después del redirect -- al borrar
+  // una tarjeta (o si las tarjetas cambian de tamaño, como pasó hoy al
+  // hacerlas más compactas) el alto total cambia, y ese mismo número de
+  // píxeles ya no apunta al mismo sitio visual. Se guarda como proporción
+  // del alto total en vez de un valor absoluto, así se adapta sola si el
+  // documento es un poco más alto o más bajo en la carga siguiente.
   var KEY = "lucero_scroll:" + location.pathname;
   var saved = sessionStorage.getItem(KEY);
   if (saved) {
     sessionStorage.removeItem(KEY);
-    var y = parseInt(saved, 10);
-    if (!isNaN(y)) window.scrollTo(0, y);
+    var ratio = parseFloat(saved);
+    if (!isNaN(ratio)) window.scrollTo(0, ratio * document.documentElement.scrollHeight);
   }
   document.addEventListener("submit", function () {
-    try { sessionStorage.setItem(KEY, String(window.scrollY)); } catch (e) {}
+    try {
+      var h = document.documentElement.scrollHeight;
+      sessionStorage.setItem(KEY, String(h > 0 ? window.scrollY / h : 0));
+    } catch (e) {}
   }, true);
 })();
 // Selección masiva de mensajes (módulo mensajes/clientes, 18/10/2026):
@@ -1203,6 +1214,16 @@ crm.get("/", (req, res) => {
   const reservations = list<Reservation>("reservations");
   const handoffs = list<Handoff>("handoffs").filter((h) => h.status === "requested");
   const mails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered);
+  // Petición real (23/10/2026, "todos los leads nuevos de hoy"): clientes que
+  // escribieron hoy por primera vez, aunque todavía no tengan cita ni
+  // reserva -- antes Hoy solo mostraba lo que ya tenía una acción concreta
+  // agendada. Mismo criterio de "hoy" que el resto del CRM (madridDateOnly),
+  // y nunca archivados/publicidad (ya tienen su propia vista).
+  const allLeads = list<Lead>("leads");
+  const financingToday = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const newLeadsToday = allLeads
+    .filter((l) => !l.archived && !l.marketing_list && l.created_at && madridDateOnly(l.created_at) === today)
+    .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
   const todayAppts = appts.filter((a) => a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
   const upcoming = appts.filter((a) => (a.requested_date ?? "") > today).sort((x, y) => (x.requested_date ?? "").localeCompare(y.requested_date ?? "")).slice(0, 6);
   const toAttend = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification");
@@ -1290,6 +1311,7 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 </div>
 ${alertBlock}
 ${todoBlock}
+<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="cards-grid">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", todayAppts.length + upcoming.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="cards-grid">${todayAppts.map(apptCard).join("")}</div>`}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="cards-grid">${upcoming.map(apptCard).join("")}</div>`}
