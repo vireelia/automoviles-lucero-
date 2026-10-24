@@ -517,6 +517,17 @@ app.get("/debug/zernio_whatsapp_processed", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("zernio_whatsapp_processed").slice(-50));
 });
 
+// Puntual (24/10/2026, para reprobar un evento real tras poner OPENAI_API_KEY):
+// un reenvío de Zernio se descarta en silencio si el eventId ya está en esta
+// colección, aunque la primera vez nunca haya llegado a responder.
+app.post("/admin/clear_zernio_processed", requireAdminToken, (req, res) => {
+  const keys: string[] = Array.isArray(req.body?.keys) ? req.body.keys : [];
+  const rows = readCollection<{ key: string; at: string }>("zernio_whatsapp_processed");
+  const kept = keys.length > 0 ? rows.filter((r) => !keys.includes(r.key)) : [];
+  writeCollection("zernio_whatsapp_processed", kept);
+  res.json({ status: "ok", removed: rows.length - kept.length, remaining: kept.length });
+});
+
 app.get("/debug/team_notifications", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("team_notifications").slice(-200));
 });
