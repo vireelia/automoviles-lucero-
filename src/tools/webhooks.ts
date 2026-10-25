@@ -78,6 +78,15 @@ export function handleRetellWebhook(payload: any) {
     custom_analysis_data: analysis.custom_analysis_data ?? {},
     max_pause_sec: maxPauseSec,
     needs_review: needsReview,
+    // Grabación/transcripción reales (25/10/2026, Contactos Pro): Retell ya
+    // las manda en este mismo payload pero nunca se guardaban -- sin esto,
+    // cualquier reproductor/transcripción en el CRM sería un adorno sin
+    // datos detrás. Se guardan tal cual vienen, nunca inventadas; si
+    // Retell no las manda (plan/config distinto), quedan en null y el CRM
+    // simplemente no muestra esa sección para esa llamada.
+    recording_url: call.recording_url ?? null,
+    transcript: call.transcript ?? null,
+    direction: call.direction ?? null,
     created_at: new Date().toISOString(),
   };
   appendToCollection("call_analyses", record);

@@ -124,7 +124,7 @@ type Handoff = { id: string; lead_phone: string | null; lead_name?: string | nul
 // del CRM -- se guardaban y ahí se quedaban. Se muestran ahora en la ficha
 // del cliente.
 type ConversationSummary = { id: string; phone?: string | null; summary: string; created_at: string };
-type InboxMail = { id: string; from: string; subject: string; text: string; outcome: string; portal?: string | null; draft_note?: string; thread_id?: string; in_reply_to?: string; answered?: boolean; answered_by?: "ia" | "equipo"; read?: boolean; archived?: boolean; created_at: string };
+type InboxMail = { id: string; from: string; subject: string; text: string; outcome: string; portal?: string | null; draft_note?: string; thread_id?: string; in_reply_to?: string; answered?: boolean; answered_by?: "ia" | "equipo"; read?: boolean; archived?: boolean; internal_note?: string | null; created_at: string };
 // Mensajes de WhatsApp entrantes (módulo CRM mensajes/clientes, 18/10/2026).
 // Solo registra lo que escribe el cliente y si la IA respondió -- esta
 // bandeja NO tiene botón de responder: el envío real de WhatsApp sigue
@@ -141,6 +141,7 @@ type WhatsappMessage = {
   answered?: boolean;
   answered_by?: "ia" | "equipo";
   archived?: boolean;
+  internal_note?: string | null;
   created_at: string;
 };
 type CallAnalysis = {
@@ -155,6 +156,13 @@ type CallAnalysis = {
   needs_review?: boolean;
   read?: boolean;
   archived?: boolean;
+  // Reales desde Retell (25/10/2026, Contactos Pro) -- ausentes en llamadas
+  // anteriores a este cambio, nunca se inventan: si no hay grabación o
+  // transcripción real, el CRM no muestra esa sección para esa llamada.
+  recording_url?: string | null;
+  transcript?: string | null;
+  direction?: string | null;
+  internal_note?: string | null;
   created_at: string;
 };
 type VehicleOverride = { vehicle_id: string; price_eur: number };
@@ -270,6 +278,31 @@ function contactLeadBlock(allLeads: Lead[], user: CrmUser, appts: Appointment[],
     return `<div class="box" style="background:#fdecea;border:1px solid var(--urgent)"><b>⚠️ Sin ficha de cliente</b> -- este contacto todavía no tiene un lead asociado en el CRM.</div>`;
   }
   return leadCard(lead, user, leadPhase(lead, appts, resv, today, financing), findPossibleDuplicate(lead, allLeads), appts);
+}
+// Avatar de color por contacto (25/10/2026, Contactos Pro) -- puramente
+// decorativo para identificar de un vistazo filas distintas en la lista,
+// nunca significa nada por sí mismo (no confundir con t-hot/t-warm/t-cold,
+// que sí son temperatura real). Determinista: el mismo teléfono/correo
+// siempre sale del mismo color, no cambia al recargar.
+const AVATAR_PALETTE = ["#ef4444", "#f97316", "#f59e0b", "#84cc16", "#10b981", "#06b6d4", "#3b82f6", "#6366f1", "#8b5cf6", "#ec4899"];
+function avatarColor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+}
+function avatarInitials(name: string): string {
+  const trimmed = name.trim();
+  // Sin ficha todavía: el "nombre" es el teléfono/correo en crudo -- las 2
+  // primeras letras de un teléfono son siempre "+3", nada útil para
+  // distinguir filas. Las 2 últimas cifras sí cambian de una fila a otra.
+  if (/^\+?\d[\d\s-]{5,}$/.test(trimmed)) {
+    const digits = trimmed.replace(/\D/g, "");
+    return digits.slice(-2) || "?";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 // Bandeja única de entrada (21/10/2026, Fase A): calidad de datos derivada,
 // nunca guardada -- misma filosofía que leadPhase. Solo "no_comercial" es
@@ -886,6 +919,38 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .studio-ribbon{display:inline-block;padding:5px 12px;border-radius:999px;font-size:14px;font-weight:700;color:#fff;margin-bottom:6px}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
 .gallery .card{display:block;margin:0;position:relative}
+/* Contactos Pro -- vista de 3 paneles (25/10/2026, a petición real con
+   mockup de referencia: lista / ficha / actividad, como un cliente de
+   correo). Solo la usa /crm/contactos -- las páginas sueltas de siempre
+   (/crm/whatsapp, /crm/correos, /crm/llamadas) siguen con sus tarjetas de
+   toda la vida, sin tocar. */
+.contactos-shell{display:flex;background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.contactos-list{flex:0 0 330px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0}
+.contactos-list-scroll{overflow-y:auto;max-height:70vh}
+.contact-row{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
+.contact-row:hover{background:var(--panel)}
+.contact-row.active{background:var(--accent-dim)}
+.contact-row .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0}
+.contact-row .rbody{flex:1;min-width:0}
+.contact-row .rbody b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.contact-row .rbody .rsub{display:block;font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.contact-row .rmeta{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.contact-row .rmeta time{font-size:11px;color:var(--ink-dim)}
+.contactos-detail{flex:1;min-width:0;padding:20px 24px;max-height:70vh;overflow-y:auto}
+.contactos-activity{flex:0 0 290px;border-left:1px solid var(--border);padding:16px;max-height:70vh;overflow-y:auto;min-width:0}
+.cpager{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--ink-dim)}
+.cpager a{color:var(--ink);text-decoration:none;padding:3px 7px;border-radius:6px}
+.cpager a.on{background:var(--accent);color:#fff}
+.meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin:14px 0;background:var(--panel);border-radius:10px;padding:12px 14px}
+.meta-grid div{font-size:12px;color:var(--ink-dim)}
+.meta-grid div b{display:block;font-size:14px;color:var(--ink);font-weight:700;margin-top:2px}
+.activity-item{border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px}
+.activity-item.in{background:#fdecea}
+.activity-item.ia{background:var(--panel)}
+.activity-item.wa{background:var(--ok-bg)}
+.activity-item.email{background:#e0ecff}
+.activity-item time{display:block;font-size:11px;color:var(--ink-dim);margin-top:4px}
+@media(max-width:1100px){.contactos-shell{flex-direction:column}.contactos-list{flex:none;border-right:0;border-bottom:1px solid var(--border)}.contactos-list-scroll{max-height:320px}.contactos-activity{flex:none;border-left:0;border-top:1px solid var(--border);max-height:none}.contactos-detail{max-height:none}}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
 <header id="sidebar">
@@ -2030,6 +2095,11 @@ crm.post("/correos/:id", async (req, res) => {
   const inbox = list<InboxMail>("email_inbox");
   const m = inbox.find((x) => x.id === req.params.id);
   if (!m) return back(res, volver, "No encuentro ese correo");
+  if (accion === "nota") {
+    m.internal_note = String(req.body.nota ?? "").trim() || null;
+    save("email_inbox", inbox);
+    return back(res, volver, "Nota guardada");
+  }
   // Acciones nuevas del módulo mensajes/clientes (18/10/2026), solo
   // alcanzables desde /crm/correos -- Pendientes no tiene botones para
   // ellas, así que no cambia nada de lo que ya funcionaba ahí.
@@ -2300,6 +2370,11 @@ crm.post("/whatsapp/:id", (req, res) => {
   const items = list<WhatsappMessage>("whatsapp_inbox");
   const m = items.find((x) => x.id === req.params.id);
   if (!m) return back(res, volver, "No encuentro ese mensaje");
+  if (accion === "nota") {
+    m.internal_note = String(req.body.nota ?? "").trim() || null;
+    save("whatsapp_inbox", items);
+    return back(res, volver, "Nota guardada");
+  }
   if (accion === "eliminar") {
     moveToTrash("whatsapp_inbox", m, `WhatsApp: ${m.phone}`, me(res).email);
     save("whatsapp_inbox", items.filter((x) => x.id !== m.id));
@@ -2373,6 +2448,11 @@ crm.post("/llamadas/:id", (req, res) => {
   const items = list<CallAnalysis>("call_analyses");
   const m = items.find((x) => x.id === req.params.id);
   if (!m) return back(res, volver, "No encuentro esa llamada");
+  if (accion === "nota") {
+    m.internal_note = String(req.body.nota ?? "").trim() || null;
+    save("call_analyses", items);
+    return back(res, volver, "Nota guardada");
+  }
   if (accion === "eliminar") {
     moveToTrash("call_analyses", m, `Llamada: ${m.from_number ?? "sin número"}`, me(res).email);
     save("call_analyses", items.filter((x) => x.id !== m.id));
@@ -2401,19 +2481,181 @@ crm.post("/llamadas-masivo", (req, res) => {
 });
 
 // ---------- Contactos (bandeja única: WhatsApp + Correo + Llamadas) ----------
-// Pedido real (25/10/2026, "debe de tener dentro whatsapp, gmail y
-// llamadas... en esas 3 secciones... que se puedan ver todos los mensajes
-// en tiempo real y las llamadas"): un solo sitio con los 3 canales como
-// pestañas, reutilizando exactamente los mismos paneles/filtros/acciones
-// de siempre (whatsappPanel/correoPanel/llamadasPanel, nada duplicado) --
-// las rutas sueltas (/crm/whatsapp, /crm/correos, /crm/llamadas) se
-// quedan tal cual, nada se rompe ni se borra. Cada mensaje/llamada lleva
-// al lado la ficha completa del cliente real (contactLeadBlock) para que
-// ningún contacto se quede sin ficha sin que se note. Se actualiza sola
-// cada 8s (DOMParser sobre el propio HTML, sin tocar el truco de <main>
-// que ya usa Hoy).
+// Pedido real (25/10/2026, con mockup de referencia "LUCERO PRO" -- "tiene
+// que ser todo así, ojo" / "y que funcione de verdad"): 3 paneles -- lista
+// paginada de verdad / ficha del contacto seleccionado / actividad y notas
+// internas -- como un cliente de correo. Las rutas sueltas (/crm/whatsapp,
+// /crm/correos, /crm/llamadas) y sus paneles de tarjetas se quedan tal
+// cual, nada se rompe ni se borra. Se actualiza sola cada 8s.
+//
+// Grabación/transcripción (audio real, <audio>, nunca inventado) solo
+// aparecen cuando la llamada las trae de verdad (recording_url/transcript,
+// capturados desde el webhook de Retell a partir de hoy -- llamadas
+// anteriores a este cambio no las tendrán, y no se simulan). La ficha de
+// vehículo con foto/precio del mockup NO se incluye: `vehicle_interest`
+// del lead es texto libre, no un id de coche real -- intentar adivinar a
+// qué vehículo del catálogo se refiere podría mostrar el coche equivocado
+// a un cliente real, así que se muestra como texto, nunca como una ficha
+// de coche que parece más segura de lo que es.
 const CONTACTOS_CANALES = ["whatsapp", "correo", "llamadas"] as const;
 type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
+const CONTACTOS_PAGE_SIZE = 50;
+
+function contactosUrl(navBase: string, f: MsgFilter, q: string, pageNum: number, id?: string): string {
+  const params: string[] = [];
+  if (f !== "todos") params.push(`f=${f}`);
+  if (q) params.push(`q=${encodeURIComponent(q)}`);
+  if (pageNum > 1) params.push(`page=${pageNum}`);
+  if (id) params.push(`id=${encodeURIComponent(id)}`);
+  return params.length ? `${navBase}?${params.join("&")}` : navBase;
+}
+function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: string | null, email?: string | null): string {
+  const name = lead?.name || fallbackName;
+  const color = avatarColor((phone || email || name).toLowerCase());
+  const badge = lead
+    ? `<span class="tag" style="background:var(--ok-bg);color:#1d6b3d">Cliente</span>`
+    : `<span class="tag" style="background:#fdecea;color:#7a1c17">Sin ficha</span>`;
+  return `<div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
+<div class="avatar" style="width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:#fff;background:${color};flex-shrink:0">${esc(avatarInitials(name))}</div>
+<div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}</p></div>
+</div>`;
+}
+function cpager(navBase: string, f: MsgFilter, q: string, pageNum: number, totalPages: number, total: number, count: number): string {
+  if (total === 0) return "";
+  const from = (pageNum - 1) * CONTACTOS_PAGE_SIZE + 1;
+  const to = from + count - 1;
+  const pageLink = (p: number, label: string, on = false) => `<a href="${esc(contactosUrl(navBase, f, q, p))}" class="${on ? "on" : ""}">${label}</a>`;
+  const nums: string[] = [];
+  for (let p = 1; p <= totalPages; p++) {
+    if (p === 1 || p === totalPages || Math.abs(p - pageNum) <= 1) nums.push(pageLink(p, String(p), p === pageNum));
+    else if (nums[nums.length - 1] !== "…") nums.push("…");
+  }
+  return `<div class="cpager"><span>Mostrando ${from}-${to} de ${total}</span><div>${nums.join(" ")}${pageNum < totalPages ? pageLink(pageNum + 1, "›") : ""}</div></div>`;
+}
+
+function callsContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const dirLabel: Record<string, string> = { inbound: "Entrante", outbound: "Saliente" };
+  const all = list<CallAnalysis>("call_analyses");
+  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from_number, m.summary)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay llamadas en esta vista.</div>` : pageItems.map((m) => {
+    const lead = findLeadForContact(allLeads, m.from_number, null);
+    const name = lead?.name || m.from_number || "Número desconocido";
+    const sub = lead?.vehicle_interest || m.summary || "Sin resumen";
+    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+<div class="avatar" style="background:${avatarColor((m.from_number || m.id).toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(sub)}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${m.needs_review ? `<span class="tag" style="background:var(--urgent);color:#fff;font-size:10px;padding:2px 6px">Revisar</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay llamadas en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  const lead = findLeadForContact(allLeads, selected.from_number, null);
+  const [fecha, hora] = fmtDate(selected.created_at).split(", ");
+  const dur = selected.duration_ms == null ? "—" : `${Math.floor(selected.duration_ms / 60000)}:${String(Math.round((selected.duration_ms % 60000) / 1000)).padStart(2, "0")}`;
+  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
+  const detail = `${contactDetailHeader(lead, selected.from_number || "Número desconocido", selected.from_number, lead?.email ?? null)}
+${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+<div class="meta-grid"><div>Fecha<b>${esc(fecha ?? "—")}</b></div><div>Hora<b>${esc(hora ?? "—")}</b></div><div>Duración<b>${dur}</b></div><div>Tipo<b>${esc(dirLabel[selected.direction ?? ""] ?? "—")}</b></div><div>Responsable<b>Miguel (IA)</b></div></div>
+${selected.issues_detected && selected.issues_detected !== "ninguno" ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px"><b>Incidencia detectada:</b> ${esc(selected.issues_detected)}</div>` : ""}
+<h3 style="margin-bottom:6px">Resumen</h3><p>${selected.summary ? esc(selected.summary) : "Sin resumen disponible."}</p>
+${selected.recording_url ? `<h3 style="margin-bottom:6px">Grabación</h3><audio controls preload="none" style="width:100%"><source src="${esc(selected.recording_url)}"></audio>` : ""}
+${selected.transcript ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--accent)">Ver transcripción completa</summary><div class="box" style="white-space:pre-wrap;font-size:13px;margin-top:8px">${esc(selected.transcript)}</div></details>` : ""}
+<form method="post" action="/crm/llamadas/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.from_number)}
+${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
+${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
+${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar esta llamada? Se puede recuperar luego desde la Papelera.")}
+</form>`;
+  const activity = `<h3 style="margin-top:0">Actividad</h3>
+<div class="activity-item in">Llamada ${esc(dirLabel[selected.direction ?? ""] ?? "")} · ${dur}<time>${esc(fmtDate(selected.created_at))}</time></div>
+${selected.needs_review ? `<div class="activity-item ia">⚠️ Marcada para revisar</div>` : ""}
+${selected.read ? `<div class="activity-item ia">Leída</div>` : ""}
+${selected.archived ? `<div class="activity-item ia">Archivada</div>` : ""}
+<h3>Notas internas</h3>
+<form method="post" action="/crm/llamadas/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
+  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+}
+
+function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const all = list<WhatsappMessage>("whatsapp_inbox");
+  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((m) => {
+    const lead = findLeadForContact(allLeads, m.phone, null);
+    const name = lead?.name || m.phone;
+    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+<div class="avatar" style="background:${avatarColor(m.phone.toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.text)}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  const lead = findLeadForContact(allLeads, selected.phone, null);
+  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
+  const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
+${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+<div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
+${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
+<h3 style="margin-bottom:6px">Mensaje</h3><div class="box" style="white-space:pre-wrap">${esc(selected.text)}</div>
+${selected.reply_text ? `<h3 style="margin-bottom:6px">Respuesta de la IA</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.reply_text)}</div>` : ""}
+<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.phone)}
+${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
+${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
+${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
+</form>`;
+  const activity = `<h3 style="margin-top:0">Actividad</h3>
+<div class="activity-item wa">WhatsApp recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
+${selected.answered ? `<div class="activity-item ia">Respondido ${selected.answered_by === "ia" ? "por Carolina (IA)" : "por el equipo"}</div>` : ""}
+${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
+<h3>Notas internas</h3>
+<form method="post" action="/crm/whatsapp/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
+  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+}
+
+function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
+  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((m) => {
+    const lead = findLeadForContact(allLeads, null, m.from);
+    const name = lead?.name || m.from;
+    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+<div class="avatar" style="background:${avatarColor(m.from.toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  const lead = findLeadForContact(allLeads, null, selected.from);
+  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
+  const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from)}
+${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+<div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${answeredTag(selected)}</b></div></div>
+${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px">Hay que responder desde ${esc(platformLabel(selected.portal))}, no por correo.</div>` : ""}
+<h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
+<h3 style="margin-bottom:6px">Mensaje</h3>${emailPreviewBox(selected.text)}
+${selected.draft_note ? `<h3 style="margin-bottom:6px">Borrador</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.draft_note)}</div>` : ""}
+<form method="post" action="/crm/correos/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
+${!selected.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
+${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
+${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
+</form>`;
+  const activity = `<h3 style="margin-top:0">Actividad</h3>
+<div class="activity-item email">Correo recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
+${selected.answered ? `<div class="activity-item ia">Respondido ${selected.answered_by === "ia" ? "por Daniel (IA)" : "por el equipo"}</div>` : ""}
+${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
+<h3>Notas internas</h3>
+<form method="post" action="/crm/correos/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
+  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+}
 
 crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/whatsapp"));
 
@@ -2422,27 +2664,47 @@ crm.get("/contactos/:canal", (req, res) => {
   if (!CONTACTOS_CANALES.includes(canal)) return back(res, "/crm/contactos/whatsapp", "Esa sección de Contactos no existe");
   const f = msgFilterFromQuery(req);
   const q = String(req.query.q ?? "").trim();
+  const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const selectedIdRaw = typeof req.query.id === "string" ? req.query.id : undefined;
   const user = me(res);
   const navBase = `/crm/contactos/${canal}`;
+  const allLeads = list<Lead>("leads");
+  const appts = list<Appointment>("appointments");
+  const resv = list<Reservation>("reservations");
+  const today = todayMadrid();
+  const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const pendingWa = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
   const pendingCo = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
   const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
   const tabLink = (key: ContactoCanal, label: string, count: number) =>
-    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag" style="background:var(--accent);color:#fff">${count}</span>` : ""}</a>`;
-  const tabs = `<div class="side-nav">
+    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag" style="background:#fff;color:var(--accent)">${count}</span>` : ""}</a>`;
+  const tabs = `<div class="side-nav" style="flex:0 0 190px">
 ${tabLink("whatsapp", "WhatsApp", pendingWa)}
 ${tabLink("correo", "Correo", pendingCo)}
 ${tabLink("llamadas", "Llamadas", unreadLl)}
 </div>`;
+  const built = canal === "whatsapp"
+    ? whatsappContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
+    : canal === "correo"
+      ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
+      : callsContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw);
   const panelTitle: Record<ContactoCanal, string> = { whatsapp: "WhatsApp -- Carolina", correo: "Correo -- Daniel", llamadas: "Llamadas -- Miguel" };
-  const panel = canal === "whatsapp" ? whatsappPanel(f, q, user, navBase) : canal === "correo" ? correoPanel(f, q, user, navBase) : llamadasPanel(f, q, user, navBase);
-  const body = `<h1>Contactos</h1><p class="sub">WhatsApp, correo y llamadas en un solo sitio, con la ficha completa de cada cliente al lado. Se actualiza sola.</p>
-<div class="side-layout">
+  const withAnswered = canal !== "llamadas";
+  const body = `<h1>Contactos</h1><p class="sub">${esc(panelTitle[canal])} -- se actualiza sola.</p>
+<div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:14px">
 ${tabs}
-<div class="side-content" id="contactos-panel" data-canal="${canal}">
-<h2 style="margin-top:0">${esc(panelTitle[canal])}</h2>
-${panel}
+<div style="flex:1;min-width:0">
+${filterPills(navBase, f, q, withAnswered)}
+${searchBox(navBase, f, q, canal === "correo" ? "Buscar por remitente, asunto o portal" : "Buscar por número de teléfono")}
 </div>
+</div>
+<div class="contactos-shell" id="contactos-panel" data-canal="${canal}">
+<div class="contactos-list">
+<div class="contactos-list-scroll">${built.rows}</div>
+${cpager(navBase, f, q, pageNum, built.totalPages, built.total, built.rows ? Math.min(CONTACTOS_PAGE_SIZE, built.total - (pageNum - 1) * CONTACTOS_PAGE_SIZE) : 0)}
+</div>
+<div class="contactos-detail">${built.detail}</div>
+<div class="contactos-activity">${built.activity}</div>
 </div>
 <script>
 (function(){
