@@ -279,17 +279,10 @@ function contactLeadBlock(allLeads: Lead[], user: CrmUser, appts: Appointment[],
   }
   return leadCard(lead, user, leadPhase(lead, appts, resv, today, financing), findPossibleDuplicate(lead, allLeads), appts);
 }
-// Avatar de color por contacto (25/10/2026, Contactos Pro) -- puramente
-// decorativo para identificar de un vistazo filas distintas en la lista,
-// nunca significa nada por sí mismo (no confundir con t-hot/t-warm/t-cold,
-// que sí son temperatura real). Determinista: el mismo teléfono/correo
-// siempre sale del mismo color, no cambia al recargar.
-const AVATAR_PALETTE = ["#ef4444", "#f97316", "#f59e0b", "#84cc16", "#10b981", "#06b6d4", "#3b82f6", "#6366f1", "#8b5cf6", "#ec4899"];
-function avatarColor(key: string): string {
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
-}
+// Iniciales en insignia gris (25/10/2026, Contactos Pro) -- a petición
+// real ("no me gusta ese diseño circular en las tarjetas"): mismo
+// cuadrado redondeado gris que ya usa el menú lateral, nunca un círculo
+// de color. Un único lenguaje visual para toda la app.
 function avatarInitials(name: string): string {
   const trimmed = name.trim();
   // Sin ficha todavía: el "nombre" es el teléfono/correo en crudo -- las 2
@@ -878,7 +871,7 @@ label{font-size:14px;font-weight:700;color:var(--ink)}
 .t-hot{background:var(--accent);color:#fff;font-weight:700}
 .t-warm{background:#f97316;color:#fff;font-weight:700}
 .t-cold{background:#2563eb;color:#fff;font-weight:700}
-.tletra{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;font-weight:800;margin-right:8px;flex-shrink:0}
+.tletra{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;font-weight:800;margin-right:8px;flex-shrink:0}
 .origen{display:inline-block;background:#e2e8f0;color:#1e293b;font-size:15px;font-weight:600;padding:4px 10px;border-radius:999px;margin-right:6px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
 a.link{color:#1d4ed8;font-weight:700;font-size:20px}
@@ -930,7 +923,7 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .contact-row{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
 .contact-row:hover{background:var(--panel)}
 .contact-row.active{background:var(--accent-dim)}
-.contact-row .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0}
+.contact-row .avatar{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:var(--ink-dim);background:#eceff3;flex-shrink:0}
 .contact-row .rbody{flex:1;min-width:0}
 .contact-row .rbody b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .contact-row .rbody .rsub{display:block;font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2511,12 +2504,11 @@ function contactosUrl(navBase: string, f: MsgFilter, q: string, pageNum: number,
 }
 function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: string | null, email?: string | null): string {
   const name = lead?.name || fallbackName;
-  const color = avatarColor((phone || email || name).toLowerCase());
   const badge = lead
     ? `<span class="tag" style="background:var(--ok-bg);color:#1d6b3d">Cliente</span>`
     : `<span class="tag" style="background:#fdecea;color:#7a1c17">Sin ficha</span>`;
   return `<div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
-<div class="avatar" style="width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:#fff;background:${color};flex-shrink:0">${esc(avatarInitials(name))}</div>
+<div class="avatar" style="width:52px;height:52px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--ink-dim);background:#eceff3;flex-shrink:0">${esc(avatarInitials(name))}</div>
 <div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}</p></div>
 </div>`;
 }
@@ -2546,7 +2538,7 @@ function callsContactos(f: MsgFilter, q: string, pageNum: number, navBase: strin
     const sub = lead?.vehicle_interest || m.summary || "Sin resumen";
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar" style="background:${avatarColor((m.from_number || m.id).toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="avatar">${esc(avatarInitials(name))}</div>
 <div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(sub)}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${m.needs_review ? `<span class="tag" style="background:var(--urgent);color:#fff;font-size:10px;padding:2px 6px">Revisar</span>` : ""}</div>
 </a>`;
@@ -2589,7 +2581,7 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
     const name = lead?.name || m.phone;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar" style="background:${avatarColor(m.phone.toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="avatar">${esc(avatarInitials(name))}</div>
 <div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.text)}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
@@ -2628,7 +2620,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
     const name = lead?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar" style="background:${avatarColor(m.from.toLowerCase())}">${esc(avatarInitials(name))}</div>
+<div class="avatar">${esc(avatarInitials(name))}</div>
 <div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
