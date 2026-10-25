@@ -40,6 +40,11 @@ crm.use(express.urlencoded({ extended: false, limit: "100kb" }));
 type Lead = {
   id: string;
   phone: string | null;
+  // Ya existía en el dato real (tools/leads.ts) pero el CRM nunca lo leía
+  // (25/10/2026, Contactos Pro: hace falta para cruzar un correo con su
+  // ficha -- un lead que entra solo por email se identifica por email,
+  // no por teléfono, ver upsertLead en tools/leads.ts).
+  email?: string | null;
   name: string | null;
   notes: string | null;
   channel: string | null;
@@ -236,6 +241,35 @@ function findPossibleDuplicate(lead: Lead, allLeads: Lead[]): Lead | null {
   if (!lead.phone) return null;
   const key = normalizePhone(lead.phone);
   return allLeads.find((other) => other.id !== lead.id && other.phone && normalizePhone(other.phone) === key) ?? null;
+}
+// Contactos Pro (25/10/2026, "que ningún cliente se escape"): cruza un
+// mensaje/llamada/correo entrante con su ficha real -- por teléfono
+// normalizado (voz/WhatsApp) o por email (correo, mismo criterio que ya
+// usa upsertLead para identificar un lead sin teléfono). Si no encuentra
+// nada, devuelve null -- eso es justo la señal real de "este contacto no
+// tiene ficha", nunca se inventa una.
+function findLeadForContact(allLeads: Lead[], phone?: string | null, email?: string | null): Lead | null {
+  if (phone) {
+    const key = normalizePhone(phone);
+    const byPhone = allLeads.find((l) => l.phone && normalizePhone(l.phone) === key);
+    if (byPhone) return byPhone;
+  }
+  if (email) {
+    const key = email.trim().toLowerCase();
+    const byEmail = allLeads.find((l) => (l.email ?? "").trim().toLowerCase() === key);
+    if (byEmail) return byEmail;
+  }
+  return null;
+}
+// Mini-ficha inline para Contactos Pro -- misma leadCard de siempre (mismos
+// datos, mismas acciones) si hay ficha real; si no, un aviso visible en vez
+// de dejarlo pasar en silencio (eso es justo lo que se quiere evitar).
+function contactLeadBlock(allLeads: Lead[], user: CrmUser, appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], phone?: string | null, email?: string | null): string {
+  const lead = findLeadForContact(allLeads, phone, email);
+  if (!lead) {
+    return `<div class="box" style="background:#fdecea;border:1px solid var(--urgent)"><b>⚠️ Sin ficha de cliente</b> -- este contacto todavía no tiene un lead asociado en el CRM.</div>`;
+  }
+  return leadCard(lead, user, leadPhase(lead, appts, resv, today, financing), findPossibleDuplicate(lead, allLeads), appts);
 }
 // Bandeja única de entrada (21/10/2026, Fase A): calidad de datos derivada,
 // nunca guardada -- misma filosofía que leadPhase. Solo "no_comercial" es
@@ -613,7 +647,7 @@ function toggleCard(href: string, icon: string, iconBg: string, iconColor: strin
 const NAV_GROUPS: { label: string; items: [string, string][] }[] = [
   { label: "Principal", items: [["/crm", "Hoy"], ["/crm/entrada", "Entrada de leads"]] },
   { label: "Comercial", items: [["/crm/clientes", "Clientes y oportunidades"], ["/crm/embudo", "Embudo comercial"], ["/crm/seguimiento", "Seguimiento"], ["/crm/publicidad", "Clientes para publicidad"]] },
-  { label: "Comunicación", items: [["/crm/llamadas", "Llamadas"], ["/crm/whatsapp", "WhatsApp"], ["/crm/correos", "Correos"], ["/crm/incidencias", "Incidencias"]] },
+  { label: "Comunicación", items: [["/crm/contactos/whatsapp", "Contactos"], ["/crm/incidencias", "Incidencias"]] },
   { label: "Operación", items: [["/crm/citas", "Visitas"], ["/crm/reservas", "Reservas"], ["/crm/coches", "Vehículos"]] },
   { label: "Análisis", items: [["/crm/informes", "Informes"]] },
 ];
@@ -652,7 +686,7 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   const pendingMails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
   const pendingWhatsapp = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
   const msgTotal = pendingMails + pendingWhatsapp;
-  const msgHref = pendingWhatsapp > pendingMails ? "/crm/whatsapp?f=pendientes" : "/crm/correos?f=pendientes";
+  const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=pendientes" : "/crm/contactos/correo?f=pendientes";
   const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin responder`;
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
   const alertCount = pendingAlerts().length;
@@ -782,8 +816,10 @@ label{font-size:14px;font-weight:700;color:var(--ink)}
    página la usa, no toca el resto del CSS compartido. */
 .side-layout{display:flex;gap:24px;align-items:flex-start}
 .side-nav{flex:0 0 220px;position:sticky;top:20px;display:flex;flex-direction:column;gap:4px}
-.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;font-size:15px}
+.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .side-nav a:hover{background:#e4e7ec}
+.side-nav a.on-tab{background:var(--accent);color:#fff}
+.side-nav a.on-tab .tag{background:#fff!important;color:var(--accent)!important}
 .side-content{flex:1;min-width:0}
 @media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
@@ -1102,6 +1138,14 @@ function me(res: express.Response): CrmUser {
 }
 function back(res: express.Response, to: string, msg: string) {
   res.redirect(`${to}${to.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}`);
+}
+// Mismo criterio que ya usaba Clientes (21/10/2026, "que no me cambie de
+// sección") -- Contactos Pro (25/10/2026) lo reutiliza para que una acción
+// hecha desde dentro de /crm/contactos vuelva ahí, no a la página suelta
+// de siempre. Solo acepta rutas internas reales (/crm/...), nunca una URL
+// externa.
+function safeVolver(raw: unknown, fallback: string): string {
+  return typeof raw === "string" && raw.startsWith("/crm/") && !raw.startsWith("//") ? raw : fallback;
 }
 function msgOf(req: express.Request): string | undefined {
   return typeof req.query.msg === "string" ? req.query.msg : undefined;
@@ -1982,21 +2026,22 @@ crm.post("/avisos-masivo", (req, res) => {
 
 crm.post("/correos/:id", async (req, res) => {
   const accion = String(req.body.accion ?? "");
+  const volver = safeVolver(req.body.volver, "/crm/correos");
   const inbox = list<InboxMail>("email_inbox");
   const m = inbox.find((x) => x.id === req.params.id);
-  if (!m) return back(res, "/crm/correos", "No encuentro ese correo");
+  if (!m) return back(res, volver, "No encuentro ese correo");
   // Acciones nuevas del módulo mensajes/clientes (18/10/2026), solo
   // alcanzables desde /crm/correos -- Pendientes no tiene botones para
   // ellas, así que no cambia nada de lo que ya funcionaba ahí.
   if (accion === "marcar_leido") {
     m.read = true;
     save("email_inbox", inbox);
-    return back(res, "/crm/correos", "Marcado como leído");
+    return back(res, volver, "Marcado como leído");
   }
   if (accion === "archivar") {
     m.archived = true;
     save("email_inbox", inbox);
-    return back(res, "/crm/correos", "Correo archivado");
+    return back(res, volver, "Correo archivado");
   }
   if (accion === "ya") {
     // Responde una persona, no la IA -- se registra así (Fase 4 del encargo:
@@ -2004,19 +2049,19 @@ crm.post("/correos/:id", async (req, res) => {
     m.answered = true;
     m.answered_by = "equipo";
     save("email_inbox", inbox);
-    return back(res, "/crm/correos", "Hecho");
+    return back(res, volver, "Hecho");
   }
   const text = String(req.body.respuesta ?? "").trim();
-  if (!text) return back(res, "/crm/correos", "Escribe la respuesta antes de enviarla");
+  if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
   const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "su consulta"}`;
   const thread = m.thread_id && m.in_reply_to ? { threadId: m.thread_id, inReplyTo: m.in_reply_to } : undefined;
   const delivery = await deliverEmail(m.from, subject, `${text}\n\nAutomóviles Lucero`, thread);
   m.answered = true;
   m.answered_by = "equipo";
   save("email_inbox", inbox);
-  if (delivery.status === "sent") back(res, "/crm/correos", "Respuesta enviada");
-  else if (delivery.status === "queued") back(res, "/crm/correos", "Respuesta guardada: se enviará cuando Gmail esté conectado");
-  else back(res, "/crm/correos", "No se pudo enviar. Inténtalo otra vez");
+  if (delivery.status === "sent") back(res, volver, "Respuesta enviada");
+  else if (delivery.status === "queued") back(res, volver, "Respuesta guardada: se enviará cuando Gmail esté conectado");
+  else back(res, volver, "No se pudo enviar. Inténtalo otra vez");
 });
 
 crm.get("/avisos", (_req, res) => res.redirect("/crm/incidencias"));
@@ -2059,6 +2104,16 @@ function msgRowClass(m: { answered?: boolean; read?: boolean }, hasAnswered: boo
   const estado = hasAnswered ? (m.answered ? "msg-answered" : "msg-unanswered") : "";
   const leido = m.read ? "msg-read" : "msg-unread";
   return `card ${estado} ${leido}`.trim();
+}
+// Reconstruye la URL exacta de una vista filtrada (base + f + q) -- la usa
+// el campo oculto "volver" de cada tarjeta de mensaje/llamada, para que
+// una acción (marcar leído, archivar, responder...) vuelva exactamente a
+// la pestaña/filtro de donde salió, sea la página suelta o Contactos.
+function withFilterQS(base: string, f: MsgFilter, q: string): string {
+  const params: string[] = [];
+  if (f !== "todos") params.push(`f=${f}`);
+  if (q) params.push(`q=${encodeURIComponent(q)}`);
+  return params.length ? `${base}?${params.join("&")}` : base;
 }
 function filterPills(base: string, f: MsgFilter, q: string, withAnswered: boolean): string {
   const labels: [MsgFilter, string][] = withAnswered
@@ -2131,17 +2186,24 @@ function searchMatches(q: string, ...fields: (string | null | undefined)[]): boo
 }
 
 // ---------- Correos (bandeja completa) ----------
-crm.get("/correos", (req, res) => {
-  const f = msgFilterFromQuery(req);
-  const q = String(req.query.q ?? "").trim();
+// Contactos Pro (25/10/2026): el listado de cada canal se saca a una
+// función propia -- la usan tanto la página suelta de siempre (/crm/
+// correos) como la bandeja única nueva (/crm/contactos/correo). `navBase`
+// decide a dónde van los enlaces de filtro/búsqueda (para quedarse dentro
+// de Contactos si se entra desde ahí); las acciones (marcar/archivar/
+// eliminar) siempre van al endpoint real de siempre, nunca cambian.
+function correoPanel(f: MsgFilter, q: string, user: CrmUser, navBase: string): string {
   const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const body = `<h1>Correos</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Daniel</span></p>
-<p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
-${channelActivitySection("EMAIL", me(res))}
-${filterPills("/crm/correos", f, q, true)}
-${searchBox("/crm/correos", f, q, "Buscar por remitente, asunto o portal")}
+  const allLeads = list<Lead>("leads");
+  const allAppts = list<Appointment>("appointments");
+  const allResv = list<Reservation>("reservations");
+  const allFinancing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const today = todayMadrid();
+  const volver = withFilterQS(navBase, f, q);
+  return `${channelActivitySection("EMAIL", user)}
+${filterPills(navBase, f, q, true)}
+${searchBox(navBase, f, q, "Buscar por remitente, asunto o portal")}
 ${items.length > 0 ? bulkBar("/crm/correos", f, q, items.length, true) : ""}
 ${items.length === 0 ? `<div class="empty">No hay correos en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/correos", m.id)}
@@ -2153,11 +2215,22 @@ ${m.outcome === "tope_diario_alcanzado" ? `<p><b>Hoy ya se alcanzó el tope de c
 ${m.outcome === "pendiente_whatsapp_manual" ? `<p><b>Este cliente pidió que le escriban solo por WhatsApp</b> -- el envío automático falló (todavía no hay un número real conectado y verificado), hace falta escribirle a mano.${extractWaLink(m.draft_note) ? ` ${waButton(extractWaLink(m.draft_note)!.replace("https://wa.me/", ""), "")}` : ""}</p>` : ""}
 ${emailPreviewBox(m.text)}
 ${m.draft_note ? `<p style="margin-top:10px"><b>${m.outcome === "tope_diario_alcanzado" ? "Respuesta ya redactada" : `Borrador para copiar en ${esc(platformLabel(m.portal))}`}:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.draft_note)}</div>` : ""}
-<form method="post" action="/crm/correos/${esc(m.id)}">
+<form method="post" action="/crm/correos/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">
 ${!m.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
-</form></div></div>`).join("")}</div>`}`;
+</form>
+${contactLeadBlock(allLeads, user, allAppts, allResv, today, allFinancing, null, m.from)}
+</div></div>`).join("")}</div>`}`;
+}
+
+crm.get("/correos", (req, res) => {
+  const f = msgFilterFromQuery(req);
+  const q = String(req.query.q ?? "").trim();
+  const body = `<h1>Correos</h1>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Daniel</span></p>
+<p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
+${correoPanel(f, q, me(res), "/crm/correos")}`;
   res.type("html").send(page("Correos", me(res), body, msgOf(req)));
 });
 
@@ -2182,17 +2255,18 @@ crm.post("/correos-masivo", (req, res) => {
 // envío hasta verificar la conexión prevista para mañana". Por eso esta
 // bandeja NO tiene ningún formulario de respuesta -- solo leer, marcar
 // leído, archivar y eliminar, igual que las demás.
-crm.get("/whatsapp", (req, res) => {
-  const f = msgFilterFromQuery(req);
-  const q = String(req.query.q ?? "").trim();
+function whatsappPanel(f: MsgFilter, q: string, user: CrmUser, navBase: string): string {
   const all = list<WhatsappMessage>("whatsapp_inbox");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const body = `<h1>WhatsApp</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Carolina</span></p>
-<p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
-${channelActivitySection("WHATSAPP", me(res))}
-${filterPills("/crm/whatsapp", f, q, true)}
-${searchBox("/crm/whatsapp", f, q, "Buscar por número de teléfono")}
+  const allLeads = list<Lead>("leads");
+  const allAppts = list<Appointment>("appointments");
+  const allResv = list<Reservation>("reservations");
+  const allFinancing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const today = todayMadrid();
+  const volver = withFilterQS(navBase, f, q);
+  return `${channelActivitySection("WHATSAPP", user)}
+${filterPills(navBase, f, q, true)}
+${searchBox(navBase, f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/whatsapp", f, q, items.length, true) : ""}
 ${items.length === 0 ? `<div class="empty">No hay mensajes de WhatsApp en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="${msgRowClass(m, true)}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/whatsapp", m.id)}
@@ -2201,28 +2275,40 @@ ${msgCheckbox("/crm/whatsapp", m.id)}
 <p>${answeredTag(m)}${m.answered && m.delivered === false ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">No entregado (WhatsApp no conectado)</span>` : ""}${m.archived ? ` <span class="tag">Archivado</span>` : ""}</p>
 ${emailPreviewBox(m.text)}
 ${m.reply_text ? `<p style="margin-top:10px"><b>Respuesta de la IA:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.reply_text)}</div>` : ""}
-<form method="post" action="/crm/whatsapp/${esc(m.id)}">${phoneLink(m.phone)}
+<form method="post" action="/crm/whatsapp/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(m.phone)}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
-</form></div></div>`).join("")}</div>`}`;
+</form>
+${contactLeadBlock(allLeads, user, allAppts, allResv, today, allFinancing, m.phone, null)}
+</div></div>`).join("")}</div>`}`;
+}
+
+crm.get("/whatsapp", (req, res) => {
+  const f = msgFilterFromQuery(req);
+  const q = String(req.query.q ?? "").trim();
+  const body = `<h1>WhatsApp</h1>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Carolina</span></p>
+<p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
+${whatsappPanel(f, q, me(res), "/crm/whatsapp")}`;
   res.type("html").send(page("WhatsApp", me(res), body, msgOf(req)));
 });
 
 crm.post("/whatsapp/:id", (req, res) => {
   const accion = String(req.body.accion ?? "");
+  const volver = safeVolver(req.body.volver, "/crm/whatsapp");
   const items = list<WhatsappMessage>("whatsapp_inbox");
   const m = items.find((x) => x.id === req.params.id);
-  if (!m) return back(res, "/crm/whatsapp", "No encuentro ese mensaje");
+  if (!m) return back(res, volver, "No encuentro ese mensaje");
   if (accion === "eliminar") {
     moveToTrash("whatsapp_inbox", m, `WhatsApp: ${m.phone}`, me(res).email);
     save("whatsapp_inbox", items.filter((x) => x.id !== m.id));
-    return back(res, "/crm/whatsapp", "Mensaje movido a la papelera");
+    return back(res, volver, "Mensaje movido a la papelera");
   }
   if (accion === "marcar_leido") m.read = true;
   else if (accion === "archivar") m.archived = true;
   save("whatsapp_inbox", items);
-  back(res, "/crm/whatsapp", "Hecho");
+  back(res, volver, "Hecho");
 });
 
 crm.post("/whatsapp-masivo", (req, res) => {
@@ -2242,18 +2328,19 @@ crm.post("/whatsapp-masivo", (req, res) => {
 });
 
 // ---------- Llamadas (bandeja completa -- solo lectura, sin "respondido") ----------
-crm.get("/llamadas", (req, res) => {
-  const f = msgFilterFromQuery(req);
-  const q = String(req.query.q ?? "").trim();
+function llamadasPanel(f: MsgFilter, q: string, user: CrmUser, navBase: string): string {
   const all = list<CallAnalysis>("call_analyses");
   const items = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from_number, m.summary)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const allLeads = list<Lead>("leads");
+  const allAppts = list<Appointment>("appointments");
+  const allResv = list<Reservation>("reservations");
+  const allFinancing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
+  const today = todayMadrid();
   const dur = (ms: number | null | undefined) => (ms == null ? "—" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
-  const body = `<h1>Llamadas</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Miguel</span></p>
-<p class="sub">Llamadas atendidas por Miguel, con el resultado del análisis automático.</p>
-${channelActivitySection("VOICE", me(res))}
-${filterPills("/crm/llamadas", f, q, false)}
-${searchBox("/crm/llamadas", f, q, "Buscar por número de teléfono")}
+  const volver = withFilterQS(navBase, f, q);
+  return `${channelActivitySection("VOICE", user)}
+${filterPills(navBase, f, q, false)}
+${searchBox(navBase, f, q, "Buscar por número de teléfono")}
 ${items.length > 0 ? bulkBar("/crm/llamadas", f, q, items.length, false) : ""}
 ${items.length === 0 ? `<div class="empty">No hay llamadas en esta vista.</div>` : `<div class="cards-grid">${items.map((m) => `<div class="card ${m.needs_review ? "urgent" : ""} ${m.read ? "msg-read" : "msg-unread"}" style="position:relative"><div class="info">
 ${msgCheckbox("/crm/llamadas", m.id)}
@@ -2261,28 +2348,40 @@ ${msgCheckbox("/crm/llamadas", m.id)}
 <p class="meta"><span class="tag">${esc(m.channel === "VOICE" ? "Voz" : "Chat")}</span> · Duración ${dur(m.duration_ms)} · ${esc(fmtDate(m.created_at))}</p>
 <p>${m.call_successful === false ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Con problemas</span>` : m.call_successful === true ? `<span class="tag" style="background:#e3f6e8;color:#1d6b3d">Correcta</span>` : `<span class="tag">Sin valorar</span>`}${m.needs_review ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Revisar</span>` : ""}${m.archived ? ` <span class="tag">Archivada</span>` : ""}</p>
 ${m.summary ? `<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(m.summary)}</div>` : `<p class="empty" style="padding:10px 0">Sin resumen disponible.</p>`}
-<form method="post" action="/crm/llamadas/${esc(m.id)}">${phoneLink(m.from_number)}
+<form method="post" action="/crm/llamadas/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(m.from_number)}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar esta llamada? Se puede recuperar luego desde la Papelera.")}
-</form></div></div>`).join("")}</div>`}`;
+</form>
+${contactLeadBlock(allLeads, user, allAppts, allResv, today, allFinancing, m.from_number, null)}
+</div></div>`).join("")}</div>`}`;
+}
+
+crm.get("/llamadas", (req, res) => {
+  const f = msgFilterFromQuery(req);
+  const q = String(req.query.q ?? "").trim();
+  const body = `<h1>Llamadas</h1>
+<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Miguel</span></p>
+<p class="sub">Llamadas atendidas por Miguel, con el resultado del análisis automático.</p>
+${llamadasPanel(f, q, me(res), "/crm/llamadas")}`;
   res.type("html").send(page("Llamadas", me(res), body, msgOf(req)));
 });
 
 crm.post("/llamadas/:id", (req, res) => {
   const accion = String(req.body.accion ?? "");
+  const volver = safeVolver(req.body.volver, "/crm/llamadas");
   const items = list<CallAnalysis>("call_analyses");
   const m = items.find((x) => x.id === req.params.id);
-  if (!m) return back(res, "/crm/llamadas", "No encuentro esa llamada");
+  if (!m) return back(res, volver, "No encuentro esa llamada");
   if (accion === "eliminar") {
     moveToTrash("call_analyses", m, `Llamada: ${m.from_number ?? "sin número"}`, me(res).email);
     save("call_analyses", items.filter((x) => x.id !== m.id));
-    return back(res, "/crm/llamadas", "Llamada movida a la papelera");
+    return back(res, volver, "Llamada movida a la papelera");
   }
   if (accion === "marcar_leido") m.read = true;
   else if (accion === "archivar") m.archived = true;
   save("call_analyses", items);
-  back(res, "/crm/llamadas", "Hecho");
+  back(res, volver, "Hecho");
 });
 
 crm.post("/llamadas-masivo", (req, res) => {
@@ -2299,6 +2398,71 @@ crm.post("/llamadas-masivo", (req, res) => {
     me(res).email,
   );
   back(res, "/crm/llamadas", n === 0 ? "No había nada que hacer" : accion.startsWith("eliminar") ? `${n} llamada(s) movida(s) a la papelera` : accion === "archivar" ? `${n} llamada(s) archivada(s)` : `${n} llamada(s) marcada(s) como leída`);
+});
+
+// ---------- Contactos (bandeja única: WhatsApp + Correo + Llamadas) ----------
+// Pedido real (25/10/2026, "debe de tener dentro whatsapp, gmail y
+// llamadas... en esas 3 secciones... que se puedan ver todos los mensajes
+// en tiempo real y las llamadas"): un solo sitio con los 3 canales como
+// pestañas, reutilizando exactamente los mismos paneles/filtros/acciones
+// de siempre (whatsappPanel/correoPanel/llamadasPanel, nada duplicado) --
+// las rutas sueltas (/crm/whatsapp, /crm/correos, /crm/llamadas) se
+// quedan tal cual, nada se rompe ni se borra. Cada mensaje/llamada lleva
+// al lado la ficha completa del cliente real (contactLeadBlock) para que
+// ningún contacto se quede sin ficha sin que se note. Se actualiza sola
+// cada 8s (DOMParser sobre el propio HTML, sin tocar el truco de <main>
+// que ya usa Hoy).
+const CONTACTOS_CANALES = ["whatsapp", "correo", "llamadas"] as const;
+type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
+
+crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/whatsapp"));
+
+crm.get("/contactos/:canal", (req, res) => {
+  const canal = req.params.canal as ContactoCanal;
+  if (!CONTACTOS_CANALES.includes(canal)) return back(res, "/crm/contactos/whatsapp", "Esa sección de Contactos no existe");
+  const f = msgFilterFromQuery(req);
+  const q = String(req.query.q ?? "").trim();
+  const user = me(res);
+  const navBase = `/crm/contactos/${canal}`;
+  const pendingWa = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
+  const pendingCo = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
+  const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
+  const tabLink = (key: ContactoCanal, label: string, count: number) =>
+    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag" style="background:var(--accent);color:#fff">${count}</span>` : ""}</a>`;
+  const tabs = `<div class="side-nav">
+${tabLink("whatsapp", "WhatsApp", pendingWa)}
+${tabLink("correo", "Correo", pendingCo)}
+${tabLink("llamadas", "Llamadas", unreadLl)}
+</div>`;
+  const panelTitle: Record<ContactoCanal, string> = { whatsapp: "WhatsApp -- Carolina", correo: "Correo -- Daniel", llamadas: "Llamadas -- Miguel" };
+  const panel = canal === "whatsapp" ? whatsappPanel(f, q, user, navBase) : canal === "correo" ? correoPanel(f, q, user, navBase) : llamadasPanel(f, q, user, navBase);
+  const body = `<h1>Contactos</h1><p class="sub">WhatsApp, correo y llamadas en un solo sitio, con la ficha completa de cada cliente al lado. Se actualiza sola.</p>
+<div class="side-layout">
+${tabs}
+<div class="side-content" id="contactos-panel" data-canal="${canal}">
+<h2 style="margin-top:0">${esc(panelTitle[canal])}</h2>
+${panel}
+</div>
+</div>
+<script>
+(function(){
+  function refrescar(){
+    try{
+      var activo = document.activeElement;
+      var tag = activo && activo.tagName;
+      if(tag === "TEXTAREA" || tag === "INPUT") return;
+      fetch(location.pathname + location.search).then(function(r){ return r.text(); }).then(function(html){
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var fresco = doc.getElementById("contactos-panel");
+        var mio = document.getElementById("contactos-panel");
+        if(fresco && mio) mio.innerHTML = fresco.innerHTML;
+      }).catch(function(){});
+    }catch(e){}
+  }
+  setInterval(refrescar, 8000);
+})();
+</script>`;
+  res.type("html").send(page("Contactos", user, body, msgOf(req)));
 });
 
 // ---------- Clientes (solo lectura de la segmentación de los agentes) ----------
