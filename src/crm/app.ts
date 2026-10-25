@@ -1005,71 +1005,15 @@ window.toggleAllMsgs = function (master, name) {
     cb.checked = master.checked;
   });
 };
-// Timbre real (13/10/2026, corregido tras probarlo en vivo): avisa con un
-// sonido tipo "ding" y refresca la página sola cuando aparece una alerta
-// urgente nueva (lead caliente, reserva, escalado) -- comprueba cada 15s en
-// cualquier página del CRM. Dos fallos reales detectados en la primera
-// versión, ya arreglados:
-// 1) Los navegadores bloquean el audio hasta que haya una interacción real
-//    (clic, tecla, toque) -- el AudioContext se crea una sola vez y se
-//    "desbloquea" en la primera interacción, no al cargar la página.
-// 2) No bastaba con sonar -- había que recargar sola la página para ver la
-//    reserva/alerta sin que nadie tenga que pulsar F5 a mano.
+// Aviso en vivo de alertas urgentes (13/10/2026, sin sonido desde
+// 25/10/2026 -- a petición real: "quita todo eso de activar sonido").
+// Comprueba cada 15s si hay una alerta urgente nueva (lead caliente,
+// reserva, escalado) y, si la hay y estás en Hoy, refresca esa página
+// sola -- sigue siendo útil sin el timbre, por eso se queda.
 (function () {
   var KEY = "lucero_seen_alerts";
-  // El AudioContext se crea YA (al cargar la página, no espera a nada) --
-  // nace "suspended" hasta que algo real lo reanude. El botón visible
-  // "Activar y probar el sonido" llama a resume() directamente dentro de
-  // su propio clic, que es la forma más fiable de desbloquearlo (mejor
-  // que esperar un clic cualquiera en cualquier sitio, que es más fácil
-  // que falle o pase desapercibido).
-  var ctx = null;
-  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
-  ["click", "keydown", "touchstart"].forEach(function (evt) {
-    document.addEventListener(evt, function () { if (ctx && ctx.state === "suspended") ctx.resume(); }, { passive: true });
-  });
-  window.lucerosonar = ding;
   function seen() { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return []; } }
   function saveSeen(a) { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch (e) {} }
-  function playTones() {
-    try {
-      [1046.5, 1318.5, 1568].forEach(function (freq, i) {
-        var delay = i * 0.11;
-        var o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = "triangle"; o.frequency.value = freq;
-        o.connect(g); g.connect(ctx.destination);
-        g.gain.setValueAtTime(0.0001, ctx.currentTime + delay);
-        g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + delay + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.22);
-        o.start(ctx.currentTime + delay); o.stop(ctx.currentTime + delay + 0.22);
-      });
-    } catch (e) {}
-  }
-  function ding() {
-    // Estilo "Tri-tone" de iPhone (13/10/2026, a petición): tres notas
-    // cortas, brillantes y ascendentes en rápida sucesión -- no es el
-    // archivo exacto de Apple (no se puede ni se debe copiar), pero sí el
-    // mismo estilo general.
-    //
-    // Arreglo real (13/10/2026): sonar justo después de resume() sin
-    // esperar a que la promesa termine podía perderse en algunos
-    // navegadores (el contexto seguía "despertando" cuando se programaban
-    // los tonos). Ahora se espera de verdad a que resume() resuelva antes
-    // de sonar.
-    if (!ctx) return; // sin soporte de audio en este navegador
-    if (ctx.state === "suspended") {
-      ctx.resume().then(playTones).catch(function () {});
-    } else {
-      playTones();
-    }
-  }
-  // Quitado el aviso visual en pantalla (13/10/2026, a petición real): si
-  // Ramón/José están lejos del ordenador no lo van a leer -- lo único que
-  // de verdad avisa ahí es el sonido, así que el timbre suena igual en
-  // cualquier página, sin depender de un aviso visual que nadie va a ver.
-  // En la propia página Hoy: sustituye el contenido por el nuevo sin
-  // navegar de verdad -- así el AudioContext nunca se destruye y no hace
-  // falta tocar nada para verlo ni para que el timbre siga funcionando.
   function softRefreshHoy() {
     // Se extrae con indexOf/substring, no con un regex -- un regex aquí
     // dentro de esta plantilla de TypeScript necesita las barras
@@ -1093,10 +1037,7 @@ window.toggleAllMsgs = function (master, name) {
       var ids = d.ids || [];
       var fresh = ids.filter(function (id) { return prev.indexOf(id) === -1; });
       saveSeen(ids);
-      if (fresh.length > 0) {
-        ding();
-        if (location.pathname === "/crm" || location.pathname === "/crm/") softRefreshHoy();
-      }
+      if (fresh.length > 0 && (location.pathname === "/crm" || location.pathname === "/crm/")) softRefreshHoy();
     }).catch(function () {});
   }
   check();
@@ -1292,8 +1233,8 @@ ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
 ${expiryLine}
 <form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}
-<div class="row"><div><label>✏️ Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
-<div><label>✏️ Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div></div>
+<div class="row"><div><label>Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
+<div><label>Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div></div>
 <button class="btn light" type="submit" name="accion" value="editar">Guardar cambios</button>
 </form>
 </div></div>`;
@@ -1365,7 +1306,7 @@ ${sel}
 ${duplicateWarning}
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${archiveBtn}${del}
+<a class="btn" href="/crm/clientes/${esc(l.id)}">Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${archiveBtn}${del}
 </div></div>`;
 }
 
@@ -1485,7 +1426,6 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
 ${todoOtros.length ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todoLinks(todoOtros)}</div>` : ""}
 ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Todo hecho. No hay nada pendiente.</div>` : ""}`;
   const body = `<h1>Hoy</h1><p class="sub">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p>
-<div class="box noprint"><button class="btn ok" type="button" onclick="window.lucerosonar && window.lucerosonar()">🔔 Activar y probar el sonido de avisos</button><p class="sub" style="margin:8px 0 0">Púlsalo una vez al abrir el CRM cada día -- oirás un pitido de prueba ahora mismo. A partir de ahí, sonará solo cuando llegue un aviso urgente, sin que tengas que hacer nada más.</p></div>
 <form class="search noprint" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit">Buscar</button></form>
 <div class="box">${todaySummary(today)}</div>
 <div class="stats">
@@ -2737,7 +2677,7 @@ function entradaCard(l: Lead, phase: LeadPhase, quality: DataQuality, priority: 
 <p>${qualityNote}</p>
 <p><b>${esc(situation(l))}</b></p>
 <p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">✏️ Editar / ver ficha</a>${phoneLink(l.phone)}${waButton(l.phone, whatsappGreetingFor(l, appts))}
+<a class="btn" href="/crm/clientes/${esc(l.id)}">Editar / ver ficha</a>${phoneLink(l.phone)}${waButton(l.phone, whatsappGreetingFor(l, appts))}
 </div></div>`;
 }
 crm.get("/entrada", (req, res) => {
@@ -2921,8 +2861,8 @@ ${phoneLink(lead.phone)}</div>
 ${saleOutcomeBox}
 ${timeline.length > 0 ? `<div class="box"><h3 style="margin-top:0">Historial</h3>${timeline.map((e) => `<p class="sub">${esc(fmtDate(e.at))}</p><p>${e.html}</p>`).join("<hr>")}</div>` : ""}
 <form class="box" method="post" action="/crm/clientes/${esc(lead.id)}">
-<label>✏️ Nombre</label><input name="nombre" value="${esc(lead.name ?? "")}">
-<label>✏️ Coche de interés</label><input name="vehicle_interest" value="${esc(lead.vehicle_interest ?? "")}">
+<label>Nombre</label><input name="nombre" value="${esc(lead.name ?? "")}">
+<label>Coche de interés</label><input name="vehicle_interest" value="${esc(lead.vehicle_interest ?? "")}">
 <label>Notas para el equipo</label><textarea name="notes" rows="3">${esc(lead.notes ?? "")}</textarea>
 <button class="btn ok" type="submit" name="accion" value="guardar">Guardar cambios</button>
 ${lead.do_not_contact ? button("Volver a escribirle", "reactivar", "light") : button("No volver a escribirle", "no_contactar", "danger")}
