@@ -600,69 +600,131 @@ function toggleCard(href: string, icon: string, iconBg: string, iconColor: strin
 }
 
 // ---------- pantalla ----------
-// Reorganizado (20/10/2026, mejora integral del CRM, sección 4): agrupado
-// como pide el encargo -- Hoy / Clientes y oportunidades / Pendientes /
-// Canales de entrada (Llamadas, WhatsApp, Correos) / Visitas / Reservas /
-// Embudo / Seguimiento / Coches / Informes -- manteniendo las rutas
-// existentes tal cual, ninguna cambia.
-const MENU: [string, string][] = [
-  ["/crm", "Hoy"],
-  ["/crm/entrada", "Entrada de leads"],
-  ["/crm/clientes", "Clientes y oportunidades"],
-  ["/crm/publicidad", "Clientes para publicidad"],
-  ["/crm/incidencias", "Incidencias"],
-  ["/crm/llamadas", "Llamadas"],
-  ["/crm/whatsapp", "WhatsApp"],
-  ["/crm/correos", "Correos"],
-  ["/crm/citas", "Visitas"],
-  ["/crm/reservas", "Reservas"],
-  ["/crm/embudo", "Embudo comercial"],
-  ["/crm/seguimiento", "Seguimiento"],
-  ["/crm/coches", "Coches"],
-  ["/crm/informes", "Informes"],
+// Rediseño visual CRM PRO (25/10/2026, "el rediseño visual completo
+// primero (menú, Hoy, identidad)"): las mismas 14 rutas reales de
+// siempre, reagrupadas visualmente según el encargo maestro (Principal /
+// Comercial / Comunicación / Operación / Análisis / Administración) --
+// ninguna ruta nueva, ninguna ruta eliminada. Secciones del encargo sin
+// página real detrás (Anuncios, Agenda-calendario, Ventas, Ajustes,
+// Ayuda, Asistentes como página propia) NO se añaden aquí -- se añadirían
+// cuando (y solo cuando) existan de verdad, nunca antes. "Coches" y
+// "Equipo" se renombran a "Vehículos"/"Usuarios" (puro vocabulario, sus
+// rutas en /crm/coches y /crm/equipo no cambian).
+const NAV_GROUPS: { label: string; items: [string, string][] }[] = [
+  { label: "Principal", items: [["/crm", "Hoy"], ["/crm/entrada", "Entrada de leads"]] },
+  { label: "Comercial", items: [["/crm/clientes", "Clientes y oportunidades"], ["/crm/embudo", "Embudo comercial"], ["/crm/seguimiento", "Seguimiento"], ["/crm/publicidad", "Clientes para publicidad"]] },
+  { label: "Comunicación", items: [["/crm/llamadas", "Llamadas"], ["/crm/whatsapp", "WhatsApp"], ["/crm/correos", "Correos"], ["/crm/incidencias", "Incidencias"]] },
+  { label: "Operación", items: [["/crm/citas", "Visitas"], ["/crm/reservas", "Reservas"], ["/crm/coches", "Vehículos"]] },
+  { label: "Análisis", items: [["/crm/informes", "Informes"]] },
 ];
+const ADMIN_NAV_GROUP: { label: string; items: [string, string][] } = {
+  label: "Administración",
+  items: [["/crm/integraciones", "Integraciones"], ["/crm/equipo", "Usuarios"], ["/crm/papelera", "Papelera"], ["/crm/studio", "Studio IA"]],
+};
+
+// Iniciales para la insignia de cada enlace del menú cuando está
+// colapsado (25/10/2026) -- puramente decorativo, nunca sustituye al
+// texto (que sigue siendo el nombre real de la sección al expandir). Dos
+// palabras -> una letra de cada una (p.ej. "Clientes y oportunidades" ->
+// "CO"); una sola palabra -> sus 3 primeras letras, para no confundir
+// "Incidencias"/"Informes"/"Integraciones" con el mismo "IN".
+const NAV_STOPWORDS = new Set(["y", "de", "del", "la", "el", "los", "las", "en", "para", "con"]);
+function navInitials(label: string): string {
+  const words = label.split(/\s+/).filter((w) => w && !NAV_STOPWORDS.has(w.toLowerCase()));
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  const letters = (words[0] ?? label).replace(/[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]/g, "");
+  return (letters.slice(0, 3) || "·").toUpperCase();
+}
 
 function page(section: string, user: CrmUser, body: string, msg?: string): string {
   // Studio IA gasta dinero real en cada generación (16-17/10/2026) -- a
   // petición real ("a esa seccion, solo puedo acceder yo y el correo de
   // automoviles lucero o administradores") queda reservada a admins, igual
   // que Papelera/Integraciones/Equipo.
-  const menu: [string, string][] = [
-    ...MENU,
-    ...(user.role === "admin" ? ([["/crm/studio", "Studio IA"], ["/crm/papelera", "Papelera"], ["/crm/integraciones", "Integraciones"], ["/crm/equipo", "Equipo"]] as [string, string][]) : []),
+  const navGroups: { label: string; items: [string, string][] }[] = [
+    ...NAV_GROUPS,
+    ...(user.role === "admin" ? [ADMIN_NAV_GROUP] : []),
   ];
+  // Datos reales para la barra superior (25/10/2026) -- nunca inventados,
+  // mismos conteos/condiciones ya usados en Hoy y en Correos/WhatsApp/
+  // Incidencias, recalculados aquí porque la barra la comparten todas
+  // las páginas, no solo Hoy.
+  const pendingMails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
+  const pendingWhatsapp = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
+  const msgTotal = pendingMails + pendingWhatsapp;
+  const msgHref = pendingWhatsapp > pendingMails ? "/crm/whatsapp?f=pendientes" : "/crm/correos?f=pendientes";
+  const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin responder`;
+  const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
+  const alertCount = pendingAlerts().length;
+  const notifTotal = overdueTasks + alertCount;
+  const notifTitle = `${alertCount} aviso(s) urgente(s) y ${overdueTasks} tarea(s) vencida(s)`;
+  const roleLabel: Record<string, string> = { admin: "Administrador", comercial: "Comercial", equipo: "Equipo" };
+  const integrationsOk = isZernioWhatsappConfigured() && googleStatus().connected && Boolean(process.env.RETELL_API_KEY) && Boolean(process.env.OPENAI_API_KEY);
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(section)} · Lucero</title>
-<link rel="manifest" href="/crm/manifest.json"><meta name="theme-color" content="#1d2b44">
+<link rel="manifest" href="/crm/manifest.json"><meta name="theme-color" content="#ffffff">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Lucero"><link rel="apple-touch-icon" href="/crm/icono.svg">
 <style>
 *{box-sizing:border-box}
-body{margin:0;font:20px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f3f4f6;color:#1d1f24}
-/* Menú lateral (21/10/2026, a petición real: "esto en vez de que salga
-   arriba que salga organizado en un lado", pegado a Klikar como
-   referencia) -- header/nav/main son los mismos elementos de siempre
-   (softRefreshHoy sigue buscando el texto literal <main>/</main>, sin
-   tocar), solo se reordenan con flexbox. En móvil (<=900px) vuelve a la
-   barra horizontal de siempre, que es más usable con poco ancho. */
+/* Identidad visual CRM PRO (25/10/2026, rediseño pedido estilo coches.net
+   PRO): fondo blanco, paneles gris muy claro, rojo = acción/prioridad,
+   verde = confirmado, naranja = pendiente, rojo intenso = urgente. Un
+   solo lugar para estos colores -- el resto del CSS los usa por token,
+   nunca el hex suelto, para no volver a tener dos rojos/naranjas por
+   accidente. */
+:root{--bg:#ffffff;--panel:#f6f7f9;--ink:#1a1d23;--ink-dim:#5b6472;--border:#e3e5ea;--accent:#dc2626;--accent-dim:#fdeceb;--urgent:#b3261e;--ok:#2e9e55;--ok-bg:#e3f6e8;--warn:#d9822b;--warn-bg:#fff4e0;--off:#9aa1ad}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+/* Menú lateral rediseñado (25/10/2026, rediseño visual CRM PRO: fondo
+   blanco, acento rojo, colapsable, con barra superior nueva) -- header/
+   nav/main siguen siendo los mismos elementos de siempre (softRefreshHoy
+   sigue buscando el texto literal <main>/</main>, sin tocar: solo se le
+   añade un wrapper .appcol alrededor junto con la barra superior, el
+   propio <main> no cambia). En móvil (<=900px) la barra lateral vuelve a
+   ser horizontal, sin colapsar (es más usable con poco ancho).*/
 body{display:flex;min-height:100vh}
-header{background:#1d2b44;color:#fff;padding:20px 16px;display:flex;flex-direction:column;gap:16px;flex:0 0 230px;width:230px;height:100vh;position:sticky;top:0;align-self:flex-start}
-header strong{font-size:22px}
+header{background:var(--panel);color:var(--ink);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:14px;flex:0 0 220px;width:220px;height:100vh;position:sticky;top:0;align-self:flex-start;transition:width .15s,flex-basis .15s}
+header .brand{display:flex;align-items:center;gap:10px}
+header .brand strong{font-size:17px;white-space:nowrap;overflow:hidden}
 header form{margin-top:auto}
-nav{display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto}
-nav a{color:#fff;text-decoration:none;background:#2e4166;padding:12px 16px;border-radius:12px;font-size:18px}
-nav a.on{background:#f0b429;color:#1d2b44;font-weight:700}
-main{flex:1;min-width:0;max-width:1440px;margin:0 auto;padding:18px}
+.sidebar-toggle{background:none;border:1px solid var(--border);border-radius:8px;width:30px;height:30px;flex:0 0 30px;font-size:15px;line-height:1;cursor:pointer;color:var(--ink-dim)}
+.sidebar-toggle:hover{background:#fff}
+nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
+nav .navgroup{margin-top:10px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-dim);padding:0 10px}
+nav .navgroup:first-child{margin-top:0}
+nav a{color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;font-size:14px}
+nav a .navinit{flex:0 0 26px;width:26px;height:24px;border-radius:7px;background:#eceff3;color:var(--ink-dim);font-size:10px;letter-spacing:-.02em;font-weight:700;display:flex;align-items:center;justify-content:center}
+nav a .navlabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+nav a:hover{background:#eceff3}
+nav a.on{background:var(--accent);color:#fff;font-weight:700}
+nav a.on .navinit{background:rgba(255,255,255,.25);color:#fff}
+header.collapsed{width:60px;flex:0 0 60px;padding:16px 8px}
+header.collapsed .brand strong,header.collapsed nav .navgroup,header.collapsed nav a .navlabel,header.collapsed form button{display:none}
+header.collapsed nav a{justify-content:center;padding:9px 0}
+header.collapsed form{display:flex;justify-content:center}
+.appcol{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+.topbar{display:flex;align-items:center;gap:10px;background:var(--bg);border-bottom:1px solid var(--border);padding:10px 18px;position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.topbar-search{flex:1;min-width:200px;max-width:460px;margin:0;display:flex;gap:6px}
+.topbar-search input{flex:1;margin:0;padding:8px 12px;font-size:14px}
+.topbar-pill{display:inline-flex;align-items:center;gap:5px;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;white-space:nowrap}
+.topbar-pill:hover{background:#eceff3}
+.topbar-dot{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+.topbar-dot.ok{background:var(--ok)}
+.topbar-dot.down{background:var(--urgent)}
+.topbar-user{margin-left:auto;font-size:13px;color:var(--ink-dim);white-space:nowrap;text-align:right}
+.topbar-user small{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+main{flex:1;min-width:0;max-width:1440px;width:100%;margin:0 auto;padding:18px}
 @media(max-width:900px){
 body{display:block}
-header{position:static;width:auto;flex:none;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
+header{position:static;width:auto!important;flex:none!important;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
 header form{margin-top:0}
 nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
+nav .navgroup{display:none}
 }
-h1{font-size:34px;margin:6px 0 4px}
-h2{font-size:24px;margin:22px 0 10px}
-.sub{color:#4b5563;margin:0 0 16px;font-size:20px}
-.msg{background:#e3f6e8;border:3px solid #2e9e55;padding:14px 18px;border-radius:14px;margin-bottom:16px;font-size:21px;font-weight:600}
-.card{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.08);display:flex;gap:16px;flex-wrap:wrap;position:relative}
+h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
+h2{font-size:20px;margin:20px 0 10px}
+.sub{color:var(--ink-dim);margin:0 0 16px;font-size:15px}
+.msg{background:var(--ok-bg);border:1px solid var(--ok);padding:12px 16px;border-radius:12px;margin-bottom:16px;font-size:15px;font-weight:600;color:var(--ink)}
+.card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(16,24,40,.04);display:flex;gap:16px;flex-wrap:wrap;position:relative}
 /* Fichas de clientes en horizontal, varias por fila (22/10/2026, petición
    real: "ese orden usalo para los clientes... en todas las secciones" --
    mismo criterio visto en el CRM de Klikar: grid que reparte en columnas
@@ -681,16 +743,16 @@ h2{font-size:24px;margin:22px 0 10px}
 .card .tletra{width:26px;height:26px;font-size:13px}
 .card .origen{font-size:13px;padding:3px 8px}
 .card .btn{font-size:14px;padding:8px 14px;margin:4px 6px 4px 0}
-.when{background:#1d2b44;color:#fff;border-radius:14px;padding:12px 16px;text-align:center;min-width:112px}
-.when b{display:block;font-size:40px;line-height:1}
-.when span{font-size:18px;display:block}
-.when em{font-style:normal;font-size:26px;font-weight:700;display:block;margin-top:4px}
-.tag{display:inline-block;padding:6px 12px;border-radius:999px;font-size:18px;margin:4px 6px 4px 0;background:#e8ebf1}
-.todo{background:#fff8e6;border:3px solid #d9a22b;border-radius:16px;padding:16px 18px;margin-bottom:20px}
-.todo a{display:block;font-size:21px;padding:10px 0;color:#1d2b44;font-weight:600;text-decoration:none}
-.allok{background:#e3f6e8;border:3px solid #2e9e55;border-radius:16px;padding:18px;margin-bottom:20px;font-size:22px;font-weight:700}
-.empty{background:#fff;border-radius:16px;padding:20px;color:#4b5563;font-size:20px}
-.urgent{border-left:10px solid #b3261e}.pending{border-left:10px solid #d9a22b}.done{border-left:10px solid #2e9e55}.off{border-left:10px solid #9aa1ad;opacity:.75}
+.when{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:12px;padding:10px 14px;text-align:center;min-width:100px}
+.when b{display:block;font-size:32px;line-height:1}
+.when span{font-size:14px;display:block;color:var(--ink-dim)}
+.when em{font-style:normal;font-size:21px;font-weight:700;display:block;margin-top:4px}
+.tag{display:inline-block;padding:5px 11px;border-radius:999px;font-size:14px;margin:4px 6px 4px 0;background:var(--panel)}
+.todo{background:var(--warn-bg);border:1px solid var(--warn);border-radius:12px;padding:14px 16px;margin-bottom:20px}
+.todo a{display:block;font-size:16px;padding:8px 0;color:var(--ink);font-weight:600;text-decoration:none}
+.allok{background:var(--ok-bg);border:1px solid var(--ok);border-radius:12px;padding:16px;margin-bottom:20px;font-size:17px;font-weight:700;color:var(--ink)}
+.empty{background:#fff;border:1px solid var(--border);border-radius:12px;padding:18px;color:var(--ink-dim);font-size:15px}
+.urgent{border-left:4px solid var(--urgent)}.pending{border-left:4px solid var(--warn)}.done{border-left:4px solid var(--ok)}.off{border-left:4px solid var(--off);opacity:.75}
 /* Módulo mensajes/clientes (18/10/2026): "leído" y "respondido" son estados
    distintos -- sin responder resalta (fondo claro, texto en negrita);
    respondido se apaga (fondo gris, sin perder legibilidad); sin leer lleva
@@ -707,12 +769,12 @@ h2{font-size:24px;margin:22px 0 10px}
 .msgsel{width:22px;height:22px;margin:0}
 .filterbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
 .filterbar a{text-decoration:none}
-.btn{font:inherit;font-size:20px;padding:14px 20px;border:0;border-radius:14px;background:#1d2b44;color:#fff;cursor:pointer;margin:6px 8px 6px 0;text-decoration:none;display:inline-block}
-.btn.ok{background:#2e9e55}.btn.warn{background:#d9822b}.btn.danger{background:#b3261e}.btn.light{background:#e4e7ec;color:#1d2b44}
-input,select,textarea{font:inherit;font-size:20px;padding:12px 14px;border:2px solid #c3c9d4;border-radius:12px;width:100%;margin:6px 0 14px;background:#fff}
-label{font-size:20px;font-weight:700}
+.btn{font:inherit;font-size:15px;padding:11px 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;margin:6px 8px 6px 0;text-decoration:none;display:inline-block}
+.btn.ok{background:var(--ok)}.btn.warn{background:var(--warn)}.btn.danger{background:var(--urgent)}.btn.light{background:var(--panel);color:var(--ink)}
+input,select,textarea{font:inherit;font-size:15px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;width:100%;margin:6px 0 14px;background:#fff}
+label{font-size:14px;font-weight:700;color:var(--ink)}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:640px){.row{grid-template-columns:1fr}h1{font-size:28px}}
+@media(max-width:640px){.row{grid-template-columns:1fr}h1{font-size:23px}}
 .box{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-wrap:break-word;word-break:break-word}
 /* Integraciones en dos columnas (21/10/2026, a petición real: "ponlas en
    un lado como el crm de klikar") -- lista lateral de secciones a la
@@ -720,14 +782,14 @@ label{font-size:20px;font-weight:700}
    página la usa, no toca el resto del CSS compartido. */
 .side-layout{display:flex;gap:24px;align-items:flex-start}
 .side-nav{flex:0 0 220px;position:sticky;top:20px;display:flex;flex-direction:column;gap:4px}
-.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:#1d2b44;font-weight:700;font-size:17px}
+.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;font-size:15px}
 .side-nav a:hover{background:#e4e7ec}
 .side-content{flex:1;min-width:0}
 @media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
-.stat{background:#fff;border-radius:16px;padding:16px;text-decoration:none;color:inherit;border-left:10px solid #1d2b44;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.stat b{display:block;font-size:44px;line-height:1}
-.stat span{font-size:20px}
+.stat{background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px;text-decoration:none;color:inherit;border-left:4px solid var(--accent);box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.stat b{display:block;font-size:30px;line-height:1;color:var(--ink)}
+.stat span{font-size:14px;color:var(--ink-dim)}
 /* Tarjetas grandes de filtro (21/10/2026, a petición real: "usa la misma
    organizacion que utilizamos para influencers en klikar" -- ahí los
    grupos principales son tarjetas grandes clicables con icono y
@@ -738,13 +800,13 @@ label{font-size:20px;font-weight:700}
 .toggle-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px}
 .toggle-card{display:flex;align-items:center;gap:12px;background:#fff;border-radius:16px;padding:16px 18px;text-decoration:none;color:inherit;box-shadow:0 1px 3px rgba(0,0,0,.08);border:3px solid transparent}
 .toggle-card:hover{border-color:#c3c9d4}
-.toggle-card.active{border-color:#1d2b44;background:#eef1f6}
+.toggle-card.active{border-color:var(--accent);background:var(--accent-dim)}
 .toggle-card .ticon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
 .toggle-card .tbody{flex:1;min-width:0}
 .toggle-card .tbody b{display:block;font-size:18px;line-height:1.25}
 .toggle-card .tbody .sub{display:block;font-size:14px;line-height:1.3;color:#6b7280;margin:2px 0 0}
 .toggle-card .tcount{font-size:32px;font-weight:800;line-height:1}
-.t-hot{background:#dc2626;color:#fff;font-weight:700}
+.t-hot{background:var(--accent);color:#fff;font-weight:700}
 .t-warm{background:#f97316;color:#fff;font-weight:700}
 .t-cold{background:#2563eb;color:#fff;font-weight:700}
 .tletra{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;font-weight:800;margin-right:8px;flex-shrink:0}
@@ -757,14 +819,14 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .pick-card{display:flex;flex-direction:column;gap:6px;background:#fff;border:3px solid #e4e7ec;border-radius:16px;padding:14px;cursor:pointer;position:relative;transition:border-color .12s,transform .12s,box-shadow .12s}
 .pick-card input{position:absolute;opacity:0;pointer-events:none}
 .pick-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.08)}
-.pick-card:has(input:checked){border-color:#1d2b44;box-shadow:0 0 0 3px rgba(29,43,68,.15)}
-.pick-icon-badge{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;background:#1d2b44}
+.pick-card:has(input:checked){border-color:var(--accent);box-shadow:0 0 0 3px rgba(220,38,38,.15)}
+.pick-icon-badge{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;background:var(--accent)}
 .pick-label{font-weight:700;font-size:18px}
 .pick-desc{font-size:14px;color:#4b5563;margin:0}
 .pill-group{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
 .pill-choice{display:inline-flex;align-items:center;gap:6px;background:#e8ebf1;border:3px solid transparent;border-radius:999px;padding:10px 16px;font-size:17px;cursor:pointer;font-weight:600;position:relative}
 .pill-choice input{position:absolute;opacity:0;pointer-events:none}
-.pill-choice:has(input:checked){background:#1d2b44;color:#fff}
+.pill-choice:has(input:checked){background:var(--accent);color:#fff}
 /* Lucero Studio AI: mundo propio, más colorido que el resto del CRM (a
    petición real, 17/10/2026: "mas colorido, mas tarjetas y mejor orden") --
    vídeo en azul, imagen en ámbar, para que se distinga de un vistazo qué
@@ -790,10 +852,25 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .gallery .card{display:block;margin:0;position:relative}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
-<header><strong>Automóviles Lucero</strong>
-<nav>${menu.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}">${label}</a>`).join("")}</nav>
+<header id="sidebar">
+<div class="brand"><button class="sidebar-toggle" type="button" aria-label="Contraer o expandir el menú" onclick="luceroToggleSidebar()">☰</button><strong>Automóviles Lucero</strong></div>
+<nav>${navGroups.map((g) => `<div class="navgroup">${esc(g.label)}</div>${g.items.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}" title="${esc(label)}"><span class="navinit">${esc(navInitials(label))}</span><span class="navlabel">${esc(label)}</span></a>`).join("")}`).join("")}</nav>
 <form method="post" action="/crm/salir" style="margin:0"><button class="btn light" type="submit">Salir</button></form></header>
+<div class="appcol">
+<div class="topbar noprint">
+<form class="topbar-search" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit" style="padding:8px 14px;font-size:13px;margin:0">Buscar</button></form>
+<a class="topbar-pill" href="/crm/seguimiento" title="Crear una tarea">+ Tarea</a>
+<a class="topbar-pill" href="${msgHref}" title="${esc(msgTitle)}">✉ ${msgTotal}</a>
+<a class="topbar-pill" href="/crm" title="${esc(notifTitle)}">🔔 ${notifTotal}</a>
+${user.role === "admin" ? `<a class="topbar-dot ${integrationsOk ? "ok" : "down"}" href="/crm/integraciones" title="${integrationsOk ? "Integraciones operativas" : "Hay alguna integración caída -- revisa Integraciones"}"></a>` : ""}
+<span class="topbar-user">${esc(user.name)}<small>${esc(roleLabel[user.role] ?? user.role)}</small></span>
+</div>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}${body}</main>
+</div>
+<script>
+function luceroToggleSidebar(){try{var h=document.getElementById('sidebar');var on=h.classList.toggle('collapsed');localStorage.setItem('lucero_sidebar_collapsed',on?'1':'0')}catch(e){}}
+(function(){try{if(localStorage.getItem('lucero_sidebar_collapsed')==='1'){var h=document.getElementById('sidebar');if(h)h.classList.add('collapsed')}}catch(e){}})();
+</script>
 <script>
 // Mantiene el scroll al enviar un formulario (14/10/2026, a petición real:
 // "cada vez que elimino un cliente la página vuelve al principio"). Cualquier
@@ -1227,6 +1304,12 @@ crm.get("/", (req, res) => {
   const todayAppts = appts.filter((a) => a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
   const upcoming = appts.filter((a) => (a.requested_date ?? "") > today).sort((x, y) => (x.requested_date ?? "").localeCompare(y.requested_date ?? "")).slice(0, 6);
   const toAttend = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification");
+  // Indicadores nuevos del rediseño visual (25/10/2026): solo con datos ya
+  // reales, nada inventado. "Activa" usa el mismo criterio que ya existe
+  // en el resto del CRM para una reserva viva (:416/:1132). "Sin
+  // responsable" usa el campo real `assigned_to` (añadido 20/10/2026).
+  const activeReservations = reservations.filter((r) => r.status !== "cancelled" && r.status !== "expired");
+  const leadsSinResponsable = allLeads.filter((l) => !l.archived && !l.marketing_list && !l.do_not_contact && !l.assigned_to);
   // Fase A punto 2/7 (21/10/2026): las tareas urgentes/vencidas nunca
   // aparecían en Hoy, el único sitio pensado para "qué hago ahora mismo" --
   // aunque ya se veían en /crm/seguimiento. Mismo patrón {href,text}.
@@ -1308,6 +1391,8 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
 <a class="stat" href="/crm/incidencias"><b>${handoffs.filter((h) => h.reason_type !== "reserva").length}</b><span>incidencias</span></a>
 <a class="stat" href="/crm/correos"><b>${mails.length}</b><span>correos por contestar</span></a>
+<a class="stat" href="/crm/reservas"><b>${activeReservations.length}</b><span>reservas activas</span></a>
+<a class="stat" href="/crm/clientes"><b>${leadsSinResponsable.length}</b><span>leads sin responsable</span></a>
 </div>
 ${alertBlock}
 ${todoBlock}
@@ -2569,7 +2654,7 @@ const STATUS_TAG: Record<OfficialVehicleStatus, string> = {
 };
 
 crm.get("/coches", (req, res) => {
-  const body = `<h1>Coches</h1>
+  const body = `<h1>Vehículos</h1>
 <p class="sub">Toca un coche para cambiar si está disponible, reservado o vendido, y su precio.</p>
 ${currentVehicles().map((v) => {
   const st = getOfficialStatus(v.id);
@@ -2578,7 +2663,7 @@ ${currentVehicles().map((v) => {
 <p><span class="tag" style="${STATUS_TAG[st]}">${esc(VEHICLE_TEXT[st])}</span><b>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</b></p>
 <a class="btn" href="/crm/coches/${esc(v.id)}">Cambiar</a></div></div>`;
 }).join("")}`;
-  res.type("html").send(page("Coches", me(res), body, msgOf(req)));
+  res.type("html").send(page("Vehículos", me(res), body, msgOf(req)));
 });
 
 crm.get("/coches/:id", (req, res) => {
@@ -2594,7 +2679,7 @@ crm.get("/coches/:id", (req, res) => {
 ${(["AVAILABLE", "RESERVED", "SOLD"] as OfficialVehicleStatus[]).map((s) => option(s, VEHICLE_TEXT[s], st)).join("")}</select>
 <label>Precio (€)</label><input name="precio" type="number" value="${esc(priceOf(v.id))}" min="0">
 <button class="btn ok" type="submit">Guardar</button></form>`;
-  res.type("html").send(page("Coches", me(res), body, msgOf(req)));
+  res.type("html").send(page("Vehículos", me(res), body, msgOf(req)));
 });
 
 crm.post("/coches/:id", (req, res) => {
@@ -2754,7 +2839,7 @@ ${realDupGroups.length > 0
 crm.get("/equipo", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
   const users = listUsers();
-  const body = `<h1>Equipo</h1>
+  const body = `<h1>Usuarios</h1>
 <p class="sub">Aquí das de alta a Ramón y a José, y cambias las contraseñas.</p>
 <div class="box"><h3 style="margin-top:0">Dar de alta a alguien</h3>
 <form method="post" action="/crm/equipo">
@@ -2769,7 +2854,7 @@ ${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><
 <button class="btn light" type="submit" name="accion" value="clave">Cambiar contraseña</button>
 ${u.id !== me(res).id ? button("Quitar el acceso", "quitar", "danger") : ""}
 </form></div></div>`).join("")}`;
-  res.type("html").send(page("Equipo", me(res), body, msgOf(req)));
+  res.type("html").send(page("Usuarios", me(res), body, msgOf(req)));
 });
 
 crm.post("/equipo", (req, res) => {
