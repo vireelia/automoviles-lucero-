@@ -1956,12 +1956,21 @@ ${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : 
 });
 
 // ---------- Visitas ----------
+// Lunes de la semana (ISO, Europa/Madrid) que contiene esa fecha -- base de
+// la tira de la semana de Visitas (26/10/2026, "G2" de las ideas de diseño).
+function mondayOfWeek(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() + (day === 0 ? -6 : 1 - day));
+  return d.toISOString().slice(0, 10);
+}
 crm.get("/citas", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "todas";
   const c = typeof req.query.c === "string" ? req.query.c : "todos";
   const d = typeof req.query.d === "string" ? req.query.d : "todas";
   const today = todayMadrid();
-  let items = list<Appointment>("appointments");
+  const allAppts = list<Appointment>("appointments");
+  let items = allAppts;
   if (f === "pendientes") items = items.filter((a) => a.status === "requested");
   if (f === "confirmadas") items = items.filter((a) => a.status === "confirmed");
   if (f === "no_presentado") items = items.filter((a) => a.status === "no_presentado");
@@ -1969,20 +1978,50 @@ crm.get("/citas", (req, res) => {
   // Pestañas por día (21/10/2026, Fase A punto 6, "es mucho lio" -- la lista
   // mezclaba hoy con pendientes de días pasados y sin fecha). Por defecto
   // "todas" para no romper ningún enlace ya guardado (incluidos los del
-  // propio dashboard de Hoy); un tercer eje independiente de f/c.
+  // propio dashboard de Hoy); un tercer eje independiente de f/c. Se amplía
+  // (26/10/2026) para aceptar también una fecha concreta (YYYY-MM-DD) --
+  // lo que pulsas en la tira de la semana -- sin tocar ninguno de los
+  // valores antiguos.
+  const isDateKey = /^\d{4}-\d{2}-\d{2}$/.test(d);
   if (d === "hoy") items = items.filter((a) => a.requested_date === today);
   else if (d === "ayer") items = items.filter((a) => a.requested_date === addDaysToDateStr(today, -1));
   else if (d === "sin_fecha") items = items.filter((a) => !a.requested_date);
   else if (d === "otros_dias") items = items.filter((a) => a.requested_date && a.requested_date !== today && a.requested_date !== addDaysToDateStr(today, -1));
+  else if (isDateKey) items = items.filter((a) => a.requested_date === d);
   items.sort((x, y) => `${x.requested_date ?? ""}${x.requested_time ?? ""}`.localeCompare(`${y.requested_date ?? ""}${y.requested_time ?? ""}`));
-  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}&d=${d}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
-  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}&d=${d}" class="tag" style="text-decoration:none;${c === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const diaPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${c}&d=${k}" class="tag" style="text-decoration:none;${d === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
+  // Tira de la semana ("G2" elegida tras ver los mockups): vistazo de los 7
+  // días de la semana actual con un punto si ese día tiene una visita por
+  // confirmar de verdad (dato real de allAppts, no de items ya filtrados --
+  // el punto no depende de qué pestaña de estado/canal esté activa).
+  const weekStart = mondayOfWeek(today);
+  const pendingDates = new Set(allAppts.filter((a) => a.status === "requested" && a.requested_date).map((a) => a.requested_date!));
+  const weekStrip = Array.from({ length: 7 }, (_, i) => addDaysToDateStr(weekStart, i)).map((dk) => {
+    const isToday = dk === today;
+    const active = d === dk;
+    const hasPending = pendingDates.has(dk);
+    const wk = DAYS[new Date(`${dk}T12:00:00`).getDay()].slice(0, 3).toUpperCase();
+    const dayNum = dk.slice(8, 10);
+    const bg = active ? "var(--accent)" : hasPending ? "var(--warn-bg)" : "transparent";
+    const fg = active ? "#fff" : hasPending ? "var(--warn)" : "var(--ink-dim)";
+    return `<a href="/crm/citas?f=${f}&c=${c}&d=${dk}" style="text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border-radius:9px;background:${bg};color:${fg}">
+<span style="font-size:10px">${esc(wk)}</span>
+<b style="font-size:15px;color:inherit">${esc(dayNum)}</b>
+${isToday ? `<span style="font-size:10px;font-weight:700;color:${active ? "#fff" : "var(--accent)"}">Hoy</span>` : hasPending ? `<span style="width:6px;height:6px;border-radius:999px;background:${active ? "#fff" : "var(--warn)"};margin-top:1px"></span>` : ""}
+</a>`;
+  }).join("");
+  const estadoDropdown = `<select onchange="location.href=this.value" style="width:auto;margin:0">${([["todas", "Todas"], ["pendientes", "Por confirmar"], ["confirmadas", "Confirmadas"], ["no_presentado", "No presentado"]] as const).map(([k, label]) => `<option value="/crm/citas?f=${k}&c=${c}&d=${d}" ${f === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+  const canalDropdown = `<select onchange="location.href=this.value" style="width:auto;margin:0">${([["todos", "Todos los canales"], ["llamadas", "Llamadas"], ["whatsapp", "WhatsApp"], ["otros", "Otros canales"]] as const).map(([k, label]) => `<option value="/crm/citas?f=${f}&c=${k}&d=${d}" ${c === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
   const body = `<h1>Visitas</h1>
 <p class="sub">Aquí ves los días y las horas en que vendrán los clientes a ver un coche.</p>
-<p>${diaPill("todas", "Todos los días")} ${diaPill("hoy", "Hoy")} ${diaPill("ayer", "Ayer")} ${diaPill("otros_dias", "Otros días")} ${diaPill("sin_fecha", "Sin fecha")}</p>
-<p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
-<p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} ${pill("no_presentado", "No presentado")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
+<div class="box" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px">${weekStrip}</div>
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid #f0f1f3;padding-top:10px">
+${estadoDropdown}${canalDropdown}
+<span style="font-size:12.5px">${diaPill("todas", "Todos los días")} ${diaPill("ayer", "Ayer")} ${diaPill("otros_dias", "Otros días")} ${diaPill("sin_fecha", "Sin fecha")}</span>
+<a class="link noprint" style="margin-left:auto;font-size:13px;font-weight:700;white-space:nowrap" href="/crm/semana">Ver la semana para imprimir</a>
+</div>
+</div>
 ${items.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", items.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
 ${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : `<div class="records-list">${items.map(apptCard).join("")}</div>`}`;
   res.type("html").send(page("Visitas", me(res), body, msgOf(req)));
