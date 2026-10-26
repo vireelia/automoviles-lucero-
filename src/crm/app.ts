@@ -928,7 +928,7 @@ header .brand .wordmark em{font-style:normal;background:var(--accent);color:#fff
 header .brand .subbrand{display:block;font-size:9.5px;font-weight:600;letter-spacing:.09em;color:var(--ink-dim);white-space:nowrap;overflow:hidden;margin-top:1px}
 .sidebar-toggle{background:none;border:1px solid var(--border);border-radius:8px;width:30px;height:30px;flex:0 0 30px;font-size:15px;line-height:1;cursor:pointer;color:var(--ink-dim)}
 .sidebar-toggle:hover{background:var(--panel)}
-nav{display:flex;flex-direction:column;gap:1px;flex:1;overflow-y:auto}
+nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto;justify-content:space-between}
 nav a{color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:9px;font-size:13.5px}
 nav a .navicon{flex:0 0 18px;display:flex;color:var(--ink-dim)}
 nav a .navlabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -963,7 +963,7 @@ main{flex:1;min-width:0;max-width:1440px;width:100%;margin:0 auto;padding:18px}
 @media(max-width:900px){
 body{display:block}
 header{position:static;width:auto!important;flex:none!important;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
-nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
+nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible;justify-content:flex-start}
 .sidebar-user{border-top:0}
 }
 h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
