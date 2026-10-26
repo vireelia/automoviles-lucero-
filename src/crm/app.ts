@@ -1126,20 +1126,12 @@ label{font-size:14px;font-weight:700;color:var(--ink)}
    un lado como el crm de klikar") -- lista lateral de secciones a la
    izquierda (ancla a cada caja), contenido a la derecha. Solo esta
    página la usa, no toca el resto del CSS compartido. */
-.side-layout{display:flex;gap:24px;align-items:flex-start}
-.side-nav{flex:0 0 220px;position:sticky;top:20px;display:flex;flex-direction:column;gap:4px}
-.side-nav a{padding:10px 14px;border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:8px}
-.side-nav a:hover{background:#e4e7ec}
-.side-nav a.on-tab{background:var(--accent);color:#fff}
-.side-nav a.on-tab .tag{background:#fff!important;color:var(--accent)!important}
 /* Pestañas horizontales de Contactos (25/10/2026, mockup: Mensajes/
    WhatsApp/Llamadas/Correo arriba, subrayado rojo en la activa). */
 .htabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin-bottom:16px;flex-wrap:wrap}
 .htabs a{display:inline-flex;align-items:center;gap:6px;padding:4px 2px 11px;color:var(--ink-dim);text-decoration:none;font-size:14px;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px}
 .htabs a.on-tab{color:var(--ink);border-bottom-color:var(--accent)}
 .htabs a .tag{background:var(--accent);color:#fff;font-size:11px;padding:1px 7px}
-.side-content{flex:1;min-width:0}
-@media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
 .stat{background:#fff;border:1px solid var(--border);border-radius:9px;padding:14px 16px;text-decoration:none;color:inherit;border-left:4px solid var(--accent);box-shadow:none}
 .stat b{display:block;font-size:30px;line-height:1;color:var(--ink)}
@@ -4343,7 +4335,7 @@ crm.get("/integraciones", (req, res) => {
     ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Daniel dejará de enviar correos y no se podrá comprobar disponibilidad real para las visitas.')">Desconectar Google</button></form>`
     : "";
   const tests = st.connected
-    ? `<div class="box"><h3 style="margin-top:0">Pruebas</h3>
+    ? `<div style="border-top:1px solid #f0f1f3;margin-top:10px;padding-top:10px"><p class="sub" style="margin:0 0 6px"><b>Pruebas</b></p>
 <form method="post" action="/crm/integraciones/google/probar-gmail" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn light" type="submit">Probar Gmail</button></form>
 <form method="post" action="/crm/integraciones/google/probar-calendar" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn light" type="submit">Probar Calendar</button></form>
 ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank" rel="noopener">abrir en Google Calendar</a></p>
@@ -4368,42 +4360,49 @@ ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank
 <button class="btn ${voiceOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${voiceOn ? "¿Desactivar a Miguel? Las llamadas nuevas sonarán directamente en los móviles de Ramón y José." : "¿Activar a Miguel? Volverá a responder él las llamadas nuevas."}')">${voiceOn ? "Desactivar a Miguel" : "Activar a Miguel"}</button>
 </form>
 <p class="sub">Esto NO toca el desvío de Yoigo -- solo decide si las llamadas que ya llegan al número de Twilio las contesta Miguel o van directas a Ramón/José.</p>
-<p>Llamadas registradas: <strong>${vs.recentCalls.length}</strong> -- Última: <strong>${vs.lastCall ? esc(fmtDate(vs.lastCall.created_at)) : "ninguna todavía"}</strong></p>
-<p>Escaladas a persona: <strong>${vs.escalatedCount}</strong> -- Coste estimado acumulado: <strong>${vs.totalCostEur.toFixed(2)} $</strong></p>
-<p>Transferencias -- a Ramón: <strong>${vs.transferRamon}</strong> · a José: <strong>${vs.transferJose}</strong> · nadie respondió: <strong>${vs.transferNadie}</strong></p>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;background:var(--panel);border-radius:9px;padding:10px;margin:2px 0">
+<div style="text-align:center"><b style="display:block;font-size:19px">${vs.recentCalls.length}</b><span style="font-size:11px;color:var(--ink-dim)">llamadas</span></div>
+<div style="text-align:center"><b style="display:block;font-size:19px">${vs.escalatedCount}</b><span style="font-size:11px;color:var(--ink-dim)">escaladas</span></div>
+<div style="text-align:center"><b style="display:block;font-size:19px">${vs.totalCostEur.toFixed(2)}$</b><span style="font-size:11px;color:var(--ink-dim)">coste</span></div>
+</div>
+<p class="sub" style="margin:0">Última llamada: <strong>${vs.lastCall ? esc(fmtDate(vs.lastCall.created_at)) : "ninguna todavía"}</strong></p>
+<p class="sub" style="margin:0">Transferencias -- a Ramón: <strong>${vs.transferRamon}</strong> · a José: <strong>${vs.transferJose}</strong> · nadie respondió: <strong>${vs.transferNadie}</strong></p>
 <p class="sub">El coste y las transferencias son los reales que reporta Retell al terminar cada llamada (sumado desde el 13/10/2026) -- no incluye llamadas anteriores a esa fecha, y no hay un evento en vivo por cada intento, solo el resultado final de la llamada.</p>
 </div>`;
-  // Lista lateral (21/10/2026, a petición real: "ponlas en un lado como el
-  // crm de klikar") -- mismas cajas de siempre, reorganizadas en dos
-  // columnas en vez de una sola lista larga de arriba a abajo.
-  // "Agentes IA" y "Calidad de llamadas" se mudaron a /crm/asistentes
-  // (25/10/2026, "hay integraciones que sobran" -- el encargo separa
-  // "Asistentes: configuración y actividad de asistentes virtuales" de
-  // "Integraciones: WhatsApp, correo, telefonía y calendario"; esto solo
-  // reagrupa cajas ya reales que existían, no se pierde ni se inventa nada).
-  const sideNav = `<nav class="side-nav">
-<a href="#google">Google</a>
-<a href="#correo">Correo</a>
-<a href="#whatsapp">WhatsApp</a>
-<a href="#telefono">Teléfono -- voz</a>
-</nav>`;
+  // Resumen + cuadrícula 2x2 (26/10/2026, "hazme diseño y orden de esta
+  // seccion" -- opción "H1" elegida tras ver los mockups). La tira de
+  // arriba sustituye a los enlaces de texto sueltos: mismo destino (ancla
+  // a su caja), pero ahora se ve de un vistazo qué está conectado sin
+  // tener que leer las 4 cajas. "Agentes IA" y "Calidad de llamadas" siguen
+  // en /crm/asistentes (25/10/2026, "hay integraciones que sobran") -- esto
+  // solo reordena cajas ya reales, no se pierde ni se inventa nada.
+  const whatsappConfigured = isZernioWhatsappConfigured();
+  const whatsappAgentOn = isWhatsappZernioAgentEnabled();
+  const summaryPill = (anchor: string, label: string, tone: "done" | "pending" | "urgent" | "off", statusLabel: string) => {
+    const [bg, fg] = ROW_TONE_COLOR[tone];
+    return `<a href="#${anchor}" style="text-decoration:none;display:flex;align-items:center;gap:8px;background:${bg};color:${fg};border-radius:9px;padding:9px 12px;flex:1;min-width:160px"><span style="width:7px;height:7px;border-radius:999px;background:currentColor;flex-shrink:0"></span><b style="font-size:13px;color:var(--ink)">${esc(label)}</b><span style="font-size:12px;margin-left:auto">${esc(statusLabel)}</span></a>`;
+  };
+  const summaryStrip = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">
+${summaryPill("google", "Google", st.connected ? "done" : "urgent", st.connected ? "Conectado" : "No conectado")}
+${summaryPill("correo", "Correo", emailSendOn ? "done" : "pending", emailSendOn ? "Activado" : "Modo de prueba")}
+${summaryPill("whatsapp", "WhatsApp", !whatsappConfigured ? "off" : whatsappAgentOn ? "done" : "pending", !whatsappConfigured ? "No configurado" : whatsappAgentOn ? "Respondiendo" : "Pausada")}
+${summaryPill("telefono", "Teléfono", voiceOn ? "done" : "pending", voiceOn ? "Respondiendo" : "Desactivado")}
+</div>`;
   const body = `<h1>Integraciones</h1>
 <p class="sub">Conexión con WhatsApp, correo, telefonía y calendario. La actividad de los asistentes vive en <a class="link" href="/crm/asistentes">Asistentes</a>.</p>
 ${config}
-<div class="side-layout">
-${sideNav}
-<div class="side-content">
+${summaryStrip}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px">
 <div class="box" id="google"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("G", st.connected ? "done" : "urgent")}<div><h3 style="margin:0">Google</h3>${statusPill(st.connected ? "Conectado" : "No conectado", st.connected ? "done" : "urgent")}</div></div>
 <p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
 ${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
 <p>Permisos concedidos:</p>${scopesHtml}
 <p>${connectButton} ${disconnectButton}</p>
-</div>
 ${tests}
+</div>
 <div id="correo">${emailModeBox}</div>
 <div id="whatsapp">${whatsappZernioBox(req)}</div>
 <div id="telefono">${voiceBox}</div>
-</div>
 </div>`;
   res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
 });
