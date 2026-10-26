@@ -7,7 +7,7 @@ import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetCo
 import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
-import { sendWhatsappText, isWhatsappConnected } from "../integrations/whatsapp.js";
+import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
 
 export type InboundEmail = {
   messageKey: string;
@@ -225,10 +225,11 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
         return { outcome: "sent_whatsapp_automatico", reply };
       }
 
-      const draftNote = `El envío automático por WhatsApp falló (${sent.error}) -- escribirle a mano: https://wa.me/${contact.phone}\n\nRespuesta ya redactada, lista para copiar:\n${reply}`;
+      const failReason = explainWhatsappSendError(sent.error);
+      const draftNote = `El envío automático por WhatsApp falló: ${failReason} -- escribirle a mano: https://wa.me/${contact.phone}\n\nRespuesta ya redactada, lista para copiar:\n${reply}`;
       recordInbox(email, "pendiente_whatsapp_manual", { portal: "Coches.net", draftNote });
       writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_whatsapp_manual", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-      raiseAlert({ kind: "gestion_portal", lead_phone: waPhone, name: contact.name, reason: `Coches.net: cliente pidió contacto SOLO por WhatsApp -- el envío automático falló (${sent.error}), escribirle a https://wa.me/${contact.phone}`, draft_note: draftNote });
+      raiseAlert({ kind: "gestion_portal", lead_phone: waPhone, name: contact.name, reason: `Coches.net: cliente pidió contacto SOLO por WhatsApp -- el envío automático falló: ${failReason}. Escribirle a mano: https://wa.me/${contact.phone}`, draft_note: draftNote });
       return { outcome: "pendiente_whatsapp_manual" };
     }
   }

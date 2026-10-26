@@ -54,3 +54,23 @@ export async function sendWhatsappText(to: string, body: string): Promise<Whatsa
     return { ok: false, error: err instanceof Error ? err.message : "whatsapp_network_error" };
   }
 }
+
+// Traduce el error real de un envío fallido a una frase que Ramón/José
+// entiendan sin saber qué es Zernio o "Direct Send" -- nunca oculta la
+// causa real (aviso real confuso detectado 27/10/2026: un aviso urgente
+// mostraba tal cual "DIRECT_SEND_NOT_ELIGIBLE: Direct Send is not enabled
+// for this WhatsApp account. Use an approved message template instead.").
+// Si el error no es ninguno de los conocidos, se muestra tal cual --
+// mejor un texto técnico que ocultar algo nuevo que convenga saber.
+export function explainWhatsappSendError(error: string): string {
+  if (error.includes("DIRECT_SEND_NOT_ELIGIBLE")) {
+    return "Meta todavía no permite que este número inicie conversaciones nuevas sin plantilla aprobada (la cuenta no está habilitada para 'Direct Send')";
+  }
+  if (error === "whatsapp_not_connected" || error === "zernio_whatsapp_no_configurado") {
+    return "el número de WhatsApp del negocio no está conectado";
+  }
+  if (error.startsWith("zernio_direct_send_rechazado")) {
+    return `Meta rechazó iniciar la conversación (${error.replace(/^zernio_direct_send_rechazado:\s*/, "")})`;
+  }
+  return error;
+}
