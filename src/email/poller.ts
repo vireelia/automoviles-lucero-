@@ -1,7 +1,15 @@
 import { isGoogleConnected, gmailListUnread, gmailGet } from "../integrations/google.js";
 import { processInboundEmail } from "./agent.js";
 
-const INTERVAL_MS = 3 * 60 * 1000;
+// Bajado de 3 minutos a 30 segundos (26/10/2026, petición real: "pon
+// todos los gmail en tiempo real"). Esto es sondeo (polling), no un
+// empuje real en vivo -- lo más real-time posible sin montar Gmail
+// Push/Pub-Sub (infraestructura nueva, fuera de alcance aquí) es revisar
+// mucho más seguido. 30s está muy por debajo de cualquier límite real de
+// cuota de la API de Gmail (list/get cuestan poco) y no afecta al
+// espaciado de ENVÍO (humanSpacingMs, más abajo), que es el que de
+// verdad importa para no parecer un bot a ojos de Gmail.
+const INTERVAL_MS = 30 * 1000;
 const BATCH = 10;
 // FALLO REAL grave detectado (18/10/2026, a petición de "ajusta el agente
 // de gmail para que cumpla tiempos para que no sea baneado"): este bucle
@@ -27,7 +35,7 @@ function humanSpacingMs(): number {
 }
 let running = false;
 
-// Revisa la bandeja del negocio cada 3 minutos. Sin Google conectado no hace nada.
+// Revisa la bandeja del negocio cada 30 segundos. Sin Google conectado no hace nada.
 // La deduplicación la lleva processInboundEmail, porque Gmail no nos deja marcar
 // los correos como leídos sin el ámbito gmail.modify.
 export function startEmailPoller() {

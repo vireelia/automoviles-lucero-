@@ -126,6 +126,13 @@ type Handoff = { id: string; lead_phone: string | null; lead_name?: string | nul
 // del cliente.
 type ConversationSummary = { id: string; phone?: string | null; summary: string; created_at: string };
 type InboxMail = { id: string; from: string; subject: string; text: string; outcome: string; portal?: string | null; draft_note?: string; thread_id?: string; in_reply_to?: string; answered?: boolean; answered_by?: "ia" | "equipo"; read?: boolean; archived?: boolean; internal_note?: string | null; created_at: string };
+// Correo realmente enviado (26/10/2026, "que se parezca lo mas a gmail")
+// -- mismo dato real que ya guardaba deliverEmail en email/agent.ts
+// (email_outbox), nunca leído desde el CRM hasta ahora. Se cruza por
+// thread_id con email_inbox para reconstruir el hilo real de verdad
+// (como ya se hizo con whatsapp_inbox), en vez de mostrar solo el último
+// correo entrante suelto.
+type EmailOutboxRow = { id: string; to: string; subject: string; body: string; status: "sent" | "queued" | "failed"; thread_id?: string; created_at: string };
 // Mensajes de WhatsApp entrantes (módulo CRM mensajes/clientes, 18/10/2026).
 // Solo registra lo que escribe el cliente y si la IA respondió -- esta
 // bandeja NO tiene botón de responder: el envío real de WhatsApp sigue
@@ -1186,14 +1193,37 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
    teléfono, en orden, cliente a la izquierda y negocio a la derecha,
    como un chat de verdad. Nada inventado: cada burbuja es un registro
    real de whatsapp_inbox. */
-.wa-thread{display:flex;flex-direction:column;gap:10px;max-height:380px;overflow-y:auto;padding:4px 2px}
-.wa-bubble{max-width:78%;padding:9px 13px;border-radius:12px;font-size:14px;white-space:pre-wrap}
+/* Colores reales de WhatsApp (26/10/2026, petición real: "que se parezca
+   lo mas a whassap") -- fondo de chat beige/verde clásico, burbuja
+   saliente verde clara, entrante blanca, hora dentro de la propia
+   burbuja (como WhatsApp de verdad), no como línea aparte. */
+.wa-thread{display:flex;flex-direction:column;gap:6px;max-height:380px;overflow-y:auto;padding:12px;background:#e5ddd5;border-radius:10px}
+.wa-bubble{max-width:78%;padding:7px 10px 8px;border-radius:8px;font-size:14px;white-space:pre-wrap;box-shadow:0 1px 1px rgba(0,0,0,.08)}
 .wa-row{display:flex;flex-direction:column}
 .wa-row.in{align-items:flex-start}
 .wa-row.out{align-items:flex-end}
-.wa-row .wa-bubble.in{background:var(--panel);border-bottom-left-radius:3px}
-.wa-row .wa-bubble.out{background:var(--ok-bg);border-bottom-right-radius:3px}
-.wa-row time{font-size:10.5px;color:var(--ink-dim);margin-top:3px}
+.wa-row .wa-bubble.in{background:#fff;border-top-left-radius:2px}
+.wa-row .wa-bubble.out{background:#d9fdd3;border-top-right-radius:2px}
+.wa-bubble time{display:block;font-size:10.5px;color:#8696a0;text-align:right;margin-top:3px}
+.wa-typing-row{display:flex;justify-content:flex-start}
+.wa-typing{display:inline-flex;align-items:center;gap:5px;background:#fff;border-radius:8px;border-top-left-radius:2px;padding:9px 12px;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.wa-typing span{width:6px;height:6px;border-radius:999px;background:#8696a0;display:inline-block;animation:wa-bounce 1.2s infinite ease-in-out}
+.wa-typing span:nth-child(2){animation-delay:.15s}
+.wa-typing span:nth-child(3){animation-delay:.3s}
+@keyframes wa-bounce{0%,80%,100%{opacity:.3;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+/* Hilo de correo al estilo Gmail (26/10/2026, "en gmail tambien") -- cada
+   mensaje real como su propia tarjeta con remitente/hora, los nuestros
+   (Daniel o el equipo) con un tinte azulado, igual que Gmail resalta tus
+   propios mensajes enviados dentro de una conversación. */
+.mail-thread{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;padding:2px}
+.mail-item{background:#fff;border:1px solid var(--border);border-radius:9px;padding:10px 14px;display:flex;gap:10px}
+.mail-item.out{background:#f0f6ff;border-color:#c7d9f5}
+.mail-item .mail-body{flex:1;min-width:0}
+.mail-item .mail-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px}
+.mail-item .mail-from{font-weight:700;font-size:13.5px}
+.mail-item .mail-time{font-size:11px;color:var(--ink-dim);white-space:nowrap}
+.mail-item .mail-text{font-size:13.5px;white-space:pre-wrap;color:var(--ink)}
+.mail-typing{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#1f7a42;font-weight:700;padding:4px 2px}
 @media(max-width:1100px){.contactos-shell{flex-direction:column}.contactos-list{flex:none;border-right:0;border-bottom:1px solid var(--border)}.contactos-list-scroll{max-height:320px}.contactos-activity{flex:none;border-left:0;border-top:1px solid var(--border);max-height:none}.contactos-detail{max-height:none}}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
@@ -1467,6 +1497,24 @@ function statusBadge(letter: string, tone: string): string {
 function statusPill(label: string, tone: string): string {
   const [, fg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
   return `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:${fg}"><span style="width:7px;height:7px;border-radius:999px;background:currentColor;display:inline-block"></span>${esc(label)}</span>`;
+}
+// Estado real de la conversación (26/10/2026, petición real: "que se vea
+// cuando carolina este escribiendo... y cuando tenemos nosotros que
+// responder") -- tres estados reales, nunca inventados: ya respondido
+// (con quién), "escribiendo" SOLO si el agente de ese canal está
+// encendido de verdad (isWhatsappZernioAgentEnabled/isEmailAutoSendEnabled)
+// y el mensaje es reciente (la IA responde en segundos/pocos minutos, no
+// horas -- pasada esa ventana, ya no está "escribiendo", simplemente
+// nadie ha contestado todavía), o pendiente de que responda el equipo.
+// Sin webhook en vivo no hay forma de saber el instante exacto en que la
+// IA empieza a redactar -- esto es una aproximación honesta por tiempo,
+// no un "escribiendo..." en tiempo real de verdad.
+const AGENT_TYPING_WINDOW_MS = 2 * 60 * 1000;
+function agentReplyStatus(createdAt: string, answered: boolean | undefined, answeredBy: "ia" | "equipo" | undefined, agentEnabled: boolean, agentName: string): { kind: "typing" | "pending_team" | "answered"; label: string; tone: string } {
+  if (answered) return { kind: "answered", label: answeredBy === "ia" ? `${agentName} ya respondió` : "Ya respondió el equipo", tone: "done" };
+  const ageMs = Date.now() - new Date(createdAt).getTime();
+  if (agentEnabled && ageMs >= 0 && ageMs < AGENT_TYPING_WINDOW_MS) return { kind: "typing", label: `${agentName} está escribiendo…`, tone: "done" };
+  return { kind: "pending_team", label: "Pendiente -- responde el equipo", tone: "pending" };
 }
 function apptCard(a: Appointment): string {
   const d = dayLabel(a.requested_date);
@@ -2983,12 +3031,20 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
   const thread = list<WhatsappMessage>("whatsapp_inbox")
     .filter((m) => m.phone === selected.phone)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${esc(m.text)}</div><time>${esc(fmtDate(m.created_at))}</time></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}</div><time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div>` : ""}`).join("");
+  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
+  // Estado real de la conversación (26/10/2026, "que se vea cuando
+  // carolina este escribiendo... y cuando tenemos nosotros que
+  // responder") -- se mira el ÚLTIMO mensaje del hilo, no el que esté
+  // seleccionado: es la conversación la que está "escribiendo" o
+  // "pendiente", no un mensaje suelto antiguo.
+  const lastMsg = thread[thread.length - 1] ?? selected;
+  const waStatus = agentReplyStatus(lastMsg.created_at, lastMsg.answered, lastMsg.answered_by, isWhatsappZernioAgentEnabled(), "Carolina");
+  const typingRow = waStatus.kind === "typing" ? `<div class="wa-typing-row"><div class="wa-typing"><span></span><span></span><span></span></div></div>` : "";
   const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
-<div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
-${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
-<h3 style="margin-bottom:6px">Conversación</h3><div class="wa-thread">${threadHtml}</div>
+<div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${statusPill(waStatus.label, waStatus.tone)}</b></div></div>
+${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
+<h3 style="margin-bottom:6px;margin-top:12px">Conversación</h3><div class="wa-thread">${threadHtml}${typingRow}</div>
 <form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
 <label>Responder por WhatsApp</label><textarea name="respuesta" rows="4" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
 <p class="sub" style="margin:4px 0 0;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
@@ -3006,14 +3062,60 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 <form method="post" action="/crm/whatsapp/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
   return { detail, activity };
 }
+// Hilo real de correo (26/10/2026, "en gmail tambien... que se parezca
+// lo mas a gmail") -- igual que ya se hizo con whatsapp_inbox: se cruza
+// email_inbox (lo que entra) con email_outbox (lo que de verdad se
+// envió, tanto si lo redactó Daniel solo como si lo escribió el equipo a
+// mano -- deliverEmail guarda ahí los dos casos por igual) por
+// thread_id, y se ordena todo por fecha real. Nunca se inventa quién
+// escribió cada envío: se usa el answered_by del mensaje entrante más
+// cercano en el tiempo, el único dato real que lo dice.
 function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string): { detail: string; activity: string } {
   const lead = findLeadForContact(allLeads, null, selected.from);
+  const inboundThread = (selected.thread_id ? list<InboxMail>("email_inbox").filter((m) => m.thread_id === selected.thread_id) : [selected])
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // FALLO REAL detectado y corregido antes de confirmar (26/10/2026):
+  // filtrar solo status==="sent" hacía desaparecer del hilo una
+  // respuesta real recién enviada en cuanto Gmail no estaba conectado
+  // (se guarda igual en email_outbox, honestamente como "queued") -- el
+  // equipo veía "Ya respondió el equipo" pero su propio texto no
+  // aparecía por ningún lado. Se muestran los tres estados reales
+  // (sent/queued/failed), cada uno con su aviso honesto, nunca se oculta
+  // un envío real.
+  const outboundThread = selected.thread_id
+    ? list<EmailOutboxRow>("email_outbox").filter((o) => o.thread_id === selected.thread_id)
+    : [];
+  type ThreadItem = { kind: "in" | "out"; created_at: string; from: string; body: string; status?: EmailOutboxRow["status"] };
+  const items: ThreadItem[] = [
+    ...inboundThread.map((m): ThreadItem => ({ kind: "in", created_at: m.created_at, from: lead?.name || m.from, body: m.text })),
+    ...outboundThread.map((o): ThreadItem => {
+      const prior = [...inboundThread].reverse().find((m) => m.created_at <= o.created_at) ?? inboundThread[0];
+      return { kind: "out", created_at: o.created_at, from: prior?.answered_by === "equipo" ? "El equipo" : "Daniel (IA)", body: o.body, status: o.status };
+    }),
+  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const threadHtml = items.map((it) => {
+    const statusNote = it.status === "queued"
+      ? `<p class="sub" style="margin:4px 0 0;font-size:11.5px">En cola -- se enviará cuando Gmail esté conectado</p>`
+      : it.status === "failed"
+        ? `<p class="sub" style="margin:4px 0 0;font-size:11.5px;color:var(--urgent)">No se pudo enviar</p>`
+        : "";
+    const body = it.kind === "in" ? emailPreviewBox(it.body) : `<div class="mail-text">${esc(it.body)}</div>${statusNote}`;
+    return `<div class="mail-item ${it.kind}">${avatarBadge(it.from, it.from, 30)}<div class="mail-body"><div class="mail-head"><span class="mail-from">${esc(it.from)}</span><span class="mail-time">${esc(fmtDate(it.created_at))}</span></div>${body}</div></div>`;
+  }).join("");
+  // Estado real de la conversación (26/10/2026, "que se vea cuando...
+  // tenemos nosotros que responder", mismo criterio ya aplicado a
+  // WhatsApp): se mira el correo entrante más reciente del hilo, no el
+  // seleccionado.
+  const lastInbound = inboundThread[inboundThread.length - 1] ?? selected;
+  const mailStatus = agentReplyStatus(lastInbound.created_at, lastInbound.answered, lastInbound.answered_by, isEmailAutoSendEnabled(), "Daniel");
+  const typingLine = mailStatus.kind === "typing" ? `<p class="mail-typing">Daniel está redactando…</p>` : "";
   const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
-<div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${answeredTag(selected)}</b></div></div>
+<div class="meta-grid"><div>Correos<b>${items.length}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${statusPill(mailStatus.label, mailStatus.tone)}</b></div></div>
 ${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px">Hay que responder desde ${esc(platformLabel(selected.portal))}, no por correo.</div>` : ""}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
-<h3 style="margin-bottom:6px">Mensaje</h3>${emailPreviewBox(selected.text)}
+<h3 style="margin-bottom:6px">Conversación</h3><div class="mail-thread">${threadHtml}</div>
+${typingLine}
 ${selected.draft_note ? `<h3 style="margin-bottom:6px">Borrador</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.draft_note)}</div>` : ""}
 <form method="post" action="/crm/correos/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
 ${!selected.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
