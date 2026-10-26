@@ -1139,17 +1139,24 @@ function pwInput(attrs: string, id: string): string {
 }
 
 function loginPage(error?: string): string {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar · Lucero</title>
-<style>body{margin:0;font:18px system-ui;background:#1d2b44;display:flex;min-height:100vh;align-items:center;justify-content:center}
-.box{background:#fff;border-radius:16px;padding:28px;width:min(420px,92vw)}h1{margin:0 0 14px}
-input{font:inherit;font-size:18px;padding:12px;width:100%;margin:6px 0 14px;border:2px solid #c9ced8;border-radius:10px;box-sizing:border-box}
-button{font:inherit;font-size:20px;padding:14px;width:100%;border:0;border-radius:12px;background:#1d2b44;color:#fff;cursor:pointer}
-.err{background:#fde2df;color:#8a1f0c;padding:10px;border-radius:10px;margin-bottom:12px}</style></head>
-<body><form class="box" method="post" action="/crm/entrar"><h1>Entrar</h1>
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar · Lucero PRO</title>
+<style>*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7f9;display:flex;min-height:100vh;align-items:center;justify-content:center;color:#1a1d23}
+.brand{text-align:center;margin-bottom:18px}
+.brand .wordmark{font-size:24px;font-weight:800;letter-spacing:-.02em}
+.brand .wordmark em{font-style:normal;background:#dc2626;color:#fff;font-size:12px;font-weight:800;padding:2px 8px;border-radius:999px;margin-left:6px;vertical-align:3px}
+.brand .sub{display:block;font-size:10.5px;font-weight:600;letter-spacing:.09em;color:#5b6472;margin-top:2px}
+.box{background:#fff;border:1px solid #e3e5ea;border-radius:14px;padding:28px;width:min(400px,92vw);box-shadow:0 1px 3px rgba(16,24,40,.06)}
+h1{margin:0 0 14px;font-size:19px}
+label{font-size:13px;font-weight:700}
+input{font:inherit;font-size:15px;padding:10px 12px;width:100%;margin:6px 0 14px;border:1px solid #e3e5ea;border-radius:10px}
+button{font:inherit;font-size:15px;font-weight:700;padding:12px;width:100%;border:0;border-radius:10px;background:#dc2626;color:#fff;cursor:pointer}
+.err{background:#fdecea;color:#8a1f0c;border:1px solid #b3261e;padding:10px;border-radius:10px;margin-bottom:12px;font-size:14px}</style></head>
+<body><div><div class="brand"><span class="wordmark">LUCERO<em>PRO</em></span><span class="sub">AUTOMÓVILES LUCERO</span></div>
+<form class="box" method="post" action="/crm/entrar"><h1>Entrar</h1>
 ${error ? `<div class="err">${esc(error)}</div>` : ""}
 <label>Correo</label><input name="email" type="email" required autofocus>
 <label>Contraseña</label>${pwInput('name="password" required', 'pw-entrar')}
-<button type="submit">Entrar</button></form></body></html>`;
+<button type="submit">Entrar</button></form></div></body></html>`;
 }
 
 // ---------- sesión ----------
@@ -1195,13 +1202,13 @@ crm.get("/manifest.json", (_req, res) => {
     start_url: "/crm",
     scope: "/crm",
     display: "standalone",
-    background_color: "#1d2b44",
-    theme_color: "#1d2b44",
+    background_color: "#ffffff",
+    theme_color: "#ffffff",
     icons: [{ src: "/crm/icono.svg", sizes: "any", type: "image/svg+xml" }],
   }));
 });
 crm.get("/icono.svg", (_req, res) => {
-  res.type("image/svg+xml").send('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#1d2b44"/><text x="256" y="350" font-family="Arial,sans-serif" font-size="300" font-weight="700" fill="#f0b429" text-anchor="middle">L</text></svg>');
+  res.type("image/svg+xml").send('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#dc2626"/><text x="256" y="350" font-family="Arial,sans-serif" font-size="300" font-weight="700" fill="#ffffff" text-anchor="middle">L</text></svg>');
 });
 
 crm.use((req, res, next) => {
