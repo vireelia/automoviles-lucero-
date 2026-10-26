@@ -12,7 +12,7 @@ import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
 import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
-import { normalizePhone, upsertLead } from "../tools/leads.js";
+import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
@@ -4092,7 +4092,9 @@ crm.get("/clientes/:id", (req, res) => {
     ...summaries.map((s) => ({ at: s.created_at, html: `💬 Resumen de conversación: ${esc(s.summary)}` })),
   ].sort((a, b) => b.at.localeCompare(a.at));
   const duplicateWarning = duplicate
-    ? `<div class="msg" style="background:#fff8e6;border-color:#d9a22b">⚠️ Posible duplicado: <a class="link" href="/crm/clientes/${esc(duplicate.id)}">${esc(leadDisplayName(duplicate))}</a> tiene el mismo teléfono normalizado. Si es la misma persona, pide a un administrador que lo fusione desde /tools/merge_leads.</div>`
+    ? `<div class="msg" style="background:#fff8e6;border-color:#d9a22b;display:flex;align-items:center;gap:10px;flex-wrap:wrap">⚠️ Posible duplicado: <a class="link" href="/crm/clientes/${esc(duplicate.id)}">${esc(leadDisplayName(duplicate))}</a> tiene el mismo teléfono normalizado.
+${me(res).role === "admin" ? `<form method="post" action="/crm/clientes/${esc(lead.id)}" style="display:inline;margin-left:auto" onsubmit="return confirm('¿Fusionar? Se recupera aquí el nombre y los datos de ${esc(leadDisplayName(duplicate))} si esta ficha no los tiene, y esa otra ficha se mueve a la papelera.')"><input type="hidden" name="accion" value="fusionar_duplicado"><input type="hidden" name="con_id" value="${esc(duplicate.id)}"><button class="btn light" type="submit">Fusionar aquí</button></form>` : `<span class="sub">Pide a un administrador que lo fusione.</span>`}
+</div>`
     : "";
   const saleOutcomeBox = `<div class="box"><h3 style="margin-top:0">Venta cerrada o perdida</h3>
 <p class="sub">Esto es una decisión del equipo -- nunca se marca solo.</p>
@@ -4141,6 +4143,20 @@ crm.post("/clientes/:id", (req, res) => {
     moveToTrash("leads", lead, `Cliente: ${lead.name || lead.phone || "sin nombre"}`, me(res).email);
     save("leads", leads.filter((x) => x.id !== lead.id));
     return back(res, safeVolver ?? "/crm/clientes", "Cliente movido a la papelera");
+  }
+  // Fusionar duplicado real (26/10/2026, petición: "cuando el mismo cliente
+  // contactó por otro canal y SÍ dio su nombre allí... se puede fusionar y
+  // recuperar el nombre real") -- antes la única forma era que alguien con
+  // acceso al servidor llamara a /tools/merge_leads a mano (necesita
+  // ADMIN_TOKEN, no la sesión del CRM). Mismo mergeLeads() de siempre,
+  // ahora con un botón real desde la propia ficha -- nunca inventa el
+  // nombre, solo recupera el que el cliente ya dio en el otro contacto.
+  if (accion === "fusionar_duplicado") {
+    if (me(res).role !== "admin") return back(res, safeVolver ?? `/crm/clientes/${lead.id}`, "Solo el administrador puede fusionar clientes");
+    const otherId = String(req.body.con_id ?? "");
+    const result = mergeLeads({ keep_id: lead.id, remove_id: otherId, admin_email: me(res).email });
+    if (result.status !== "ok") return back(res, safeVolver ?? `/crm/clientes/${lead.id}`, "No se pudo fusionar -- revisa que el otro cliente siga existiendo");
+    return back(res, safeVolver ?? `/crm/clientes/${lead.id}`, "Fusionado -- el nombre y los datos del otro contacto se han recuperado aquí");
   }
   if (accion === "no_contactar") lead.do_not_contact = true;
   else if (accion === "reactivar") lead.do_not_contact = false;
@@ -4450,6 +4466,30 @@ crm.get("/informes", (req, res) => {
   const stat = (n: number | string, label: string) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
   const datePill = (k: DateFilterKey) => `<a href="/crm/informes?d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:var(--accent);color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const pct = (n: number | null) => (n === null ? "sin datos" : `${n.toFixed(0)}%`);
+  // Nombre real recuperable (26/10/2026, "cuando el mismo cliente contactó
+  // por otro canal y SÍ dio su nombre allí... se puede fusionar y recuperar
+  // el nombre real") -- un grupo de duplicados donde uno tiene nombre y el
+  // otro no es justo el caso que vale la pena fusionar ya; se ordenan
+  // primero, con un botón real (solo grupos de 2 -- de 3 en adelante, solo
+  // enlaces, para no encadenar fusiones a ciegas).
+  const dupGroupsSorted = [...realDupGroups].sort((a, b) => {
+    const aRecoverable = a.some((l) => l.name) && a.some((l) => !l.name) ? 1 : 0;
+    const bRecoverable = b.some((l) => l.name) && b.some((l) => !l.name) ? 1 : 0;
+    return bRecoverable - aRecoverable;
+  });
+  const dupGroupRow = (g: Lead[]) => {
+    const recoverable = g.some((l) => l.name) && g.some((l) => !l.name);
+    const links = g.map((l) => `<a class="link" href="/crm/clientes/${esc(l.id)}">${esc(leadDisplayName(l))}</a>`).join(" ↔ ");
+    const tag = recoverable ? ` <span class="tag" style="background:var(--ok-bg);color:#1f7a42">Recupera un nombre real</span>` : "";
+    if (g.length === 2 && me(res).role === "admin") {
+      const [a, b] = g;
+      const keep = a.name ? a : b;
+      const remove = a.name ? b : a;
+      const mergeBtn = `<form method="post" action="/crm/clientes/${esc(keep.id)}" style="display:inline" onsubmit="return confirm('¿Fusionar? Se recupera el nombre/datos de ${esc(leadDisplayName(remove))} en ${esc(leadDisplayName(keep))}, y la otra ficha se mueve a la papelera.')"><input type="hidden" name="accion" value="fusionar_duplicado"><input type="hidden" name="con_id" value="${esc(remove.id)}"><input type="hidden" name="volver" value="/crm/informes"><button class="link" type="submit" style="background:none;border:0;padding:0;font:inherit;cursor:pointer;color:var(--accent);font-weight:700">Fusionar →</button></form>`;
+      return `<p class="sub">${links}${tag} ${mergeBtn}</p>`;
+    }
+    return `<p class="sub">${links}${tag}</p>`;
+  };
   const body = `<h1>Informes</h1>
 <p class="sub">Todo lo de abajo son conteos reales del periodo elegido -- nunca una cifra estimada. "Sin datos" significa que todavía no hay ningún caso real que medir, no un error.</p>
 <div class="legend">${(["hoy", "ayer", "7dias", "30dias", "mes", "mes_anterior", "todo"] as DateFilterKey[]).map(datePill).join(" ")}</div>
@@ -4481,9 +4521,7 @@ ${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos
 ${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${hBarChart([...ventasPorCanalConversion.entries()].sort((a, b) => b[1] - a[1]))}</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Calidad de datos y duplicados (histórico completo, no solo el periodo)</h3>
 <p>Grupos de teléfono duplicado: <b>${realDupGroups.length}</b> (${dupRowCount} fichas en total) · Sin teléfono ni nombre: <b>${sinTelefonoNiNombre}</b></p>
-${realDupGroups.length > 0
-  ? realDupGroups.map((g) => `<p class="sub">${g.map((l) => `<a class="link" href="/crm/clientes/${esc(l.id)}">${esc(leadDisplayName(l))}</a>`).join(" ↔ ")}</p>`).join("")
-  : `<p class="sub">No hay duplicados de teléfono ahora mismo.</p>`}
+${dupGroupsSorted.length > 0 ? dupGroupsSorted.map(dupGroupRow).join("") : `<p class="sub">No hay duplicados de teléfono ahora mismo.</p>`}
 </div>`;
   res.type("html").send(page("Informes", me(res), body, msgOf(req)));
 });
