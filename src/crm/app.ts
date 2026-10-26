@@ -1423,6 +1423,21 @@ const ROW_TONE_COLOR: Record<string, [string, string]> = {
   urgent: ["#fdecea", "#8a1f0c"],
   off: ["#f6f7f9", "#5b6472"],
 };
+// Tarjeta de estado (26/10/2026, "C1" -- Integraciones/Asistentes:
+// "Estado: X" era una frase suelta, fácil de pasar por alto). Reutiliza
+// los mismos 4 tonos de ROW_TONE_COLOR -- "done" = conectado/respondiendo,
+// "pending" = pausado/modo de prueba (intencional, no roto), "urgent" =
+// no conectado/fallo real, "off" = sin configurar. Un icono con la
+// inicial + una pastilla con punto de color, antes de la caja de siempre
+// con todos los botones/datos reales -- no se quita ni se inventa nada.
+function statusBadge(letter: string, tone: string): string {
+  const [bg, fg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
+  return `<div style="width:30px;height:30px;border-radius:9px;background:${bg};color:${fg};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0">${esc(letter)}</div>`;
+}
+function statusPill(label: string, tone: string): string {
+  const [, fg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
+  return `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:${fg}"><span style="width:7px;height:7px;border-radius:999px;background:currentColor;display:inline-block"></span>${esc(label)}</span>`;
+}
 function apptCard(a: Appointment): string {
   const d = dayLabel(a.requested_date);
   const tone = a.status === "requested" ? "pending" : a.status === "confirmed" ? "done" : "off";
@@ -3861,8 +3876,8 @@ ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank
 </div>`
     : "";
   const emailSendOn = isEmailAutoSendEnabled();
-  const emailModeBox = `<div class="box"><h3 style="margin-top:0">Correo -- envío automático</h3>
-<p>Estado: <strong>${emailSendOn ? "Activado -- envía respuestas reales" : "Modo de prueba -- clasifica y redacta, pero no envía nada"}</strong></p>
+  const emailModeBox = `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("C", emailSendOn ? "done" : "pending")}<div><h3 style="margin:0">Correo -- envío automático</h3>${statusPill(emailSendOn ? "Activado" : "Modo de prueba", emailSendOn ? "done" : "pending")}</div></div>
+<p class="sub">${emailSendOn ? "Envía respuestas reales" : "Clasifica y redacta, pero no envía nada"}</p>
 <form method="post" action="/crm/integraciones/correo/${emailSendOn ? "desactivar-envio" : "activar-envio"}" style="display:inline">
 <button class="btn ${emailSendOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${emailSendOn ? "¿Pasar a modo de prueba? El agente seguirá leyendo y redactando respuestas, pero ninguna saldrá de verdad -- se quedan en Pendientes para revisar." : "¿Activar el envío automático? Las respuestas que redacte el agente empezarán a salir de verdad."}')">${emailSendOn ? "Pasar a modo de prueba" : "Activar envío automático"}</button>
 </form>
@@ -3870,8 +3885,8 @@ ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank
 </div>`;
   const voiceOn = isVoiceAgentEnabled();
   const vs = voiceCallStats();
-  const voiceBox = `<div class="box"><h3 style="margin-top:0">Teléfono -- agente de voz Miguel</h3>
-<p>Número: +34 919 58 88 87. Estado: <strong>${voiceOn ? "Miguel está respondiendo" : "Desactivado -- suenan Ramón y José directamente"}</strong></p>
+  const voiceBox = `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("M", voiceOn ? "done" : "pending")}<div><h3 style="margin:0">Teléfono -- agente de voz Miguel</h3>${statusPill(voiceOn ? "Respondiendo" : "Desactivado", voiceOn ? "done" : "pending")}</div></div>
+<p class="sub">Número: +34 919 58 88 87${voiceOn ? "" : " -- suenan Ramón y José directamente"}</p>
 <form method="post" action="/crm/integraciones/telefono/${voiceOn ? "desactivar" : "activar"}" style="display:inline">
 <button class="btn ${voiceOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${voiceOn ? "¿Desactivar a Miguel? Las llamadas nuevas sonarán directamente en los móviles de Ramón y José." : "¿Activar a Miguel? Volverá a responder él las llamadas nuevas."}')">${voiceOn ? "Desactivar a Miguel" : "Activar a Miguel"}</button>
 </form>
@@ -3901,8 +3916,7 @@ ${config}
 <div class="side-layout">
 ${sideNav}
 <div class="side-content">
-<div class="box" id="google"><h3 style="margin-top:0">Google</h3>
-<p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
+<div class="box" id="google"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("G", st.connected ? "done" : "urgent")}<div><h3 style="margin:0">Google</h3>${statusPill(st.connected ? "Conectado" : "No conectado", st.connected ? "done" : "urgent")}</div></div>
 <p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
 ${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
 <p>Permisos concedidos:</p>${scopesHtml}
@@ -3938,16 +3952,16 @@ crm.get("/asistentes", (req, res) => {
   const lastVoiceEvent = vs.recentCalls.length ? vs.recentCalls[vs.recentCalls.length - 1].created_at : null;
   const lastWaEvent = list<WhatsappMessage>("whatsapp_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
   const lastMailEvent = list<InboxMail>("email_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
-  function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[], lastEvent: string | null): string {
+  function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[], lastEvent: string | null, active: boolean): string {
     const clientes = allLeadsForAgents.filter((l) => l.channel && channelKeys.includes(l.channel)).length;
     const handoffsCount = allHandoffsForAgents.filter((h) => h.channel && channelKeys.includes(h.channel)).length;
     const tareasPendientes = allTasksForAgents.filter((t) => t.status === "pendiente" && t.channel && channelKeys.includes(t.channel)).length;
     const ultima = allLeadsForAgents
       .filter((l) => l.channel && channelKeys.includes(l.channel))
       .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))[0];
-    return `<div class="box"><h3 style="margin-top:0">${esc(name)}</h3>
+    const tone = active ? "done" : "pending";
+    return `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge(name.charAt(0), tone)}<div><h3 style="margin:0">${esc(name)}</h3>${statusPill(estado, tone)}</div></div>
 <p class="sub">${esc(funcion)}</p>
-<p>Estado: <strong>${esc(estado)}</strong></p>
 <p>Canales: ${esc(canales)}</p>
 <p>Último evento recibido: <strong>${lastEvent ? esc(fmtDate(lastEvent)) : "ninguno todavía"}</strong></p>
 <p>Clientes atendidos: <strong>${clientes}</strong> · Avisos generados: <strong>${handoffsCount}</strong> · Tareas pendientes: <strong>${tareasPendientes}</strong></p>
@@ -3956,9 +3970,9 @@ crm.get("/asistentes", (req, res) => {
   }
   const agentCards = `<h2 style="margin-top:0">Agentes IA</h2>
 <div class="row">
-${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"], lastVoiceEvent)}
-${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"], lastWaEvent)}
-${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"], lastMailEvent)}
+${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"], lastVoiceEvent, isVoiceAgentEnabled())}
+${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"], lastWaEvent, isWhatsappZernioAgentEnabled())}
+${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"], lastMailEvent, emailSendOn)}
 </div>
 <p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${vs.totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
   // Calidad de llamadas (15/10/2026, el "cerebro" pedido): cada llamada real
@@ -4022,8 +4036,9 @@ function whatsappZernioBox(req: express.Request): string {
 <button class="btn ${agentOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${agentOn ? "¿Pausar a Carolina en WhatsApp? Los mensajes nuevos seguirán avisando al equipo, pero nadie los contestará solo." : "¿Activar a Carolina en WhatsApp? Empezará a contestar ella sola los mensajes nuevos de este número."}')">${agentOn ? "Pausar a Carolina aquí" : "Activar a Carolina aquí"}</button>
 </form>`
     : "";
-  return `<div class="box"><h3 style="margin-top:0">WhatsApp -- vía Zernio</h3>
-<p>Estado: <strong>${configured ? "Configurado" : "No configurado"}</strong></p>
+  const waTone = !configured ? "off" : agentOn ? "done" : "pending";
+  const waLabel = !configured ? "No configurado" : agentOn ? "Respondiendo" : "Pausada";
+  return `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("W", waTone)}<div><h3 style="margin:0">WhatsApp -- vía Zernio</h3>${statusPill(waLabel, waTone)}</div></div>
 <p class="sub">Alternativa a la WhatsApp Cloud API directa de Meta: conecta el número con un clic (Embedded Signup gestionado por Zernio), sin el proceso de verificación de negocio de Meta.</p>
 ${result}
 <p><a class="btn ${configured ? "light" : "ok"}" href="/crm/integraciones/whatsapp/conectar">${configured ? "Reconectar" : "Conectar"} WhatsApp con Zernio</a></p>
