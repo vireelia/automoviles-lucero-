@@ -2327,6 +2327,7 @@ const TASK_TYPE_LABEL: Record<TaskType, string> = {
   seguimiento_propuesta: "Seguimiento de propuesta",
   resolver_incidencia: "Resolver incidencia",
   revisar_handoff: "Revisar handoff",
+  contactar_whatsapp: "Contactar por WhatsApp (número nuevo)",
   otra: "Otra tarea comercial",
 };
 function taskCard(t: Task): string {

@@ -19,6 +19,14 @@ export type TaskType =
   | "seguimiento_propuesta"
   | "resolver_incidencia"
   | "revisar_handoff"
+  // Aviso cruzado entre canales (26/10/2026, "si el agente de gmail... le
+  // pide el numero... que ese numero... le envie un aviso a carolina para
+  // que lo contacte en whatsapp") -- Carolina (el agente de WhatsApp) no
+  // puede escribirle ella sola a un número que nunca le escribió primero
+  // (ventana de 24h de Meta para texto libre, sin plantilla aprobada), así
+  // que el aviso real y honesto es para el equipo: contactar por WhatsApp
+  // en cuanto se pueda, nunca un envío automático que Meta bloquearía.
+  | "contactar_whatsapp"
   | "otra";
 
 export type Task = {

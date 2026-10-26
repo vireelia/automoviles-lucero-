@@ -3,6 +3,7 @@ import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { moveToTrash } from "../crm/trash.js";
+import { createAutoTask } from "./tasks.js";
 
 type Temperature = "COLD" | "WARM" | "HOT";
 
@@ -61,6 +62,28 @@ export function normalizePhone(raw: string): string {
   return hadPlus ? "+" + bare : trimmed;
 }
 
+// Aviso cruzado entre agentes (26/10/2026) -- Carolina (WhatsApp) nunca
+// escribe primero por su cuenta a un número que no le ha escrito antes
+// (ventana de 24h de Meta para texto libre, sin plantilla aprobada), así
+// que esto NUNCA envía un mensaje -- solo crea una tarea real y honesta
+// para el equipo, con el aviso correcto según si ya hay o no una
+// conversación de WhatsApp abierta con ese número.
+function notifyWhatsappOpportunity(phone: string, lead: Lead, fromChannel: string): void {
+  const hasWhatsappThread = readCollection<{ phone: string }>("whatsapp_inbox").some((m) => normalizePhone(m.phone) === phone);
+  const origenLabel: Record<string, string> = { EMAIL: "correo (Daniel)", VOICE: "teléfono (Miguel)", CHAT: "chat web", FACEBOOK: "Messenger" };
+  const origen = origenLabel[fromChannel] ?? fromChannel;
+  const reason = hasWhatsappThread
+    ? `Número conseguido por ${origen} -- ya hay conversación de WhatsApp abierta con este cliente, se le puede escribir ya.`
+    : `Número conseguido por ${origen} -- todavía no escribió por WhatsApp, así que Carolina no puede iniciar la conversación sola (ventana de 24h de Meta). Contactar por WhatsApp solo si el cliente escribe primero, o llamar/escribir por el canal de siempre mientras tanto.`;
+  createAutoTask({
+    lead_phone: phone,
+    type: "contactar_whatsapp",
+    reason,
+    source_ref: `whatsapp_opportunity:${lead.id}`,
+    channel: fromChannel,
+    priority: "normal",
+  });
+}
 export function upsertLead(args: {
   phone?: string;
   email?: string;
@@ -82,6 +105,11 @@ export function upsertLead(args: {
     : args.email
       ? leads.find((l) => l.email === args.email)
       : undefined;
+  // Aviso cruzado entre agentes (26/10/2026, "si el agente de gmail tiene
+  // un cliente y le pide el numero... que le envie un aviso a carolina para
+  // que lo contacte en whatsapp") -- se detecta ANTES de pisar lead.phone,
+  // comparando con lo que había antes.
+  const isNewPhoneFromOtherChannel = Boolean(normalizedPhone && args.channel && args.channel !== "WHATSAPP" && !lead?.phone);
 
   if (lead) {
     lead.name = args.name ?? lead.name;
@@ -120,6 +148,10 @@ export function upsertLead(args: {
       last_contact: now(),
     };
     appendToCollection("leads", lead);
+  }
+
+  if (isNewPhoneFromOtherChannel && normalizedPhone) {
+    notifyWhatsappOpportunity(normalizedPhone, lead, args.channel!);
   }
 
   return envelope({ status: "ok", data: lead, source: "registro interno" });
