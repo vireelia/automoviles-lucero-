@@ -1029,8 +1029,8 @@ h2{font-size:20px;margin:20px 0 10px}
 .lead-card .lc-who{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .lead-card .lc-who b{font-size:15px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .lead-card .lc-who span{font-size:13px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
-.lead-card .lc-vehicle{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink);background:var(--panel);border-radius:9px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lead-card .lc-vehicle svg{flex-shrink:0;color:var(--ink-dim)}
+.lead-card .lc-vehicle{display:flex;align-items:flex-start;gap:7px;font-size:13px;font-weight:600;color:var(--ink);background:var(--panel);border-radius:9px;padding:8px 10px;line-height:1.4}
+.lead-card .lc-vehicle svg{flex-shrink:0;color:var(--ink-dim);margin-top:2px}
 .lead-card .lc-meta{display:flex;align-items:center;justify-content:space-between}
 .lead-card .temp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;white-space:nowrap}
 .lead-card .temp i{width:7px;height:7px;border-radius:999px;display:inline-block}
