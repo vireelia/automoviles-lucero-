@@ -1043,6 +1043,19 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .activity-item.wa{background:var(--ok-bg)}
 .activity-item.email{background:#e0ecff}
 .activity-item time{display:block;font-size:11px;color:var(--ink-dim);margin-top:4px}
+/* Conversación real de WhatsApp (25/10/2026, petición real: "quiero que
+   se vea la conversacion real") -- todos los mensajes reales con ese
+   teléfono, en orden, cliente a la izquierda y negocio a la derecha,
+   como un chat de verdad. Nada inventado: cada burbuja es un registro
+   real de whatsapp_inbox. */
+.wa-thread{display:flex;flex-direction:column;gap:10px;max-height:380px;overflow-y:auto;padding:4px 2px}
+.wa-bubble{max-width:78%;padding:9px 13px;border-radius:12px;font-size:14px;white-space:pre-wrap}
+.wa-row{display:flex;flex-direction:column}
+.wa-row.in{align-items:flex-start}
+.wa-row.out{align-items:flex-end}
+.wa-row .wa-bubble.in{background:var(--panel);border-bottom-left-radius:3px}
+.wa-row .wa-bubble.out{background:var(--ok-bg);border-bottom-right-radius:3px}
+.wa-row time{font-size:10.5px;color:var(--ink-dim);margin-top:3px}
 @media(max-width:1100px){.contactos-shell{flex-direction:column}.contactos-list{flex:none;border-right:0;border-bottom:1px solid var(--border)}.contactos-list-scroll{max-height:320px}.contactos-activity{flex:none;border-left:0;border-top:1px solid var(--border);max-height:none}.contactos-detail{max-height:none}}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
@@ -2720,19 +2733,29 @@ ${selected.internal_note ? `<p class="sub" style="margin:0 0 6px">Última nota -
 // reusar exactamente la misma ficha sin duplicar el HTML.
 function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: string): { detail: string; activity: string } {
   const lead = findLeadForContact(allLeads, selected.phone, null);
+  // Conversación real (25/10/2026, "quiero que se vea la conversacion
+  // real"): todos los mensajes de whatsapp_inbox con este mismo teléfono,
+  // en orden cronológico -- cada fila ya guarda el mensaje del cliente y,
+  // si lo hubo, la respuesta real (de la IA o del equipo, answered_by lo
+  // distingue). No es una tabla nueva: es el mismo dato real que ya
+  // existía, solo mostrado como hilo en vez de un mensaje suelto.
+  const thread = list<WhatsappMessage>("whatsapp_inbox")
+    .filter((m) => m.phone === selected.phone)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${esc(m.text)}</div><time>${esc(fmtDate(m.created_at))}</time></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}</div><time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div>` : ""}`).join("");
   const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
-<div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
+<div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
-<h3 style="margin-bottom:6px">Mensaje</h3><div class="box" style="white-space:pre-wrap">${esc(selected.text)}</div>
-${selected.reply_text ? `<h3 style="margin-bottom:6px">Última respuesta</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.reply_text)}</div>` : ""}
-<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
+<h3 style="margin-bottom:6px">Conversación</h3><div class="wa-thread">${threadHtml}</div>
+<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
 <label>Responder por WhatsApp</label><textarea name="respuesta" rows="4" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
-<p class="sub" style="margin:4px 0 14px;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
-${phoneLink(selected.phone)}
+<p class="sub" style="margin:4px 0 0;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
+</form>
+<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:10px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.phone)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
-${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
+${confirmButton("Eliminar este mensaje", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
 </form>`;
   const activity = `<h3 style="margin-top:0">Actividad</h3>
 <div class="activity-item wa">WhatsApp recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
