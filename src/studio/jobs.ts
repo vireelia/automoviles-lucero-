@@ -18,6 +18,12 @@ import { readCollection, writeCollection } from "../store.js";
 import { submitHiggsfieldJob, getHiggsfieldStatus, outputUrls, isHiggsfieldConnected, type HiggsfieldStatus } from "./higgsfield.js";
 import { findTemplate, findVideoEngine, findVideoStyle, findImageEngine, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, type StudioTemplate, type VideoEngine, type ImageEngine } from "./templates.js";
 
+// Única lista blanca real de "esto es una foto" (auditoría de seguridad,
+// 26/10/2026) -- la usan tanto el fileFilter de multer (app.ts) como
+// saveUploadedPhoto aquí mismo, para no mantener dos copias que puedan
+// desincronizarse.
+export const PHOTO_EXT_BY_MIME: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif" };
+
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 const UPLOADS_DIR = path.join(DATA_DIR, "studio_uploads");
 const OUTPUTS_DIR = path.join(DATA_DIR, "studio_outputs");
@@ -116,8 +122,12 @@ export function budgetInfo() {
 // Guarda la foto subida en el volumen persistente y devuelve su ruta
 // pública real (necesaria porque la API de Higgsfield recibe una URL que
 // ELLA misma descarga, no el archivo -- nunca un binario subido directo).
-export function saveUploadedPhoto(buffer: Buffer, originalName: string): { relPath: string; publicUrl: string } {
-  const ext = path.extname(originalName).toLowerCase() || ".jpg";
+// La extensión sale del mimetype real que detectó multer (auditoría de
+// seguridad, 26/10/2026), nunca del nombre que manda quien sube el archivo
+// -- ese nombre es texto arbitrario, no una fuente fiable de qué tipo de
+// archivo es de verdad.
+export function saveUploadedPhoto(buffer: Buffer, mimetype: string): { relPath: string; publicUrl: string } {
+  const ext = PHOTO_EXT_BY_MIME[mimetype] ?? ".jpg";
   const fileName = `${crypto.randomUUID()}${ext}`;
   writeFileSync(path.join(UPLOADS_DIR, fileName), buffer);
   const relPath = `studio_uploads/${fileName}`;

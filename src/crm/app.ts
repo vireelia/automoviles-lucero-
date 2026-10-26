@@ -18,7 +18,7 @@ import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, 
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
-import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
+import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
 import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
@@ -1433,6 +1433,19 @@ function clearSessionCookie(res: express.Response) {
   res.setHeader("Set-Cookie", "crm_session=; Path=/crm; HttpOnly; SameSite=Strict; Max-Age=0");
 }
 
+// Candado contra fuerza bruta (auditoría de seguridad, 26/10/2026): antes no
+// había ningún límite de intentos -- se podían probar contraseñas sin
+// fricción contra cualquier correo real del equipo. Por cuenta (no por IP:
+// el servidor puede estar detrás de un proxy sin "trust proxy" configurado,
+// y la IP real del cliente no es fiable sin eso) -- 5 fallos seguidos
+// bloquean esa cuenta 15 minutos; un login correcto borra el contador. En
+// memoria del proceso, a propósito: perderlo en un reinicio es aceptable
+// (nunca ha habido una brecha real que proteger retroactivamente), y evita
+// montar una colección nueva para algo que debe quedar atrás tras 15
+// minutos de todas formas.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
 crm.get("/entrar", (_req, res) => {
   res.type("html").send(loginPage());
 });
@@ -1440,11 +1453,27 @@ crm.get("/entrar", (_req, res) => {
 crm.post("/entrar", (req, res) => {
   const email = String(req.body.email ?? "").trim().toLowerCase();
   const password = String(req.body.password ?? "");
+  const attempt = loginAttempts.get(email);
+  if (attempt && attempt.lockedUntil > Date.now()) {
+    const minutos = Math.ceil((attempt.lockedUntil - Date.now()) / 60000);
+    console.warn(`[login] cuenta bloqueada temporalmente tras ${LOGIN_MAX_ATTEMPTS} fallos: ${email} (quedan ${minutos} min)`);
+    res.status(429).type("html").send(loginPage(`Demasiados intentos fallidos. Prueba de nuevo en ${minutos} minuto(s).`));
+    return;
+  }
   const user = listUsers().find((u) => u.email === email);
   if (!user || !verifyPassword(password, user.password_hash)) {
+    // Un bloqueo ya caducado empieza de cero (5 intentos nuevos), no sigue
+    // sumando desde donde se quedó -- si no, el primer fallo tras los 15
+    // minutos volvería a bloquear al momento.
+    const prevCount = attempt && attempt.lockedUntil > 0 && attempt.lockedUntil <= Date.now() ? 0 : attempt?.count ?? 0;
+    const count = prevCount + 1;
+    const lockedUntil = count >= LOGIN_MAX_ATTEMPTS ? Date.now() + LOGIN_LOCKOUT_MS : 0;
+    loginAttempts.set(email, { count, lockedUntil });
+    console.warn(`[login] intento fallido ${count}/${LOGIN_MAX_ATTEMPTS}: ${email}${lockedUntil ? " -- cuenta bloqueada 15 min" : ""}`);
     res.status(401).type("html").send(loginPage("Correo o contraseña incorrectos."));
     return;
   }
+  loginAttempts.delete(email);
   setSessionCookie(res, createSession(user.id), req);
   res.redirect("/crm");
 });
@@ -4888,7 +4917,19 @@ crm.post("/papelera-masivo", (req, res) => {
 // Módulo independiente: si Higgsfield falla, no afecta a Miguel, al chat ni
 // al resto del CRM. Fotos y vídeos se suben/descargan al mismo volumen
 // persistente que el resto de datos del negocio.
-const studioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// Lista blanca de imagen real (auditoría de seguridad, 26/10/2026) -- antes
+// se aceptaba cualquier archivo y la extensión guardada salía del nombre
+// que mandaba quien subía la foto (saveUploadedPhoto usaba path.extname del
+// nombre original). Subir un ".svg"/".html" disfrazado de foto y que luego
+// se sirviera con ese mismo Content-Type habría sido un XSS almacenado real
+// -- solo accesible a un admin (único rol que puede subir aquí), pero real.
+const studioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype in PHOTO_EXT_BY_MIME);
+  },
+});
 
 const STUDIO_STATUS_TEXT: Record<string, string> = {
   submitted: "Enviado, esperando a Higgsfield",
@@ -5092,7 +5133,7 @@ crm.post("/studio/generar", studioUpload.single("foto"), async (req, res) => {
   if (!vehicleLabel) return back(res, "/crm/studio", "Dime qué coche es: elígelo del stock o escríbelo a mano");
   if (template.needsPhoto && !req.file) return back(res, "/crm/studio", `La plantilla "${template.label}" necesita que subas antes la foto real del coche`);
 
-  const photo = req.file ? saveUploadedPhoto(req.file.buffer, req.file.originalname) : null;
+  const photo = req.file ? saveUploadedPhoto(req.file.buffer, req.file.mimetype) : null;
   const extra = String(req.body.extra ?? "").trim() || undefined;
   const manualPrompt = String(req.body.manual_prompt ?? "").trim() || undefined;
   const engineId = String((template.kind === "video" ? req.body.video_engine_id : req.body.image_engine_id) ?? "").trim() || undefined;
@@ -5136,6 +5177,14 @@ crm.post("/studio/publicar", async (req, res) => {
   back(res, "/crm/studio", `Publicado en ${String(account.platform)} (estado: ${result.status}).`);
 });
 
+// Content-Type explícito por extensión real (auditoría de seguridad,
+// 26/10/2026, defensa en profundidad) -- res.sendFile por defecto adivina
+// el Content-Type por la extensión del archivo en disco; con la lista
+// blanca ya puesta en la subida (PHOTO_EXT_BY_MIME) y las salidas generadas
+// por guessExt en jobs.ts, nunca debería aparecer aquí una extensión fuera
+// de esta lista, pero si alguna vez ocurriera, se sirve como descarga
+// genérica en vez de dejar que el navegador la interprete como HTML/SVG.
+const STUDIO_FILE_CONTENT_TYPE: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4" };
 // Ruta pública (sin sesión, ver excepción más arriba): Higgsfield descarga
 // desde aquí la foto que se sube, y aquí mismo se ven/descargan los
 // resultados ya generados. Solo sirve archivos dentro de las dos carpetas
@@ -5146,5 +5195,8 @@ crm.get("/studio/archivo/*", (req, res) => {
   if (!safe.startsWith("studio_uploads/") && !safe.startsWith("studio_outputs/")) return res.status(404).end();
   const abs = absolutePathFor(safe);
   if (!fileExists(abs)) return res.status(404).end();
+  const contentType = STUDIO_FILE_CONTENT_TYPE[path.extname(abs).toLowerCase()];
+  if (contentType) res.type(contentType);
+  else res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": "attachment" });
   res.sendFile(abs);
 });

@@ -1,5 +1,5 @@
 import express from "express";
-import cors from "cors";
+import crypto from "crypto";
 import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone } from "./tools/leads.js";
@@ -38,7 +38,15 @@ import { bootstrapAdmin, listUsers } from "./crm/auth.js";
 import { startDailySummary } from "./crm/daily.js";
 
 const app = express();
-app.use(cors());
+// CORS quitado (auditoría de seguridad, 26/10/2026): estaba abierto a
+// cualquier origen (app.use(cors()) sin opciones) en TODA la app, incluidos
+// /tools/* y /admin/*. Ninguna ruta real de este backend la consume un
+// navegador en otro origen -- /crm/* es same-origin (HTML servido por este
+// mismo servidor), y /tools/*, /webhooks/*, /admin/* los llaman siempre
+// otros servidores (Retell, Twilio, Zernio, n8n), nunca JavaScript de una
+// página web -- CORS no protege ni hace falta ahí. Si algún día una web en
+// otro origen necesita llamar a esta API de verdad, se añade una lista
+// concreta de orígenes permitidos, nunca un comodín abierto a todos.
 // Guardamos el cuerpo sin procesar: la firma de Retell se calcula sobre esos bytes exactos.
 app.use(
   express.json({
@@ -215,9 +223,24 @@ app.post("/tools/sync_inventory", requireAdminToken, route(() => syncInventory()
 // nunca declaradas como tool de Retell. confirm/cancel de una reserva
 // requieren validación humana real del pago (Sección 26) -- por eso no
 // están al alcance del agente. Protegidas por un token simple compartido.
+// Comparación en tiempo constante (auditoría de seguridad, 26/10/2026) --
+// "!==" compara byte a byte y corta en la primera diferencia, lo que en
+// teoría deja un canal de temporización para adivinar el token carácter a
+// carácter. crypto.timingSafeEqual exige que los dos Buffer midan igual
+// (si no, lanza) -- por eso se compara la longitud por fuera, con un
+// Buffer de longitud fija para no reintroducir el mismo problema ahí.
+function tokensMatch(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA); // mismo coste aproximado, para no filtrar la longitud por tiempo
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 function requireAdminToken(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = req.header("x-admin-token");
-  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+  if (!process.env.ADMIN_TOKEN || !token || !tokensMatch(token, process.env.ADMIN_TOKEN)) {
     res.status(401).json({ error: "unauthorized" });
     return;
   }

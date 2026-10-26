@@ -4,9 +4,11 @@ import { mutateCollection } from "../store.js";
 // análisis automático (custom_analysis_data) que configuramos en el agente
 // -- nombre, vehículo de interés, intención, resultado, temperatura -- para
 // que el panel interno (Sección "panel para Ramón/José") lo pueda mostrar
-// sin que nadie tenga que leer transcripts a mano. No verificamos la firma
-// del webhook todavía (pendiente si hace falta más adelante) -- por ahora
-// solo registra, no ejecuta ninguna acción sensible a partir del payload.
+// sin que nadie tenga que leer transcripts a mano. La firma X-Retell-Signature
+// SÍ se verifica (corregido 26/10/2026, auditoría de seguridad -- este
+// comentario llevaba desde antes de añadirla y llevaba a error) antes de
+// llegar aquí, en server.ts (verifyRetellSignature) -- esta función nunca
+// se llama con un payload sin verificar.
 // "Cerebro" de calidad de llamadas (15/10/2026, a petición real: "construye
 // un cerebro para mejorar la calidad de las llamadas"). En vez de depender
 // de analizar transcripts a mano cada vez, cada llamada real queda marcada

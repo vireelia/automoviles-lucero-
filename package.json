@@ -10,13 +10,11 @@
   },
   "dependencies": {
     "@zernio/node": "^0.2.1216",
-    "cors": "^2.8.5",
     "express": "^4.19.2",
     "multer": "^2.4.0",
     "twilio": "^6.2.0"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/multer": "^2.3.0",
     "@types/node": "^22.7.4",
