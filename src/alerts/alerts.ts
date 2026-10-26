@@ -46,12 +46,18 @@ export type Alert = {
 // sea literalmente el mismo texto, no solo el mismo tipo+teléfono.
 const DEDUP_HOURS = 6;
 
-// Destinatarios: los usuarios del CRM con rol de comercial o equipo (no el administrador),
-// más las direcciones de ALERT_EMAILS si se configuran.
+// Destinatarios: TODOS los usuarios reales del CRM, más las direcciones de
+// ALERT_EMAILS si se configuran.
+// FALLO GRAVÍSIMO detectado (27/10/2026, dato real de producción): esto
+// excluía a propósito a los administradores -- pero la cuenta real de
+// Ramón y José en este CRM ES "admin" (automovileslucero@gmail.com), y su
+// WhatsApp nunca puede recibir estos avisos (ver team-notify.ts: su número
+// personal ES el número del negocio). Resultado real confirmado: 15 de 15
+// avisos por WhatsApp a Ramón fallaron, y el correo -- su único respaldo
+// real -- nunca se les enviaba tampoco por este filtro. Solo le llegaba a
+// Rubén (equipo). Ahora todos los roles reciben el correo de respaldo.
 function recipients(): string[] {
-  const fromCrm = listUsers()
-    .filter((u) => u.role === "comercial" || u.role === "equipo")
-    .map((u) => u.email);
+  const fromCrm = listUsers().map((u) => u.email);
   const fromEnv = (process.env.ALERT_EMAILS ?? "")
     .split(",")
     .map((s) => s.trim())
