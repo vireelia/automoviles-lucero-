@@ -3686,7 +3686,15 @@ crm.get("/asistentes", (req, res) => {
   const allLeadsForAgents = list<Lead>("leads");
   const allHandoffsForAgents = list<Handoff>("handoffs");
   const allTasksForAgents = listTasks();
-  function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[]): string {
+  // Último evento recibido por canal (25/10/2026, encargo de fiabilidad,
+  // "panel de salud... último evento recibido"): del propio registro
+  // crudo del canal (la llamada/mensaje/correo más reciente), no de
+  // cuándo se tocó por última vez un lead -- es la señal real de si el
+  // canal sigue recibiendo eventos de verdad.
+  const lastVoiceEvent = vs.recentCalls.length ? vs.recentCalls[vs.recentCalls.length - 1].created_at : null;
+  const lastWaEvent = list<WhatsappMessage>("whatsapp_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
+  const lastMailEvent = list<InboxMail>("email_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
+  function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[], lastEvent: string | null): string {
     const clientes = allLeadsForAgents.filter((l) => l.channel && channelKeys.includes(l.channel)).length;
     const handoffsCount = allHandoffsForAgents.filter((h) => h.channel && channelKeys.includes(h.channel)).length;
     const tareasPendientes = allTasksForAgents.filter((t) => t.status === "pendiente" && t.channel && channelKeys.includes(t.channel)).length;
@@ -3697,15 +3705,16 @@ crm.get("/asistentes", (req, res) => {
 <p class="sub">${esc(funcion)}</p>
 <p>Estado: <strong>${esc(estado)}</strong></p>
 <p>Canales: ${esc(canales)}</p>
+<p>Último evento recibido: <strong>${lastEvent ? esc(fmtDate(lastEvent)) : "ninguno todavía"}</strong></p>
 <p>Clientes atendidos: <strong>${clientes}</strong> · Avisos generados: <strong>${handoffsCount}</strong> · Tareas pendientes: <strong>${tareasPendientes}</strong></p>
 <p class="sub">Última actividad: ${ultima ? esc(fmtDate(ultima.updated_at ?? ultima.created_at)) : "ninguna todavía"}</p>
 </div>`;
   }
   const agentCards = `<h2 style="margin-top:0">Agentes IA</h2>
 <div class="row">
-${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"])}
-${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"])}
-${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"])}
+${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"], lastVoiceEvent)}
+${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"], lastWaEvent)}
+${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"], lastMailEvent)}
 </div>
 <p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${vs.totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
   // Calidad de llamadas (15/10/2026, el "cerebro" pedido): cada llamada real

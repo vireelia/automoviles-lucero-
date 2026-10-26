@@ -36,3 +36,28 @@ export function appendToCollection<T>(collection: string, item: T, seed: T[] = [
   writeCollection(collection, items);
   return items;
 }
+
+// Cola de escritura por colección (25/10/2026, encargo de fiabilidad: "dos
+// peticiones casi simultáneas no deben pisarse"). Dentro de este mismo
+// proceso Node, dos llamadas a mutateCollection sobre LA MISMA colección
+// ahora se ejecutan en orden, nunca en paralelo -- cierra la carrera real
+// de leer-modificar-escribir que existía (lectura de A, lectura de B,
+// escritura de A, escritura de B pisando los cambios de A). Límite
+// honesto: esto NO es una transacción de base de datos real ni protege
+// entre varias instancias del servicio si algún día se replica -- es la
+// mejora real posible sobre archivos JSON planos, sin añadir ninguna
+// tecnología nueva al stack.
+const writeQueues = new Map<string, Promise<unknown>>();
+export function mutateCollection<T>(collection: string, mutate: (items: T[]) => T[] | void, seed: T[] = []): Promise<T[]> {
+  const prior = writeQueues.get(collection) ?? Promise.resolve();
+  const next = prior
+    .catch(() => {})
+    .then(() => {
+      const items = readCollection<T>(collection, seed);
+      const result = mutate(items) ?? items;
+      writeCollection(collection, result);
+      return result;
+    });
+  writeQueues.set(collection, next);
+  return next;
+}

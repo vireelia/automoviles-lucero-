@@ -1,4 +1,4 @@
-import { appendToCollection } from "../store.js";
+import { mutateCollection } from "../store.js";
 
 // Receptor de webhooks de Retell (call_analyzed / chat_analyzed). Guarda el
 // análisis automático (custom_analysis_data) que configuramos en el agente
@@ -31,7 +31,7 @@ function maxPauseSeconds(transcriptObject: any): number | null {
   return max;
 }
 
-export function handleRetellWebhook(payload: any) {
+export async function handleRetellWebhook(payload: any) {
   const event = payload?.event;
   if (event !== "call_analyzed" && event !== "chat_analyzed") {
     return { received: true, ignored: true, event };
@@ -102,6 +102,23 @@ export function handleRetellWebhook(payload: any) {
     direction: call.direction ?? null,
     created_at: new Date().toISOString(),
   };
-  appendToCollection("call_analyses", record);
-  return { received: true, stored: record.id };
+  // Deduplicación real por call_id (25/10/2026, encargo de fiabilidad: "un
+  // webhook repetido no debe crear una segunda llamada") -- mismo patrón ya
+  // probado en Zernio/Gmail (zernio_whatsapp_processed/email_processed),
+  // ahora también aquí. Si Retell reintenta el mismo evento (corte de red,
+  // timeout), se actualiza el registro ya existente en vez de duplicarlo.
+  // Sin call_id real no hay nada con qué deduplicar -- se guarda tal cual,
+  // como siempre.
+  let storedId = record.id;
+  await mutateCollection<typeof record>("call_analyses", (items) => {
+    const existingIdx = record.call_id ? items.findIndex((c) => c.call_id === record.call_id) : -1;
+    if (existingIdx >= 0) {
+      storedId = items[existingIdx].id;
+      items[existingIdx] = { ...record, id: storedId };
+      return items;
+    }
+    items.push(record);
+    return items;
+  });
+  return { received: true, stored: storedId };
 }

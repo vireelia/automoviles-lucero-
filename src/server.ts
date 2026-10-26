@@ -913,7 +913,7 @@ app.get("/oauth/google/status", requireAdminToken, (_req, res) => res.json(googl
 // Webhook de Retell (call_analyzed / chat_analyzed) -- guarda el análisis
 // automático configurado en el agente. Retell no manda nuestro ADMIN_TOKEN:
 // se autentica con la firma X-Retell-Signature. Sin RETELL_API_KEY se rechaza todo.
-app.post("/webhooks/retell", (req, res) => {
+app.post("/webhooks/retell", async (req, res) => {
   const apiKey = process.env.RETELL_API_KEY;
   const rawBody = (req as express.Request & { rawBody?: string }).rawBody;
   if (!apiKey) {
@@ -928,7 +928,7 @@ app.post("/webhooks/retell", (req, res) => {
   }
   try {
     forwardVoiceAnalysis(req.body ?? {});
-    res.json(handleRetellWebhook(req.body ?? {}));
+    res.json(await handleRetellWebhook(req.body ?? {}));
   } catch (err) {
     console.error("[webhook] error:", err);
     res.status(200).json({ received: false });
