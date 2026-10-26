@@ -35,7 +35,16 @@ const MARKETING_SENDER = /\b(comunicacion|sugerencias|newsletter|noticias|market
 // respuestas reales sin sentido hoy mismo ("veo que me has enviado
 // información sobre una subasta de vehículos..."). Se descarta por dominio
 // del remitente, igual que MARKETING_SENDER.
-const B2B_INDUSTRY_SENDER = /@mail\.autorola\.es$/i;
+// FALLO REAL detectado (26/10/2026, "estan saliendo muchos errores de
+// correos" -- confirmado con un rebote real de Gmail: "Tu mensaje no se ha
+// entregado a mail@info.auto1.com porque no se ha encontrado el dominio").
+// Auto1 es otra plataforma B2B real del sector (compraventa de vehículos
+// entre profesionales) -- mismo problema que Autorola, Daniel le contestó
+// como si fuera un cliente y, además, ese dominio de envío ni siquiera
+// admite respuestas (sin servidor de correo), así que el rebote volvía al
+// buzón real del negocio. Lista en vez de una sola regex, para que la
+// próxima plataforma B2B que aparezca sea una línea más, no una reescritura.
+const B2B_INDUSTRY_SENDER = [/@mail\.autorola\.es$/i, /@([a-z0-9-]+\.)?auto1\.com$/i];
 
 // Bancos/entidades financieras y publicidad (a petición real, 15/10/2026,
 // tras el fallo del bucle de autorespuesta): el agente de correo tiene
@@ -274,7 +283,7 @@ export function decideInterest(input: { from: string; subject: string; text: str
   if (MARKETING_SENDER.test(input.from)) {
     return { interested: false, reason: "remitente_marketing_portal" };
   }
-  if (B2B_INDUSTRY_SENDER.test(input.from)) {
+  if (B2B_INDUSTRY_SENDER.some((r) => r.test(input.from))) {
     return { interested: false, reason: "plataforma_b2b_sector_no_cliente" };
   }
   if (AUTOMATED_ONLY.some((r) => r.test(body))) {

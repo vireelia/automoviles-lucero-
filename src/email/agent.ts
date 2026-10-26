@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import dns from "dns";
 import { readCollection, writeCollection } from "../store.js";
 import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
@@ -59,6 +60,32 @@ function replySubject(subject: string): string {
 
 export type EmailDelivery = { status: Outbox["status"]; error?: string };
 
+// Comprueba que el dominio del destinatario admite correo real antes de
+// intentar un envío (26/10/2026, "estan saliendo muchos errores de
+// correos" -- rebote real confirmado por Eliud: "Tu mensaje no se ha
+// entregado a mail@info.auto1.com porque no se ha encontrado el dominio").
+// Gmail SÍ acepta el envío (no lanza error aquí), pero el rebote real llega
+// después al buzón del negocio, invisible para esta app -- de ahí que
+// pareciera un fallo sin explicación. Mismo fallback que usa el propio
+// SMTP (RFC 5321): si no hay MX, se admite por A/AAAA -- comprobar solo MX
+// daría falsos negativos en dominios pequeños sin MX explícito.
+async function hasMailServer(email: string): Promise<boolean> {
+  const domain = email.split("@")[1]?.trim().toLowerCase();
+  if (!domain) return false;
+  try {
+    const mx = await dns.promises.resolveMx(domain);
+    if (mx.length > 0) return true;
+  } catch {
+    // Sin MX -- se prueba el resto de abajo antes de rendirse.
+  }
+  try {
+    await dns.promises.resolve(domain);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Envía por Gmail si está conectado; si no, deja el correo en cola sin darlo por enviado.
 export async function deliverEmail(
   to: string,
@@ -68,11 +95,15 @@ export async function deliverEmail(
 ): Promise<EmailDelivery> {
   let delivery: EmailDelivery = { status: "queued" };
   if (isGoogleConnected()) {
-    try {
-      await sendGmail(to, subject, body, thread);
-      delivery = { status: "sent" };
-    } catch (err) {
-      delivery = { status: "failed", error: err instanceof Error ? err.message : String(err) };
+    if (!(await hasMailServer(to))) {
+      delivery = { status: "failed", error: "El dominio de destino no tiene servidor de correo real -- no se ha intentado enviar, para no generar un rebote en el buzón real." };
+    } else {
+      try {
+        await sendGmail(to, subject, body, thread);
+        delivery = { status: "sent" };
+      } catch (err) {
+        delivery = { status: "failed", error: err instanceof Error ? err.message : String(err) };
+      }
     }
   }
   const outbox = readCollection<Outbox>("email_outbox");
