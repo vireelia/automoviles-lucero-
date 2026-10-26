@@ -22,6 +22,7 @@ import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploa
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
 import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
+import { getBusinessConfig, saveBusinessOverrides } from "../data/business-config.js";
 import { existsSync as fileExists } from "fs";
 import path from "path";
 import {
@@ -3481,16 +3482,17 @@ ${ventas.length === 0 ? `<div class="empty">Todavía no hay ninguna venta marcad
   res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
 });
 // Ajustes: datos reales del negocio (26/10/2026, "construyelo" sobre el
-// placeholder) -- businessInfo es el MISMO archivo que usa el propio
-// agente de IA para responder (src/data/business-info.ts), así que esto
-// nunca puede desincronizarse de lo que Miguel/Carolina/Daniel dicen de
-// verdad. Es de SOLO LECTURA a propósito: ese archivo también alimenta
-// los prompts (prompt-*.md) y varias tools que validan contra él en
-// código -- un editor en el propio CRM que cambiara esto de verdad en
-// caliente es un cambio de arquitectura más grande (mover estos datos a
-// una colección que las tools lean en cada llamada), no algo que se deba
-// inventar a mitad de sesión. Se explica así, con honestidad, en vez de
-// fingir un editor que en realidad no cambiaría nada.
+// placeholder, luego confirmado "sí, hazlo editable de verdad" al ver el
+// aviso de solo lectura). Editable de verdad SOLO lo que ninguna tool ni
+// prompt narra como cifra fija en el texto que lee el modelo (teléfonos,
+// WhatsApp, dirección, 3 criterios numéricos de financiación) -- ver
+// business-config.ts para el porqué exacto. Horarios/garantía/reserva/
+// plazo de financiación se quedan de solo lectura a propósito: esos SÍ
+// están escritos literalmente dentro de prompt-core.md (p. ej. "500€",
+// "09:30-14:00", "1 año o 20.000 km") para guiar el tono -- cambiar el
+// dato aquí sin re-escribir también el prompt crearía una contradicción
+// real entre lo que el modelo dice de memoria y lo que esta página
+// mostraría, así que se deja fuera de esta entrega y se explica por qué.
 function ajustesConfirmBadge(status: string | undefined): string {
   if (status === "owner_confirmed") return `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Confirmado</span>`;
   return `<span class="tag" style="background:var(--warn-bg);color:var(--warn)">Sin confirmar</span>`;
@@ -3498,37 +3500,43 @@ function ajustesConfirmBadge(status: string | undefined): string {
 function ajustesRow(label: string, value: string, status?: string): string {
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><span style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0">${esc(label)}</span><span style="display:flex;align-items:center;gap:8px;text-align:right;min-width:0"><b style="font-size:13.5px">${esc(value)}</b>${status ? ajustesConfirmBadge(status) : ""}</span></div>`;
 }
+function ajustesEditRow(label: string, name: string, value: string | number, overridden: boolean, type = "text"): string {
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><label for="aj-${name}" style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0;margin:0">${esc(label)}</label><span style="display:flex;align-items:center;gap:8px"><input id="aj-${name}" name="${name}" type="${type}" value="${esc(String(value))}" style="width:220px;margin:0;text-align:right">${overridden ? `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Editado</span>` : ""}</span></div>`;
+}
 crm.get("/ajustes", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
   const b = businessInfo;
+  const cfg = getBusinessConfig();
   const body = `<h1>Ajustes</h1>
-<p class="sub">Datos reales del negocio tal y como los usa hoy el agente de IA (mismo archivo, nunca se desincronizan) -- de solo lectura por ahora.</p>
-<div class="box" style="background:var(--panel)"><b>Editar estos datos desde aquí todavía no está construido.</b>
-<p class="sub" style="margin:8px 0 0">Cambiar algo aquí requiere editar el código y volver a desplegar -- el agente lee este mismo archivo directamente. Convertirlo en algo editable en caliente desde el CRM es un cambio de arquitectura más grande (que las herramientas del agente lean de una base de datos en vez del código); se puede plantear si hace falta de verdad.</p>
+<p class="sub">Datos reales del negocio tal y como los usa hoy el agente de IA. Lo editable de aquí abajo toma efecto al momento, sin reiniciar nada.</p>
+<form method="post" action="/crm/ajustes">
+<div class="box"><h3 style="margin-top:0">Contacto</h3>
+${ajustesEditRow("WhatsApp del negocio", "whatsapp_number", cfg.whatsappNumber, cfg.hasOverride.whatsappNumber)}
+${ajustesEditRow("Teléfono de Ramón", "ramon_phone", cfg.ramonPhone, cfg.hasOverride.ramonPhone)}
+${ajustesEditRow("Teléfono de José", "jose_phone", cfg.josePhone, cfg.hasOverride.josePhone)}
 </div>
-<div class="box"><h3 style="margin-top:0">Horarios y ubicación</h3>
+<div class="box"><h3 style="margin-top:0">Ubicación</h3>
+${ajustesEditRow("Dirección", "address", cfg.address, cfg.hasOverride.address)}
+${ajustesEditRow("Cómo llegar", "how_to_arrive", cfg.howToArrive, cfg.hasOverride.howToArrive)}
+</div>
+<div class="box"><h3 style="margin-top:0">Financiación -- criterios orientativos</h3>
+${ajustesEditRow("Precio mínimo (€)", "financing_min_price_eur", cfg.financingMinPriceEur, cfg.hasOverride.financingMinPriceEur, "number")}
+${ajustesEditRow("Km máximo", "financing_max_km", cfg.financingMaxKm, cfg.hasOverride.financingMaxKm, "number")}
+${ajustesEditRow("Antigüedad máxima (años)", "financing_max_age_years", cfg.financingMaxAgeYears, cfg.hasOverride.financingMaxAgeYears, "number")}
+<p class="sub" style="margin-top:10px">El plazo (36-72 meses) no es editable aquí -- está escrito tal cual dentro del prompt del agente, ver abajo.</p>
+</div>
+<button class="btn ok" type="submit">Guardar cambios</button>
+</form>
+<div class="box"><h3 style="margin-top:0">Horarios, garantía y reserva -- de solo lectura</h3>
+<p class="sub">Estos SÍ están escritos tal cual dentro del prompt que lee el agente (p. ej. "señal de 500€", "09:30-14:00") para guiar cómo habla de ellos -- cambiar el número aquí sin tocar también el prompt haría que el agente dijera una cosa y el sistema otra. Editarlos de verdad es la siguiente fase (retocar los 3 archivos de prompt y volver a sincronizar Retell para voz) -- dilo si queréis que lo planifique.</p>
 ${ajustesRow("Visitas entre semana", b.hours.weekdays.visits.join(" y "), b.hours.validation_status)}
 ${ajustesRow("Fin de semana", b.hours.weekend)}
 ${ajustesRow("Teléfono atendido", b.phone_hours === "24h" ? "24 h (Miguel)" : b.phone_hours)}
-${ajustesRow("Dirección", b.location.address.value, b.location.address.validation_status)}
-${ajustesRow("Cómo llegar", b.location.how_to_arrive)}
-</div>
-<div class="box"><h3 style="margin-top:0">Contacto</h3>
-${ajustesRow("WhatsApp del negocio", b.whatsapp.number, b.whatsapp.validation_status)}
-${ajustesRow("Ramón", `${b.responsables.ramon.transfer_number}`, b.responsables.ramon.validation_status)}
-${ajustesRow("José", `${b.responsables.jose.transfer_number}`, b.responsables.jose.validation_status)}
-</div>
-<div class="box"><h3 style="margin-top:0">Financiación</h3>
-${ajustesRow("Precio mínimo", `${b.financing.criteria.min_price_eur.toLocaleString("es-ES")} €`, b.financing.validation_status)}
-${ajustesRow("Km máximo", `menos de ${b.financing.criteria.max_km.toLocaleString("es-ES")} km`)}
-${ajustesRow("Antigüedad máxima", `${b.financing.criteria.max_age_years} años`)}
-${ajustesRow("Plazo", `${b.financing.criteria.term_months.min}-${b.financing.criteria.term_months.max} meses`)}
-</div>
-<div class="box"><h3 style="margin-top:0">Garantía y reserva</h3>
 ${ajustesRow("Garantía", `${b.warranty.duration_months} meses o ${b.warranty.max_km.toLocaleString("es-ES")} km (lo que ocurra primero)`, b.warranty.validation_status)}
 ${ajustesRow("Cubre", b.warranty.covers.join(" y "))}
 ${ajustesRow("Señal de reserva", `${b.reservation.amount_eur} €`, b.reservation.validation_status)}
 ${ajustesRow("Plazo de la reserva", `${b.reservation.duration_days} días`)}
+${ajustesRow("Plazo de financiación", `${b.financing.criteria.term_months.min}-${b.financing.criteria.term_months.max} meses`)}
 ${ajustesRow("Precio de traspaso", "Sin confirmar -- nunca se da una cifra al cliente", b.transfer_fee.validation_status)}
 </div>
 <div class="box" style="background:#fdecea;border:1px solid #f3c6c1"><b>Plantillas: todavía no está construido.</b>
@@ -3536,6 +3544,29 @@ ${ajustesRow("Precio de traspaso", "Sin confirmar -- nunca se da una cifra al cl
 </div>
 <p class="sub"><a class="link" href="/crm/integraciones">Ver conexiones y agentes de IA →</a> · <a class="link" href="/crm/equipo">Ver usuarios del equipo →</a></p>`;
   res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
+});
+crm.post("/ajustes", (req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
+  const num = (raw: unknown): number | null => {
+    const s = String(raw ?? "").trim();
+    if (s === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+  saveBusinessOverrides(
+    {
+      whatsapp_number: String(req.body.whatsapp_number ?? "").trim() || null,
+      ramon_phone: String(req.body.ramon_phone ?? "").trim() || null,
+      jose_phone: String(req.body.jose_phone ?? "").trim() || null,
+      address: String(req.body.address ?? "").trim() || null,
+      how_to_arrive: String(req.body.how_to_arrive ?? "").trim() || null,
+      financing_min_price_eur: num(req.body.financing_min_price_eur),
+      financing_max_km: num(req.body.financing_max_km),
+      financing_max_age_years: num(req.body.financing_max_age_years),
+    },
+    me(res).email,
+  );
+  back(res, "/crm/ajustes", "Cambios guardados -- el agente ya los usa");
 });
 
 crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/whatsapp"));

@@ -30,7 +30,7 @@ import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled } from "./tools/agent-toggle.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
-import { businessInfo } from "./data/business-info.js";
+import { getBusinessConfig } from "./data/business-config.js";
 import { processInboundEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
@@ -344,10 +344,12 @@ app.post("/admin/zernio/seed-team-conversation", requireAdminToken, route((a: { 
 //    texto, mensajes no soportados, etc. -- nunca se inventa qué pedían).
 // dry_run (por defecto true): genera la respuesta real del agente pero NO
 // la envía -- para poder revisar antes de mandar nada a un cliente real.
-const TEAM_PHONES = new Set([
-  businessInfo.responsables.ramon.transfer_number.replace(/[^\d]/g, ""),
-  businessInfo.responsables.jose.transfer_number.replace(/[^\d]/g, ""),
-]);
+// Función, no una constante de módulo (26/10/2026) -- así un teléfono
+// editado desde Ajustes se tiene en cuenta al momento, sin reiniciar.
+function teamPhones(): Set<string> {
+  const cfg = getBusinessConfig();
+  return new Set([cfg.ramonPhone.replace(/[^\d]/g, ""), cfg.josePhone.replace(/[^\d]/g, "")]);
+}
 app.post(
   "/admin/zernio/process-whatsapp-backlog",
   requireAdminToken,
@@ -361,9 +363,10 @@ app.post(
 
     const now = Date.now();
     const report: Array<Record<string, unknown>> = [];
+    const teamPhonesSet = teamPhones();
 
     for (const c of convsResult.conversations) {
-      if (TEAM_PHONES.has(c.phone)) {
+      if (teamPhonesSet.has(c.phone)) {
         report.push({ phone: c.phone, name: c.name, saltado: "es_del_equipo_no_cliente" });
         continue;
       }

@@ -1,6 +1,7 @@
 import { appendToCollection } from "../store.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
+import { getBusinessConfig } from "../data/business-config.js";
 import { vehiclesSeed } from "../data/vehicles-seed.js";
 
 function now() {
@@ -13,7 +14,11 @@ function now() {
 // mencionar esto si el cliente pregunta, nunca espontáneamente (regla
 // explícita de la Sección 16).
 export function requestFinancing(args: { lead_phone?: string; vehicle_id?: string; vehicle_age_years?: number }) {
-  const { criteria } = businessInfo.financing;
+  // min_price_eur/max_km/max_age_years pueden venir editados desde Ajustes
+  // (26/10/2026) -- el resto (inclusive flags, plazo, sin entrada) se queda
+  // fijo en business-info.ts, no está narrado en ningún prompt de todas formas.
+  const cfg = getBusinessConfig();
+  const criteria = { ...businessInfo.financing.criteria, min_price_eur: cfg.financingMinPriceEur, max_km: cfg.financingMaxKm, max_age_years: cfg.financingMaxAgeYears };
   const vehicle = args.vehicle_id ? vehiclesSeed.find((v) => v.id === args.vehicle_id) : undefined;
 
   let meets_orientative_criteria: boolean | "unknown" = "unknown";
@@ -29,7 +34,7 @@ export function requestFinancing(args: { lead_phone?: string; vehicle_id?: strin
       // Sin año conocido no se puede comprobar el criterio de antigüedad -- "unknown"
       // en vez de asumir que cumple, para no fabricar una elegibilidad que no se comprobó.
       meets_orientative_criteria = "unknown";
-      notes.push("Año del vehículo no disponible -- no se puede comprobar el criterio de antigüedad máxima (15 años).");
+      notes.push(`Año del vehículo no disponible -- no se puede comprobar el criterio de antigüedad máxima (${criteria.max_age_years} años).`);
     } else {
       const vehicleAgeYears = new Date().getFullYear() - vehicle.year;
       const ageOk = criteria.max_age_inclusive ? vehicleAgeYears <= criteria.max_age_years : vehicleAgeYears < criteria.max_age_years;

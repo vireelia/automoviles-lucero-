@@ -1,6 +1,7 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
+import { getBusinessConfig } from "../data/business-config.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { isWhatsappConnected, sendWhatsappText } from "../integrations/whatsapp.js";
 
@@ -67,12 +68,13 @@ export async function sendVehicleLink(args: { lead_phone?: string; vehicle_id?: 
 }
 
 export function sendLocation() {
+  const cfg = getBusinessConfig();
   return envelope({
     status: "ok",
     data: {
-      address: businessInfo.location.address.value,
+      address: cfg.address,
       zone: businessInfo.location.zone,
-      how_to_arrive: businessInfo.location.how_to_arrive,
+      how_to_arrive: cfg.howToArrive,
       transport: businessInfo.location.transport,
     },
     source: businessInfo.location.source,
@@ -140,9 +142,10 @@ export async function notifySalesperson(args: {
   const record = { id: crypto.randomUUID(), ...args, formatted, delivery_status: "queued" as const, created_at: now() };
 
   if (isWhatsappConnected()) {
+    const cfg = getBusinessConfig();
     const recipients = [
-      { name: "Ramón", phone: businessInfo.responsables.ramon.transfer_number },
-      { name: "José", phone: businessInfo.responsables.jose.transfer_number },
+      { name: "Ramón", phone: cfg.ramonPhone },
+      { name: "José", phone: cfg.josePhone },
     ];
     const results = await Promise.all(recipients.map((r) => sendWhatsappText(r.phone, formatted).then((res) => ({ ...r, res }))));
     const sentTo = results.filter((r) => r.res.ok).map((r) => r.name);
@@ -186,8 +189,9 @@ export async function notifySalesperson(args: {
 // reales nunca viven en el prompt, se resuelven aquí igual que en
 // notify_salesperson.
 export function getResponsableContact(args: { preferencia?: "ramon" | "jose" }) {
-  const ramon = { nombre: "Ramón", telefono: businessInfo.responsables.ramon.transfer_number };
-  const jose = { nombre: "José", telefono: businessInfo.responsables.jose.transfer_number };
+  const cfg = getBusinessConfig();
+  const ramon = { nombre: "Ramón", telefono: cfg.ramonPhone };
+  const jose = { nombre: "José", telefono: cfg.josePhone };
   const data =
     args.preferencia === "jose"
       ? { elegido: jose, alternativa: ramon }

@@ -14,7 +14,7 @@
 // no estuviera abierta.
 import crypto from "crypto";
 import { readCollection, appendToCollection } from "../store.js";
-import { businessInfo } from "../data/business-info.js";
+import { getBusinessConfig } from "../data/business-config.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { currentVehicles } from "../data/vehicles-current.js";
@@ -29,10 +29,15 @@ import { callUrgentAlert } from "../integrations/twilio-voice.js";
 // verdad, nunca para un recordatorio rutinario de visita.
 const URGENT_ALERT_KINDS: AlertKind[] = ["handoff_urgente", "reserva_pendiente", "lead_caliente"];
 
-const TEAM: { name: string; phone: string }[] = [
-  { name: "Ramón", phone: businessInfo.responsables.ramon.transfer_number },
-  { name: "José", phone: businessInfo.responsables.jose.transfer_number },
-];
+// Se lee en cada aviso, no en un const de módulo (26/10/2026) -- así un
+// teléfono editado desde Ajustes se usa al momento, sin reiniciar el proceso.
+function team(): { name: string; phone: string }[] {
+  const cfg = getBusinessConfig();
+  return [
+    { name: "Ramón", phone: cfg.ramonPhone },
+    { name: "José", phone: cfg.josePhone },
+  ];
+}
 
 function leadName(phone: string | null | undefined): string {
   if (!phone) return "sin nombre";
@@ -55,7 +60,7 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
 // vía /debug/team_notifications.
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, reason: whatsappText });
-  for (const member of TEAM) {
+  for (const member of team()) {
     let whatsappOk = false;
     try {
       const result = await sendWhatsappText(member.phone, whatsappText);

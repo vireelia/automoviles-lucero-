@@ -2,6 +2,7 @@ import { readCollection, writeCollection } from "./store.js";
 import { sendWhatsapp } from "./tools/delivery.js";
 import { createFollowup } from "./tools/leads.js";
 import { businessInfo } from "./data/business-info.js";
+import { getBusinessConfig } from "./data/business-config.js";
 import { deliverEmail, sendPendingDailyCapEmails } from "./email/agent.js";
 import { notifyVisitUpcoming } from "./tools/team-notify.js";
 
@@ -167,9 +168,10 @@ async function checkDailyTeamKeepalive() {
   if (state[0]?.last_sent_date === today) return;
   if (Math.abs(madridNowMinutes() - DAILY_KEEPALIVE_TARGET_MINUTES) > 10) return;
 
+  const cfg = getBusinessConfig();
   const team = [
-    { name: "Ramón", phone: businessInfo.responsables.ramon.transfer_number },
-    { name: "José", phone: businessInfo.responsables.jose.transfer_number },
+    { name: "Ramón", phone: cfg.ramonPhone },
+    { name: "José", phone: cfg.josePhone },
   ];
   for (const member of team) {
     try {
