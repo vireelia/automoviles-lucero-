@@ -9,11 +9,6 @@ export type CrmUser = {
   password_hash: string;
   role: CrmRole;
   created_at: string;
-  // % de comisión en ventas de esta persona (26/10/2026, sección Ventas:
-  // "¿cómo subo las comisiones si no hay nada para subirlas?") -- campo
-  // real y editable desde Usuarios, nunca un número inventado por nadie
-  // más que un admin. Ausente = sin comisión configurada todavía.
-  commission_pct?: number | null;
 };
 type Session = { token: string; user_id: string; expires_at: number };
 

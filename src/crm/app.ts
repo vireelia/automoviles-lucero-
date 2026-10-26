@@ -1493,8 +1493,17 @@ crm.use((req, res, next) => {
 function me(res: express.Response): CrmUser {
   return (res.locals as { user: CrmUser }).user;
 }
+// "to" puede traer su propio "#ancla" (26/10/2026, "cada vez que le doy a un
+// botón se mueve la pagina" -- Integraciones es una página larga y volver
+// siempre al principio tras cada acción perdía el sitio en el que estaba el
+// usuario). El query string SIEMPRE va antes del "#" en una URL real -- si
+// se pegara el msg después del ancla, el navegador nunca lo mandaría de
+// vuelta al servidor (todo lo que hay tras "#" se queda en el navegador).
 function back(res: express.Response, to: string, msg: string) {
-  res.redirect(`${to}${to.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}`);
+  const hashIndex = to.indexOf("#");
+  const path = hashIndex === -1 ? to : to.slice(0, hashIndex);
+  const anchor = hashIndex === -1 ? "" : to.slice(hashIndex);
+  res.redirect(`${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}${anchor}`);
 }
 // Mismo criterio que ya usaba Clientes (21/10/2026, "que no me cambie de
 // sección") -- Contactos Pro (25/10/2026) lo reutiliza para que una acción
@@ -3406,41 +3415,60 @@ function reservationForLead(l: Lead, resv: Reservation[]): Reservation | undefin
     .filter((r) => r.lead_phone && (r.lead_phone === l.phone || r.lead_phone === l.email))
     .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 }
+// Rendimiento por agente de IA, no por comercial humano (26/10/2026,
+// corregido tras aviso real: "ramon no va a meter comerciales, los que
+// venderan son los agentes" -- en este negocio no hay varios comerciales
+// de carne y hueso con los que repartir una comisión, los que de verdad
+// atienden y convierten son Miguel/Carolina/Daniel). Es una métrica de
+// rendimiento, no dinero que se cobre a nadie: se agrupa por el mismo
+// canal real de la reserva que ya se usa en Informes para "canal de
+// conversión", nunca un dato inventado.
+const AGENT_BY_CHANNEL: Record<string, string> = { VOICE: "Miguel · voz", WHATSAPP: "Carolina · WhatsApp", EMAIL: "Daniel · correo" };
+function agentLabelForChannel(channel: string | null | undefined): string {
+  if (!channel) return "Canal desconocido";
+  return AGENT_BY_CHANNEL[channel] ?? ORIGIN[channel] ?? "Canal desconocido";
+}
 crm.get("/ventas", (req, res) => {
   const allLeads = list<Lead>("leads");
   const allResv = list<Reservation>("reservations");
-  const users = listUsers();
   const ventas = allLeads
     .filter((l) => l.sale_outcome === "cerrada")
     .map((l) => {
       const resv = reservationForLead(l, allResv);
       const importe = resv ? priceOf(resv.vehicle_id) : null;
-      const comercial = l.assigned_to ? users.find((u) => u.email === l.assigned_to) : undefined;
-      const comision = importe !== null && comercial?.commission_pct != null ? (importe * comercial.commission_pct) / 100 : null;
-      return { lead: l, resv, importe, comercial, comision };
+      return { lead: l, resv, importe };
     })
     .sort((a, b) => (b.lead.sale_closed_at ?? "").localeCompare(a.lead.sale_closed_at ?? ""));
   const conImporte = ventas.filter((v) => v.importe !== null);
   const importeTotal = conImporte.reduce((sum, v) => sum + (v.importe ?? 0), 0);
-  const conComision = ventas.filter((v) => v.comision !== null);
-  const comisionTotal = conComision.reduce((sum, v) => sum + (v.comision ?? 0), 0);
-  const faltaConfigurarComision = ventas.filter((v) => v.importe !== null && v.lead.assigned_to && !v.comercial?.commission_pct).length;
+  const porAgente = new Map<string, { count: number; importe: number }>();
+  for (const v of ventas) {
+    const label = agentLabelForChannel(v.resv?.channel);
+    const cur = porAgente.get(label) ?? { count: 0, importe: 0 };
+    cur.count += 1;
+    cur.importe += v.importe ?? 0;
+    porAgente.set(label, cur);
+  }
+  // Orden estable (Miguel/Carolina/Daniel siempre primero, en ese orden,
+  // aunque tengan 0 ventas) para poder comparar de un vistazo entre
+  // periodos -- el resto de canales (o "Canal desconocido") solo aparece
+  // si de verdad tiene alguna venta real.
+  const agentOrder = ["Miguel · voz", "Carolina · WhatsApp", "Daniel · correo"];
+  const agentLabels = [...agentOrder, ...[...porAgente.keys()].filter((k) => !agentOrder.includes(k)).sort((a, b) => (porAgente.get(b)!.count - porAgente.get(a)!.count))];
+  const rendimientoRows = agentLabels.map((label) => {
+    const v = porAgente.get(label) ?? { count: 0, importe: 0 };
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f0f1f3"><span style="flex:1;font-size:13.5px;font-weight:700">${esc(label)}</span><span style="font-size:13px;color:var(--ink-dim);width:90px">${v.count} venta${v.count === 1 ? "" : "s"}</span><b style="font-size:14px;width:110px;text-align:right">${v.importe.toLocaleString("es-ES")} €</b></div>`;
+  }).join("");
   const row = (v: (typeof ventas)[number]) => {
     const d = v.lead.sale_closed_at ? dayLabel(madridDateOnly(v.lead.sale_closed_at)) : null;
     const veh = v.resv ? vehicleName(v.resv.vehicle_id) : "Sin reserva vinculada";
     const importeTxt = v.importe !== null ? `${v.importe.toLocaleString("es-ES")} €` : "Desconocido";
-    const canal = ORIGIN[v.resv?.channel ?? ""] ?? "Origen desconocido";
-    const comercialTxt = v.comercial ? v.comercial.name : v.lead.assigned_to ? v.lead.assigned_to : "Sin asignar";
-    const comisionTxt = v.comision !== null
-      ? `${v.comision.toLocaleString("es-ES", { maximumFractionDigits: 2 })} € <span style="color:var(--ink-dim);font-weight:600">(${v.comercial!.commission_pct}%)</span>`
-      : v.lead.assigned_to && v.importe !== null
-        ? `<span style="color:var(--warn)">Sin % configurado</span>`
-        : `<span style="color:var(--ink-dim)">--</span>`;
+    const agente = agentLabelForChannel(v.resv?.channel);
+    const seguimiento = v.lead.assigned_to ? ` · Seguimiento: ${esc(v.lead.assigned_to)}` : "";
     return `<div class="record-row">
 <div class="datebadge" style="background:var(--ok-bg);color:#1f7a42">${d ? `<span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span>` : `<b style="font-size:13px">Sin fecha</b>`}</div>
 <div class="who"><b>${v.lead.name ? esc(v.lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}</span></div>
-<div class="meta"><span style="font-size:14px;font-weight:800;color:${v.importe !== null ? "#1f7a42" : "var(--ink-dim)"}">${importeTxt}</span><span class="lastcontact">${esc(canal)} · ${esc(comercialTxt)}</span></div>
-<div class="meta" style="min-width:150px"><span style="font-size:13px;font-weight:700">${comisionTxt}</span></div>
+<div class="meta"><span style="font-size:14px;font-weight:800;color:${v.importe !== null ? "#1f7a42" : "var(--ink-dim)"}">${importeTxt}</span><span class="lastcontact">${esc(agente)}${seguimiento}</span></div>
 <div class="acts"><a class="link" href="/crm/buscar?q=${esc(v.lead.phone ?? v.lead.email ?? "")}">Ver cliente →</a></div>
 </div>`;
   };
@@ -3449,11 +3477,13 @@ crm.get("/ventas", (req, res) => {
 <div class="stats">
 ${`<div class="stat"><b>${ventas.length}</b><span>ventas cerradas</span></div>`}
 ${`<div class="stat"><b>${importeTotal.toLocaleString("es-ES")} €</b><span>importe total conocido</span></div>`}
-${`<div class="stat"><b>${comisionTotal.toLocaleString("es-ES", { maximumFractionDigits: 2 })} €</b><span>comisión total conocida</span></div>`}
 ${`<div class="stat"><b>${ventas.length - conImporte.length}</b><span>sin reserva vinculada</span></div>`}
 </div>
-${faltaConfigurarComision > 0 ? `<div class="box" style="background:var(--warn-bg);border:1px solid #f0dcb3"><b>${faltaConfigurarComision} venta(s) con comercial asignado pero sin % de comisión configurado.</b> <a class="link" href="/crm/equipo">Configúralo en Usuarios →</a></div>` : ""}
-<p class="sub"><a class="link" href="/crm/embudo">Ver el embudo comercial →</a> · <a class="link" href="/crm/informes">Ver conversión y motivos de venta perdida en Informes →</a> · <a class="link" href="/crm/equipo">Configurar comisiones por persona →</a></p>
+<div class="box"><h3 style="margin-top:0">Rendimiento por agente</h3>
+<p class="sub">Canal real de la reserva que llevó a cada venta -- no es una comisión que se cobre a nadie, solo para comparar qué agente/canal está generando más.</p>
+${rendimientoRows}
+</div>
+<p class="sub"><a class="link" href="/crm/embudo">Ver el embudo comercial →</a> · <a class="link" href="/crm/informes">Ver conversión y motivos de venta perdida en Informes →</a></p>
 ${ventas.length === 0 ? `<div class="empty">Todavía no hay ninguna venta marcada como cerrada.</div>` : `<div class="records-list">${ventas.map(row).join("")}</div>`}`;
   res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
 });
@@ -4197,24 +4227,19 @@ crm.get("/equipo", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
   const users = listUsers();
   const body = `<h1>Usuarios</h1>
-<p class="sub">Aquí das de alta a Ramón y a José, cambias las contraseñas y pones el % de comisión de cada uno (se usa en Ventas).</p>
+<p class="sub">Aquí das de alta a Ramón y a José, y cambias las contraseñas.</p>
 <div class="box"><h3 style="margin-top:0">Dar de alta a alguien</h3>
 <form method="post" action="/crm/equipo">
 <div class="row"><div><label>Nombre</label><input name="nombre" required></div>
 <div><label>Correo para entrar</label><input name="correo" type="email" required></div>
 <div><label>Contraseña (mínimo 8)</label>${pwInput('name="clave" minlength="8" required', 'pw-alta')}</div>
 <div><label>Puede…</label><select name="rol"><option value="equipo">Ver y trabajar (no confirma pagos)</option><option value="comercial">Comercial: confirma pagos y ventas</option><option value="admin">Todo, incluido el equipo</option></select></div></div>
-<label>Comisión en ventas (%, opcional)</label><input name="comision" type="number" min="0" max="100" step="0.1" style="max-width:140px">
 <button class="btn ok" type="submit">Dar de alta</button></form></div>
-${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}${u.commission_pct != null ? ` · Comisión: ${u.commission_pct}%` : ""}</p>
+${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}</p>
 <form method="post" action="/crm/equipo/${esc(u.id)}">
 <label>Nueva contraseña</label>${pwInput('name="clave" minlength="8"', `pw-${esc(u.id)}`)}
 <button class="btn light" type="submit" name="accion" value="clave">Cambiar contraseña</button>
 ${u.id !== me(res).id ? button("Quitar el acceso", "quitar", "danger") : ""}
-</form>
-<form method="post" action="/crm/equipo/${esc(u.id)}" style="margin-top:8px;display:flex;align-items:flex-end;gap:10px">
-<div><label>Comisión en ventas (%)</label><input name="comision" type="number" min="0" max="100" step="0.1" value="${u.commission_pct ?? ""}" style="max-width:120px;margin:0"></div>
-<button class="btn light" type="submit" name="accion" value="comision">Guardar comisión</button>
 </form></div></div>`).join("")}`;
   res.type("html").send(page("Usuarios", me(res), body, msgOf(req)));
 });
@@ -4226,7 +4251,6 @@ crm.post("/equipo", (req, res) => {
   if (clave.length < 8) return back(res, "/crm/equipo", "La contraseña tiene que tener al menos 8 caracteres");
   const users = listUsers();
   if (users.some((u) => u.email === email)) return back(res, "/crm/equipo", "Ese correo ya tiene acceso");
-  const comisionAlta = Number(req.body.comision);
   users.push({
     id: crypto.randomUUID(),
     name: String(req.body.nombre ?? "").trim(),
@@ -4234,7 +4258,6 @@ crm.post("/equipo", (req, res) => {
     password_hash: hashPassword(clave),
     role: req.body.rol === "admin" ? "admin" : req.body.rol === "comercial" ? "comercial" : "equipo",
     created_at: now(),
-    commission_pct: Number.isFinite(comisionAlta) && comisionAlta >= 0 ? comisionAlta : null,
   });
   saveUsers(users);
   back(res, "/crm/equipo", "Persona dada de alta");
@@ -4249,13 +4272,6 @@ crm.post("/equipo/:id", (req, res) => {
     if (u.id === me(res).id) return back(res, "/crm/equipo", "No puedes quitarte el acceso a ti mismo");
     saveUsers(users.filter((x) => x.id !== u.id));
     return back(res, "/crm/equipo", "Acceso quitado");
-  }
-  if (String(req.body.accion) === "comision") {
-    const comision = String(req.body.comision ?? "").trim();
-    const n = Number(comision);
-    u.commission_pct = comision === "" ? null : Number.isFinite(n) && n >= 0 ? n : u.commission_pct;
-    saveUsers(users);
-    return back(res, "/crm/equipo", "Comisión guardada");
   }
   const clave = String(req.body.clave ?? "");
   if (clave.length < 8) return back(res, "/crm/equipo", "La contraseña tiene que tener al menos 8 caracteres");
@@ -4324,20 +4340,21 @@ crm.get("/integraciones", (req, res) => {
     ? `<a class="btn light" href="/crm/integraciones/google/conectar">Reconectar Google</a>`
     : `<a class="btn ok" href="/crm/integraciones/google/conectar">Conectar Google</a>`;
   const disconnectButton = st.connected
-    ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Daniel dejará de enviar correos y no se podrá comprobar disponibilidad real para las visitas.')">Desconectar Google</button></form>`
+    ? `<form method="post" action="/crm/integraciones/google/desconectar" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn danger" type="submit" onclick="return confirm('¿Desconectar Google? Daniel dejará de enviar correos y no se podrá comprobar disponibilidad real para las visitas.')">Desconectar Google</button></form>`
     : "";
   const tests = st.connected
     ? `<div class="box"><h3 style="margin-top:0">Pruebas</h3>
-<form method="post" action="/crm/integraciones/google/probar-gmail" style="display:inline"><button class="btn light" type="submit">Probar Gmail</button></form>
-<form method="post" action="/crm/integraciones/google/probar-calendar" style="display:inline"><button class="btn light" type="submit">Probar Calendar</button></form>
+<form method="post" action="/crm/integraciones/google/probar-gmail" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn light" type="submit">Probar Gmail</button></form>
+<form method="post" action="/crm/integraciones/google/probar-calendar" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn light" type="submit">Probar Calendar</button></form>
 ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank" rel="noopener">abrir en Google Calendar</a></p>
-<form method="post" action="/crm/integraciones/google/borrar-prueba" style="display:inline"><button class="btn danger" type="submit">Borrar evento de prueba</button></form>` : ""}
+<form method="post" action="/crm/integraciones/google/borrar-prueba" style="display:inline"><input type="hidden" name="volver" value="/crm/integraciones#google"><button class="btn danger" type="submit">Borrar evento de prueba</button></form>` : ""}
 </div>`
     : "";
   const emailSendOn = isEmailAutoSendEnabled();
   const emailModeBox = `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("C", emailSendOn ? "done" : "pending")}<div><h3 style="margin:0">Correo -- envío automático</h3>${statusPill(emailSendOn ? "Activado" : "Modo de prueba", emailSendOn ? "done" : "pending")}</div></div>
 <p class="sub">${emailSendOn ? "Envía respuestas reales" : "Clasifica y redacta, pero no envía nada"}</p>
 <form method="post" action="/crm/integraciones/correo/${emailSendOn ? "desactivar-envio" : "activar-envio"}" style="display:inline">
+<input type="hidden" name="volver" value="/crm/integraciones#correo">
 <button class="btn ${emailSendOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${emailSendOn ? "¿Pasar a modo de prueba? El agente seguirá leyendo y redactando respuestas, pero ninguna saldrá de verdad -- se quedan en Pendientes para revisar." : "¿Activar el envío automático? Las respuestas que redacte el agente empezarán a salir de verdad."}')">${emailSendOn ? "Pasar a modo de prueba" : "Activar envío automático"}</button>
 </form>
 <p class="sub">En modo de prueba, cada correo se clasifica y se redacta igual que siempre -- solo cambia que la respuesta se queda como nota en Pendientes en vez de enviarse. Útil para probar cambios sin arriesgar un envío real.</p>
@@ -4347,6 +4364,7 @@ ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank
   const voiceBox = `<div class="box"><div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">${statusBadge("M", voiceOn ? "done" : "pending")}<div><h3 style="margin:0">Teléfono -- agente de voz Miguel</h3>${statusPill(voiceOn ? "Respondiendo" : "Desactivado", voiceOn ? "done" : "pending")}</div></div>
 <p class="sub">Número: +34 919 58 88 87${voiceOn ? "" : " -- suenan Ramón y José directamente"}</p>
 <form method="post" action="/crm/integraciones/telefono/${voiceOn ? "desactivar" : "activar"}" style="display:inline">
+<input type="hidden" name="volver" value="/crm/integraciones#telefono">
 <button class="btn ${voiceOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${voiceOn ? "¿Desactivar a Miguel? Las llamadas nuevas sonarán directamente en los móviles de Ramón y José." : "¿Activar a Miguel? Volverá a responder él las llamadas nuevas."}')">${voiceOn ? "Desactivar a Miguel" : "Activar a Miguel"}</button>
 </form>
 <p class="sub">Esto NO toca el desvío de Yoigo -- solo decide si las llamadas que ya llegan al número de Twilio las contesta Miguel o van directas a Ramón/José.</p>
@@ -4498,6 +4516,7 @@ function whatsappZernioBox(req: express.Request): string {
   const agentToggle = configured
     ? `<p>Carolina en este canal: <strong>${agentOn ? "Respondiendo" : "Pausada -- los mensajes avisan al equipo, nadie los contesta solo"}</strong></p>
 <form method="post" action="/crm/integraciones/whatsapp/agente/${agentOn ? "desactivar" : "activar"}" style="display:inline">
+<input type="hidden" name="volver" value="/crm/integraciones#whatsapp">
 <button class="btn ${agentOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${agentOn ? "¿Pausar a Carolina en WhatsApp? Los mensajes nuevos seguirán avisando al equipo, pero nadie los contestará solo." : "¿Activar a Carolina en WhatsApp? Empezará a contestar ella sola los mensajes nuevos de este número."}')">${agentOn ? "Pausar a Carolina aquí" : "Activar a Carolina aquí"}</button>
 </form>`
     : "";
@@ -4555,32 +4574,35 @@ crm.post("/integraciones/telefono/desactivar", (req, res) => {
   back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Miguel desactivado -- las llamadas nuevas sonarán en los móviles de Ramón y José.");
 });
 
-crm.post("/integraciones/google/desconectar", async (_req, res) => {
+crm.post("/integraciones/google/desconectar", async (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const volver = safeVolver(req.body.volver, "/crm/integraciones");
   try {
     await disconnectGoogle();
     writeCollection("google_test_events", []);
-    back(res, "/crm/integraciones", "Google desconectado");
+    back(res, volver, "Google desconectado");
   } catch (err) {
-    back(res, "/crm/integraciones", describeGoogleError(err));
+    back(res, volver, describeGoogleError(err));
   }
 });
 
-crm.post("/integraciones/google/probar-gmail", async (_req, res) => {
+crm.post("/integraciones/google/probar-gmail", async (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const volver = safeVolver(req.body.volver, "/crm/integraciones");
   const to = googleStatus().connected_email;
-  if (!to) return back(res, "/crm/integraciones", "No sé a qué cuenta enviar la prueba. Reconecta Google.");
+  if (!to) return back(res, volver, "No sé a qué cuenta enviar la prueba. Reconecta Google.");
   try {
     await sendGmail(to, "Prueba de conexión del CRM", `Este correo confirma que el CRM de Automóviles Lucero puede enviar correo desde ${to}. Puedes borrarlo.`);
-    back(res, "/crm/integraciones", `Correo de prueba enviado a ${to}`);
+    back(res, volver, `Correo de prueba enviado a ${to}`);
   } catch (err) {
     console.error("[google] prueba gmail:", err);
-    back(res, "/crm/integraciones", `Gmail: ${describeGoogleError(err)}`);
+    back(res, volver, `Gmail: ${describeGoogleError(err)}`);
   }
 });
 
-crm.post("/integraciones/google/probar-calendar", async (_req, res) => {
+crm.post("/integraciones/google/probar-calendar", async (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const volver = safeVolver(req.body.volver, "/crm/integraciones");
   try {
     const event = await calendarCreateEvent({
       summary: "PRUEBA CRM - borrar",
@@ -4591,26 +4613,27 @@ crm.post("/integraciones/google/probar-calendar", async (_req, res) => {
     writeCollection<GoogleTest>("google_test_events", [
       { id: crypto.randomUUID(), event_id: event.id, link: event.htmlLink, created_at: now() },
     ]);
-    back(res, "/crm/integraciones", "Evento de prueba creado para mañana a las 10:00");
+    back(res, volver, "Evento de prueba creado para mañana a las 10:00");
   } catch (err) {
     console.error("[google] prueba calendar:", err);
-    back(res, "/crm/integraciones", `Calendar: ${describeGoogleError(err)}`);
+    back(res, volver, `Calendar: ${describeGoogleError(err)}`);
   }
 });
 
-crm.post("/integraciones/google/borrar-prueba", async (_req, res) => {
+crm.post("/integraciones/google/borrar-prueba", async (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
+  const volver = safeVolver(req.body.volver, "/crm/integraciones");
   const test = readCollection<GoogleTest>("google_test_events")[0];
-  if (!test) return back(res, "/crm/integraciones", "No hay evento de prueba que borrar");
+  if (!test) return back(res, volver, "No hay evento de prueba que borrar");
   try {
     await calendarDeleteEvent(test.event_id);
   } catch (err) {
     // Si alguien ya lo borró a mano en Google, no hay nada que hacer: limpiamos el registro.
     const gone = err instanceof Error && /google_api_(404|410)/.test(err.message);
-    if (!gone) return back(res, "/crm/integraciones", `Calendar: ${describeGoogleError(err)}`);
+    if (!gone) return back(res, volver, `Calendar: ${describeGoogleError(err)}`);
   }
   writeCollection("google_test_events", []);
-  back(res, "/crm/integraciones", "Evento de prueba borrado");
+  back(res, volver, "Evento de prueba borrado");
 });
 
 // ---------- Avisos para llamar (cualquier usuario del CRM) ----------
