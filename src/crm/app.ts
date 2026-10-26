@@ -1005,7 +1005,7 @@ h2{font-size:20px;margin:20px 0 10px}
 .record-row .datebadge span{display:block;font-size:9px;text-transform:uppercase}
 .record-row .datebadge b{display:block;font-size:15px;line-height:1.15}
 .record-row .who{min-width:120px;flex:1 1 150px;display:flex;flex-direction:column;gap:1px}
-.record-row .who b{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.record-row .who b{font-size:15.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .record-row .who span{font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .record-row .situation{min-width:160px;flex:2 1 220px;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-row .meta{display:flex;align-items:center;gap:10px;flex-shrink:0}
@@ -1556,7 +1556,7 @@ function apptCard(a: Appointment): string {
   return `<div class="record-row" id="c-${esc(a.id)}">
 ${simpleCheckbox("citas-bulk", a.id)}
 <div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(a.requested_time ?? "")}</span></div>
-<div class="who"><b>${esc(veh)}</b><span>${lead?.name ? esc(lead.name) : "Sin nombre"}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span><span class="lastcontact">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/citas/${esc(a.id)}" style="display:contents">
 <div class="acts">${phoneIconLink(a.lead_phone)}${whatsapp}${mail}${actions}</div>
@@ -1617,7 +1617,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   return `<div class="record-row" id="r-${esc(r.id)}">
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>Reserva</span><b>${r.amount_eur}€</b></div>
-<div class="who"><b>${esc(veh)}</b><span>${lead?.name ? esc(lead.name) : "Sin nombre"}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="lastcontact">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/reservas/${esc(r.id)}" style="display:contents">
 <div class="acts">${phoneIconLink(r.lead_phone)}${whatsapp}${mail}${actions.join("")}</div>
