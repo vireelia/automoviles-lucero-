@@ -867,7 +867,7 @@ h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
 h2{font-size:20px;margin:20px 0 10px}
 .sub{color:var(--ink-dim);margin:0 0 16px;font-size:15px}
 .msg{background:var(--ok-bg);border:1px solid var(--ok);padding:12px 16px;border-radius:9px;margin-bottom:16px;font-size:15px;font-weight:600;color:var(--ink)}
-.card{background:#fff;border:1px solid var(--border);border-radius:9px;padding:16px 18px;margin-bottom:14px;box-shadow:none;display:flex;gap:16px;flex-wrap:wrap;position:relative}
+.card{background:#fff;border:1px solid var(--border);border-radius:7px;padding:14px 16px;margin-bottom:12px;box-shadow:none;display:flex;gap:14px;flex-wrap:wrap;position:relative}
 /* Fichas de clientes en horizontal, varias por fila (22/10/2026, petición
    real: "ese orden usalo para los clientes... en todas las secciones" --
    mismo criterio visto en el CRM de Klikar: grid que reparte en columnas
@@ -886,7 +886,7 @@ h2{font-size:20px;margin:20px 0 10px}
 .card .tletra{width:26px;height:26px;font-size:13px}
 .card .origen{font-size:13px;padding:3px 8px}
 .card .btn{font-size:14px;padding:8px 14px;margin:4px 6px 4px 0}
-.when{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:10px 14px;text-align:center;min-width:100px}
+.when{background:#fff;color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:8px 12px;text-align:center;min-width:92px}
 .when b{display:block;font-size:32px;line-height:1}
 .when span{font-size:14px;display:block;color:var(--ink-dim)}
 .when em{font-style:normal;font-size:21px;font-weight:700;display:block;margin-top:4px}
@@ -895,7 +895,14 @@ h2{font-size:20px;margin:20px 0 10px}
 .todo a{display:block;font-size:16px;padding:8px 0;color:var(--ink);font-weight:600;text-decoration:none}
 .allok{background:var(--ok-bg);border:1px solid var(--ok);border-radius:9px;padding:16px;margin-bottom:20px;font-size:17px;font-weight:700;color:var(--ink)}
 .empty{background:#fff;border:1px solid var(--border);border-radius:9px;padding:18px;color:var(--ink-dim);font-size:15px}
-.urgent{border-left:4px solid var(--urgent)}.pending{border-left:4px solid var(--warn)}.done{border-left:4px solid var(--ok)}.off{border-left:4px solid var(--off);opacity:.75}
+/* Rediseño de tarjetas (25/10/2026, 2º aviso: "cambia el diseño, sigue
+   igual que antes") -- la barra de color de 4px se cambia por un tinte
+   suave de fondo en toda la tarjeta (mismo criterio que ya usan las
+   tarjetas de Actividad en Contactos), más sutil que una barra sólida y
+   visualmente bien distinto de antes. El estado ya se lee en el texto
+   del .tag de cada tarjeta -- el color de fondo es un apoyo, no la única
+   señal. */
+.urgent{background:#fdecea;border-color:#f3c6c1}.pending{background:var(--warn-bg);border-color:#f0dcb3}.done{background:var(--ok-bg);border-color:#c7e8d1}.off{background:var(--panel);opacity:.7}
 /* Módulo mensajes/clientes (18/10/2026): "leído" y "respondido" son estados
    distintos -- sin responder resalta (fondo claro, texto en negrita);
    respondido se apaga (fondo gris, sin perder legibilidad); sin leer lleva
@@ -1083,10 +1090,29 @@ document.addEventListener("keydown", function (e) {
     var ratio = parseFloat(saved);
     if (!isNaN(ratio)) window.scrollTo(0, ratio * document.documentElement.scrollHeight);
   }
+  // Contactos tiene su propio scroll interno por columna (lista/ficha/
+  // actividad), aparte del scroll de la página -- se guarda igual, como
+  // proporción, con una clave por columna (25/10/2026, mismo aviso: "que
+  // no se mueva la pantalla").
+  var INNER_SELECTORS = [".contactos-list-scroll", ".contactos-detail", ".contactos-activity"];
+  INNER_SELECTORS.forEach(function (sel) {
+    var innerKey = KEY + ":" + sel;
+    var innerSaved = sessionStorage.getItem(innerKey);
+    if (innerSaved) {
+      sessionStorage.removeItem(innerKey);
+      var el = document.querySelector(sel);
+      var r = parseFloat(innerSaved);
+      if (el && !isNaN(r)) el.scrollTop = r * el.scrollHeight;
+    }
+  });
   document.addEventListener("submit", function () {
     try {
       var h = document.documentElement.scrollHeight;
       sessionStorage.setItem(KEY, String(h > 0 ? window.scrollY / h : 0));
+      INNER_SELECTORS.forEach(function (sel) {
+        var el = document.querySelector(sel);
+        if (el && el.scrollHeight > 0) sessionStorage.setItem(KEY + ":" + sel, String(el.scrollTop / el.scrollHeight));
+      });
     } catch (e) {}
   }, true);
 })();
@@ -2935,16 +2961,32 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
 </div>
 <script>
 (function(){
+  // No mover la pantalla al refrescar sola (25/10/2026, petición real:
+  // "cada vez que elimino algo que no se mueva la pantalla, ajustalo
+  // bien") -- las 3 columnas tienen su propio scroll interno
+  // (.contactos-list-scroll/.contactos-detail/.contactos-activity), y
+  // reemplazar su HTML entero las reiniciaba a arriba de todo cada 8s o
+  // tras cualquier acción. Se guarda cada scrollTop antes y se restaura
+  // justo después de pintar el HTML nuevo.
+  var SCROLL_SELECTORS = [".contactos-list-scroll", ".contactos-detail", ".contactos-activity"];
   function refrescar(){
     try{
       var activo = document.activeElement;
       var tag = activo && activo.tagName;
       if(tag === "TEXTAREA" || tag === "INPUT") return;
+      var scrolls = SCROLL_SELECTORS.map(function(sel){ var el = document.querySelector(sel); return el ? el.scrollTop : null; });
       fetch(location.pathname + location.search).then(function(r){ return r.text(); }).then(function(html){
         var doc = new DOMParser().parseFromString(html, "text/html");
         var fresco = doc.getElementById("contactos-panel");
         var mio = document.getElementById("contactos-panel");
-        if(fresco && mio) mio.innerHTML = fresco.innerHTML;
+        if(fresco && mio){
+          mio.innerHTML = fresco.innerHTML;
+          SCROLL_SELECTORS.forEach(function(sel, i){
+            if(scrolls[i] == null) return;
+            var el = document.querySelector(sel);
+            if(el) el.scrollTop = scrolls[i];
+          });
+        }
       }).catch(function(){});
     }catch(e){}
   }
