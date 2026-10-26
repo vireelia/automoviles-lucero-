@@ -940,27 +940,37 @@ h2{font-size:20px;margin:20px 0 10px}
    según el ancho, en vez de una lista apilada de una sola columna). */
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:14px}
 .cards-grid .card{margin:0}
-/* Fila compacta de Clientes (26/10/2026, "mandame ideas de tarjetas" ->
-   "vamos a probar esta" -- opción B de tres ideas, elegida por Eliud):
-   en vez de una tarjeta alta por cliente, una fila de una sola línea --
-   se ve mucho más de un vistazo con muchos clientes. flex-wrap en vez de
-   columnas fijas de grid para que no se rompa en pantallas estrechas
-   (p. ej. la mini-ficha dentro de Contactos, más estrecha que la página
-   de Clientes entera): lo que no cabe baja de línea solo. */
-.leads-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
-.lead-row{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--border);border-radius:11px;padding:11px 16px;flex-wrap:wrap}
-.lead-row .avatar{width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
-.lead-row .who{min-width:120px;flex:1 1 150px;display:flex;flex-direction:column;gap:1px}
-.lead-row .who b{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
-.lead-row .who span{font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
-.lead-row .situation{min-width:160px;flex:2 1 220px;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lead-row .meta{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.lead-row .temp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;white-space:nowrap}
-.lead-row .temp i{width:7px;height:7px;border-radius:999px;display:inline-block}
-.lead-row .lastcontact{font-size:12.5px;color:var(--ink-dim);white-space:nowrap;flex-shrink:0}
-.lead-row .acts{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
-.lead-row .flags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px}
-.lead-row .btn{font-size:13px;padding:6px 10px;margin:0}
+/* Fila compacta (26/10/2026, "mandame ideas de tarjetas" -> "vamos a
+   probar esta" -- opción B de tres ideas, elegida por Eliud para
+   Clientes, y luego "A2" para Visitas/Reservas en la ronda de "diseño de
+   todas las secciones"): en vez de una tarjeta alta, una fila de una
+   sola línea -- se ve mucho más de un vistazo con muchos registros.
+   .record-row es genérica (antes "lead-row", solo para Clientes) para
+   que Visitas/Reservas reutilicen exactamente el mismo lenguaje visual,
+   solo cambiando el avatar circular por una fecha compacta. flex-wrap en
+   vez de columnas fijas de grid para que no se rompa en pantallas
+   estrechas (p. ej. la mini-ficha dentro de Contactos): lo que no cabe
+   baja de línea solo.*/
+.records-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.record-row{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--border);border-radius:11px;padding:11px 16px;flex-wrap:wrap}
+.record-row .avatar{width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+.record-row .datebadge{min-width:46px;flex-shrink:0;border-radius:9px;padding:4px 8px;text-align:center}
+.record-row .datebadge span{display:block;font-size:9px;text-transform:uppercase}
+.record-row .datebadge b{display:block;font-size:15px;line-height:1.15}
+.record-row .who{min-width:120px;flex:1 1 150px;display:flex;flex-direction:column;gap:1px}
+.record-row .who b{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.record-row .who span{font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.record-row .situation{min-width:160px;flex:2 1 220px;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.record-row .meta{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.record-row .temp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;white-space:nowrap}
+.record-row .temp i{width:7px;height:7px;border-radius:999px;display:inline-block}
+.record-row .lastcontact{font-size:12.5px;color:var(--ink-dim);white-space:nowrap;flex-shrink:0}
+.record-row .acts{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.record-row .flags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px}
+.record-row .edits{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;border-top:1px solid #f0f1f3;padding-top:10px;margin-top:2px}
+.record-row .edits label{font-size:11.5px;margin:0 0 3px}
+.record-row .edits input{width:auto;margin:0;padding:7px 9px;font-size:13px}
+.record-row .btn{font-size:13px;padding:6px 10px;margin:0}
 .card .info{flex:1;min-width:220px}
 .card h3{margin:0 0 6px;font-size:18px}
 .card p{margin:3px 0;font-size:15px}
@@ -1382,29 +1392,6 @@ function msgOf(req: express.Request): string | undefined {
 }
 
 // ---------- tarjetas reutilizables ----------
-// Ficha de contacto completa en Visitas/Reservas (26/10/2026, petición
-// real: "ojo que ningun cliente se quede sin nombre, vehiculo, telefono y
-// correo si tiene, y que se le pueda contactar a todos, hora y fecha que
-// pregunto o se le contacto") -- antes solo se mostraba un teléfono o
-// nombre suelto (contactLabel) y nunca el correo ni cuándo se había
-// preguntado. Se completa cruzando con la ficha real en Clientes por
-// teléfono; nunca se inventa lo que de verdad falta -- se avisa con
-// honestidad (igual que "Sin nombre" ya hace en Clientes) en vez de
-// dejar la línea en blanco sin más.
-function clientContactBlock(lead: Lead | undefined, contact: string | null | undefined, createdAt: string): string {
-  const name = lead?.name ?? null;
-  // "lead_phone" a veces guarda de verdad un correo, no un teléfono (igual
-  // que ya distinguen phoneLink/waButton con contact.includes("@")) -- un
-  // cliente que solo dejó correo (p. ej. relay de Coches.net sin teléfono
-  // real). Sin esto, ese correo saldría mal etiquetado como "Teléfono".
-  const isEmailContact = !!contact && contact.includes("@");
-  const phone = isEmailContact ? null : contact;
-  const email = lead?.email ?? (isEmailContact ? contact : null);
-  const lastContact = lead?.updated_at && lead.updated_at !== createdAt ? lead.updated_at : null;
-  return `<p>Cliente: <b>${name ? esc(name) : "Sin nombre"}</b>${!name ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}</p>
-<p>Teléfono: <b>${phone ? esc(phone) : "Sin teléfono"}</b>${!phone ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : ""}${email ? ` · Correo: <b>${esc(email)}</b>` : ""}</p>
-<p>Preguntó el ${esc(fmtDate(createdAt))}${lastContact ? ` · Último contacto: ${esc(fmtDate(lastContact))}` : ""}</p>`;
-}
 // Vehículo por el que pregunta, con reserva (vehicle_id siempre real) pero
 // visita (vehicle_id opcional -- puede no haberse enlazado al catálogo
 // todavía): si falta, se usa el interés guardado en la ficha del cliente
@@ -1415,65 +1402,91 @@ function appointmentVehicleLabel(a: Appointment, lead: Lead | undefined): string
   return "Vehículo sin especificar";
 }
 
+// Tono real por estado (confirmada/pendiente/cancelada), reutilizado como
+// color de la pastilla de fecha y del texto de estado en la fila
+// compacta -- mismo criterio de color que ya usaban las tarjetas altas
+// (.pending/.done/.off), solo que ahora pinta un elemento pequeño en vez
+// de toda la tarjeta.
+const ROW_TONE_COLOR: Record<string, [string, string]> = {
+  pending: ["#fff4e0", "#8a5a00"],
+  done: ["#e3f6e8", "#1f7a42"],
+  urgent: ["#fdecea", "#8a1f0c"],
+  off: ["#f6f7f9", "#5b6472"],
+};
 function apptCard(a: Appointment): string {
   const d = dayLabel(a.requested_date);
   const tone = a.status === "requested" ? "pending" : a.status === "confirmed" ? "done" : "off";
+  const [badgeBg, badgeFg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
   const lead = a.lead_phone ? findLeadByContact(a.lead_phone) : undefined;
   const veh = appointmentVehicleLabel(a, lead);
-  const whatsapp = waButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
-  const mail = mailLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
+  const whatsapp = waIconButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
+  const mail = mailIconLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
+  const contactPart = a.lead_phone && !a.lead_phone.includes("@") ? a.lead_phone : lead?.email ?? null;
   const actions = [
-    a.status === "requested" ? button("Confirmar la visita", "confirmar", "ok") : "",
+    a.status === "requested" ? button("Confirmar", "confirmar", "ok") : "",
     a.status === "confirmed" ? button("No se presentó", "no_presentado", "light") : "",
-    a.status !== "cancelled" ? confirmButton("Cancelar la visita", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
+    a.status !== "cancelled" ? confirmButton("Cancelar", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
     // "Devolver" (22/10/2026, petición real: "asi como hayan botones de
     // cancelar... que hayan botones de devolver") -- reactiva una visita
     // cancelada por error, vuelve a pendiente de confirmar (no se asume
     // directamente "confirmed": el equipo la confirma con el botón de al
     // lado si de verdad quiere auto-confirmarla).
-    a.status === "cancelled" ? button("Devolver la visita", "devolver", "ok") : "",
+    a.status === "cancelled" ? button("Devolver", "devolver", "ok") : "",
     // A petición real (16/10/2026, "en esta sección quiero que añadas la
     // papelera, para borrar consultas antiguas"): disponible siempre, no
     // solo cuando está cancelada -- una consulta vieja pendiente de
     // confirmar también hay que poder limpiarla sin cancelarla antes.
     confirmButton("🗑️", "eliminar", "light", "¿Eliminar esta visita para siempre? Se puede restaurar luego desde la Papelera."),
   ].join("");
-  return `<div class="card ${tone}" id="c-${esc(a.id)}" style="position:relative">
+  const flags = [
+    !lead?.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
+    !a.lead_phone ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : "",
+    a.notes ? `<span class="tag">${esc(a.notes)}</span>` : "",
+  ].filter(Boolean).join(" ");
+  // Fila compacta (26/10/2026, "A2" -- misma fila que Clientes): el
+  // <form> envuelve acciones/avisos/campos editables con display:contents
+  // para que sus hijos sigan fluyendo como celdas sueltas de .record-row
+  // (flex-wrap), sin romper que TODOS los botones -- confirmar, cancelar,
+  // devolver, eliminar, cambiar día/hora -- sigan siendo un solo envío
+  // real al mismo sitio de siempre (/crm/citas/:id), solo distinguidos
+  // por accion=, exactamente igual que en la tarjeta alta anterior.
+  return `<div class="record-row" id="c-${esc(a.id)}">
 ${simpleCheckbox("citas-bulk", a.id)}
-<div class="when"><span>${esc(d.weekday)}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span><em>${esc(a.requested_time ?? "")}</em></div>
-<div class="info"><h3>${esc(veh)}</h3>
-<p><span class="tag">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""} <span class="tag">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></p>
-${clientContactBlock(lead, a.lead_phone, a.created_at)}
-${a.notes ? `<p>${esc(a.notes)}</p>` : ""}
-<form method="post" action="/crm/citas/${esc(a.id)}">${actions}
-${phoneLink(a.lead_phone)}${whatsapp}${mail}
-<div class="row"><div><label>Otro día</label><input type="date" name="fecha" value="${esc(a.requested_date ?? "")}"></div>
-<div><label>Otra hora</label><input type="time" name="hora" value="${esc(a.requested_time ?? "")}"></div></div>
-<button class="btn light" type="submit" name="accion" value="cambiar">Cambiar día y hora</button>
-</form></div></div>`;
+<div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(a.requested_time ?? "")}</span></div>
+<div class="who"><b>${esc(veh)}</b><span>${lead?.name ? esc(lead.name) : "Sin nombre"}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span><span class="lastcontact">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></div>
+<form method="post" action="/crm/citas/${esc(a.id)}" style="display:contents">
+<div class="acts">${phoneIconLink(a.lead_phone)}${whatsapp}${mail}${actions}</div>
+<div class="flags"><span class="tag">Preguntó el ${esc(fmtDate(a.created_at))}${lead?.updated_at && lead.updated_at !== a.created_at ? ` · Último contacto ${esc(fmtDate(lead.updated_at))}` : ""}</span>${flags}</div>
+<div class="edits"><div><label>Otro día</label><input type="date" name="fecha" value="${esc(a.requested_date ?? "")}"></div>
+<div><label>Otra hora</label><input type="time" name="hora" value="${esc(a.requested_time ?? "")}"></div>
+<button class="btn light" type="submit" name="accion" value="cambiar">Cambiar</button></div>
+</form>
+</div>`;
 }
 
 function reservationCard(r: Reservation, user: CrmUser): string {
   const sold = getOfficialStatus(r.vehicle_id) === "SOLD";
   const tone = sold ? "off" : r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
+  const [badgeBg, badgeFg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
   const veh = vehicleName(r.vehicle_id);
   const lead = r.lead_phone ? findLeadByContact(r.lead_phone) : undefined;
-  const mail = mailLink(lead?.email ?? (r.lead_phone?.includes("@") ? r.lead_phone : null));
+  const mail = mailIconLink(lead?.email ?? (r.lead_phone?.includes("@") ? r.lead_phone : null));
   const actions: string[] = [];
   if (r.status === "pending_payment") actions.push(button("Ha pagado", "pagado", "warn"));
   if (r.status === "pending_verification") {
-    if (canConfirmPayments(user)) actions.push(confirmButton("Confirmar la reserva", "confirmar", "ok", "¿Has comprobado el justificante de los 500 €?"));
+    if (canConfirmPayments(user)) actions.push(confirmButton("Confirmar", "confirmar", "ok", "¿Has comprobado el justificante de los 500 €?"));
     else actions.push(`<span class="tag">El pago lo confirma el comercial</span>`);
   }
-  if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(confirmButton("Coche vendido y entregado", "vendido", "ok", "¿Seguro que el coche ya está vendido y entregado?"));
-  if (sold) actions.unshift(`<span class="tag" style="background:#e5e7eb">Coche vendido y entregado</span>`);
-  if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(confirmButton("Cancelar la reserva", "cancelar", "danger", "¿Seguro que quieres cancelar esta reserva?"));
+  if (r.status === "confirmed" && !sold && canConfirmPayments(user)) actions.push(confirmButton("Vendido y entregado", "vendido", "ok", "¿Seguro que el coche ya está vendido y entregado?"));
+  if (sold) actions.unshift(`<span class="tag" style="background:#e5e7eb">Vendido y entregado</span>`);
+  if (r.status === "pending_payment" || r.status === "pending_verification") actions.push(confirmButton("Cancelar", "cancelar", "danger", "¿Seguro que quieres cancelar esta reserva?"));
   // "Devolver" (22/10/2026, petición real: "asi como hayan botones de
   // cancelar... que hayan botones de devolver") -- reactiva una reserva
   // cancelada por error, con 15 días de plazo nuevos (nunca el plazo ya
   // vencido). No se ofrece si el coche ya se vendió de verdad mientras
   // tanto (reopenReservation también lo bloquea del lado del servidor).
-  if (r.status === "cancelled" && !sold) actions.push(confirmButton("Devolver la reserva", "devolver", "ok", "¿Volver a activar esta reserva? Empieza de nuevo con 15 días de plazo."));
+  if (r.status === "cancelled" && !sold) actions.push(confirmButton("Devolver", "devolver", "ok", "¿Volver a activar esta reserva? Empieza de nuevo con 15 días de plazo."));
   // Papelera real (13/10/2026): solo para reservas ya cerradas (canceladas o
   // caducadas) y solo el administrador -- una reserva viva nunca se borra
   // sin pasar antes por cancelar/confirmar, para no perder el rastro de un
@@ -1482,7 +1495,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
     actions.push(confirmButton("Eliminar", "eliminar", "danger", `"${veh}" se borra para siempre del registro, no se puede deshacer.`));
   }
   const whatsapp = r.status === "pending_payment"
-    ? waButton(r.lead_phone, `Hola, le escribe Automóviles Lucero. Para apartar el ${veh} necesitamos 500 €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.`)
+    ? waIconButton(r.lead_phone, `Hola, le escribe Automóviles Lucero. Para apartar el ${veh} necesitamos 500 €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.`)
     : "";
   const canBulkDelete = (r.status === "cancelled" || r.status === "expired") && user.role === "admin";
   // Caducidad visible (22/10/2026): solo importa mientras la reserva sigue
@@ -1490,22 +1503,27 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   // caducada, el plazo ya no significa nada. Aviso en rojo si quedan 3
   // días o menos, para que el equipo no se entere tarde.
   const daysLeft = r.expires_at ? Math.ceil((new Date(r.expires_at).getTime() - Date.now()) / 86400000) : null;
-  const expiryLine = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification")
-    ? `<p>${daysLeft <= 3 ? `<b style="color:#b3261e">⏰ Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} día${daysLeft === 1 ? "" : "s"})</b>` : `Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} días)`}</p>`
-    : "";
-  return `<div class="card ${tone}" id="r-${esc(r.id)}" style="position:relative"><div class="info">
+  const expiring = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification");
+  const contactPart = r.lead_phone && !r.lead_phone.includes("@") ? r.lead_phone : lead?.email ?? null;
+  const flags = [
+    !lead?.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
+    !r.lead_phone ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : "",
+    r.verified_by ? `<span class="tag">Confirmada por ${esc(r.verified_by)}</span>` : "",
+    expiring ? `<span class="tag" style="${daysLeft! <= 3 ? "background:#fdecea;color:#8a1f0c" : ""}">⏰ Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} día${daysLeft === 1 ? "" : "s"})</span>` : "",
+  ].filter(Boolean).join(" ");
+  return `<div class="record-row" id="r-${esc(r.id)}">
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
-<h3>${esc(veh)}</h3>
-<p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span> <span class="tag">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></p>
-${clientContactBlock(lead, r.lead_phone, r.created_at)}
-${r.verified_by ? `<p>Confirmada por ${esc(r.verified_by)}</p>` : ""}
-${expiryLine}
-<form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}${mail}
-<div class="row"><div><label>Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
-<div><label>Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div></div>
-<button class="btn light" type="submit" name="accion" value="editar">Guardar cambios</button>
+<div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>Reserva</span><b>${r.amount_eur}€</b></div>
+<div class="who"><b>${esc(veh)}</b><span>${lead?.name ? esc(lead.name) : "Sin nombre"}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="lastcontact">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></div>
+<form method="post" action="/crm/reservas/${esc(r.id)}" style="display:contents">
+<div class="acts">${phoneIconLink(r.lead_phone)}${whatsapp}${mail}${actions.join("")}</div>
+<div class="flags"><span class="tag">Preguntó el ${esc(fmtDate(r.created_at))}${lead?.updated_at && lead.updated_at !== r.created_at ? ` · Último contacto ${esc(fmtDate(lead.updated_at))}` : ""}</span>${flags}</div>
+<div class="edits"><div><label>Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
+<div><label>Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div>
+<button class="btn light" type="submit" name="accion" value="editar">Guardar</button></div>
 </form>
-</div></div>`;
+</div>`;
 }
 
 // Visitas y reservas del canal (22/10/2026, a petición real: "las
@@ -1520,7 +1538,7 @@ function channelActivitySection(channel: "VOICE" | "WHATSAPP" | "EMAIL", user: C
   const resv = list<Reservation>("reservations").filter((r) => r.channel === channel && r.status !== "cancelled" && r.status !== "expired");
   if (appts.length === 0 && resv.length === 0) return "";
   return `<div class="box"><h3 style="margin-top:0">Visitas y reservas de este canal</h3>
-<div class="cards-grid">
+<div class="records-list">
 ${resv.length > 0 ? resv.map((r) => reservationCard(r, user)).join("") : ""}
 ${appts.length > 0 ? appts.map(apptCard).join("") : ""}
 </div>
@@ -1589,7 +1607,7 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
     `<span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span>`,
     channelTags,
   ].filter(Boolean).join(" ");
-  return `<div class="lead-row">
+  return `<div class="record-row">
 ${sel}
 <div class="avatar" style="background:${avatarBg};color:${avatarFg}">${esc(avatarInitials(displayName))}</div>
 <div class="who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "")}</span></div>
@@ -1734,11 +1752,11 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 </div>
 ${alertBlock}
 ${todoBlock}
-<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="leads-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
+<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="records-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", todayAppts.length + upcoming.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-<h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="cards-grid">${todayAppts.map(apptCard).join("")}</div>`}
-<h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="cards-grid">${upcoming.map(apptCard).join("")}</div>`}
-<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="cards-grid">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
+<h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="records-list">${todayAppts.map(apptCard).join("")}</div>`}
+<h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="records-list">${upcoming.map(apptCard).join("")}</div>`}
+<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="records-list">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
   res.type("html").send(page("Inicio", me(res), body, msgOf(req)));
 });
 
@@ -1758,10 +1776,9 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.length > 0 ? `<div class="leads-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}</div>` : ""}
+${leads.length > 0 ? `<div class="records-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}</div>` : ""}
+${appts.length > 0 || resv.length > 0 ? `<div class="records-list">${appts.map(apptCard).join("")}${resv.map((r) => reservationCard(r, me(res))).join("")}</div>` : ""}
 <div class="cards-grid">
-${appts.map(apptCard).join("")}
-${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
 </div>
 ${q && found === 0 ? `<div class="empty">No encuentro nada con eso.</div>` : ""}`;
@@ -1781,7 +1798,7 @@ crm.get("/semana", (req, res) => {
     .sort((x, y) => `${x.requested_date}${x.requested_time}`.localeCompare(`${y.requested_date}${y.requested_time}`));
   const body = `<div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h1 style="margin:0">Visitas de esta semana</h1><button class="btn ok" onclick="window.print()">Imprimir</button></div>
 <p class="sub">Próximos siete días.</p>
-${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : `<div class="cards-grid">${appts.map(apptCard).join("")}</div>`}`;
+${appts.length === 0 ? `<div class="empty">No hay visitas esta semana.</div>` : `<div class="records-list">${appts.map(apptCard).join("")}</div>`}`;
   res.type("html").send(page("Visitas", me(res), body));
 });
 
@@ -1814,7 +1831,7 @@ crm.get("/citas", (req, res) => {
 <p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 <p>${pill("todas", "Todas")} ${pill("pendientes", "Por confirmar")} ${pill("confirmadas", "Confirmadas")} ${pill("no_presentado", "No presentado")} <a class="link noprint" href="/crm/semana">Ver la semana para imprimir</a></p>
 ${items.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", items.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : `<div class="cards-grid">${items.map(apptCard).join("")}</div>`}`;
+${items.length === 0 ? `<div class="empty">No hay visitas en esta lista.</div>` : `<div class="records-list">${items.map(apptCard).join("")}</div>`}`;
   res.type("html").send(page("Visitas", me(res), body, msgOf(req)));
 });
 
@@ -1941,7 +1958,7 @@ ${interesados.map((h) => `<div class="card urgent" style="position:relative"><di
 <button class="btn ok" type="submit">Crear la reserva</button></form></div>
 <p>${canalPill("todos", "Todos los canales")} ${canalPill("llamadas", "Llamadas")} ${canalPill("whatsapp", "WhatsApp")} ${canalPill("otros", "Otros canales")}</p>
 ${bulkEligible > 0 ? simpleBulkBar("reservas-bulk", "/crm/reservas-masivo", bulkEligible, "¿Eliminar las reservas canceladas/caducadas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
-${reservations.length === 0 ? `<div class="empty">No hay reservas en esta lista.</div>` : `<div class="cards-grid">${reservations.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
+${reservations.length === 0 ? `<div class="empty">No hay reservas en esta lista.</div>` : `<div class="records-list">${reservations.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
   res.type("html").send(page("Reservas", me(res), body, msgOf(req)));
 });
 
@@ -3283,7 +3300,7 @@ ${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin con
 </div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="leads-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="records-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
