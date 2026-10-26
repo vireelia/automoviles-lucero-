@@ -2929,6 +2929,37 @@ crm.post("/llamadas-masivo", (req, res) => {
 const CONTACTOS_CANALES = ["whatsapp", "correo", "llamadas"] as const;
 type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
 const CONTACTOS_PAGE_SIZE = 50;
+// Agente de la sección, arriba a la derecha de Contactos (26/10/2026,
+// petición real: "que salga el agente de cada seccion y si esta activo o
+// inactivo y si se puede activar o desactivar" -- mockup "F1" elegido).
+// Mismo interruptor real de siempre (isWhatsappZernioAgentEnabled/
+// isEmailAutoSendEnabled/isVoiceAgentEnabled y sus rutas reales de
+// Integraciones) -- esto solo lo hace también accesible desde aquí,
+// sin ir a Integraciones. El pastilla cambia sola según la pestaña.
+const AGENT_PILL_INFO: Record<ContactoCanal, { letter: string; name: string }> = {
+  whatsapp: { letter: "C", name: "Carolina" },
+  correo: { letter: "D", name: "Daniel" },
+  llamadas: { letter: "M", name: "Miguel" },
+};
+function contactosAgentPill(canal: ContactoCanal, volver: string): string {
+  const info = AGENT_PILL_INFO[canal];
+  const enabled = canal === "whatsapp" ? isWhatsappZernioAgentEnabled() : canal === "correo" ? isEmailAutoSendEnabled() : isVoiceAgentEnabled();
+  const toggleUrl = canal === "whatsapp"
+    ? `/crm/integraciones/whatsapp/agente/${enabled ? "desactivar" : "activar"}`
+    : canal === "correo"
+      ? `/crm/integraciones/correo/${enabled ? "desactivar-envio" : "activar-envio"}`
+      : `/crm/integraciones/telefono/${enabled ? "desactivar" : "activar"}`;
+  const [bg, fg] = enabled ? ["#e3f6e8", "#1f7a42"] : ["#fff4e0", "#8a5a00"];
+  const confirmMsg = enabled ? `¿Pausar a ${info.name} en este canal?` : `¿Activar a ${info.name} en este canal? Empezará a contestar ella/él solo.`;
+  return `<form method="post" action="${toggleUrl}" style="display:flex;align-items:center;gap:8px;background:var(--panel);border-radius:999px;padding:5px 7px 5px 5px;margin:0" onsubmit="return confirm('${esc(confirmMsg)}')">
+<input type="hidden" name="volver" value="${esc(volver)}">
+<div style="width:24px;height:24px;border-radius:999px;background:${bg};color:${fg};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:10px;flex-shrink:0">${esc(info.letter)}</div>
+<span style="font-size:12.5px;font-weight:700;white-space:nowrap">${esc(info.name)}</span>
+<button type="submit" aria-label="${enabled ? "Pausar" : "Activar"} a ${esc(info.name)}" title="${enabled ? "Pausar" : "Activar"} a ${esc(info.name)}" style="width:30px;height:17px;border-radius:999px;background:${enabled ? "#2e9e55" : "#d8dae0"};position:relative;border:0;cursor:pointer;padding:0;flex-shrink:0">
+<span style="width:13px;height:13px;border-radius:999px;background:#fff;position:absolute;top:2px;${enabled ? "right" : "left"}:2px;display:block"></span>
+</button>
+</form>`;
+}
 
 function contactosUrl(navBase: string, f: MsgFilter | null, q: string, pageNum: number, id?: string): string {
   const params: string[] = [];
@@ -3332,7 +3363,10 @@ ${tabLink("llamadas", "Llamadas", unreadLl)}
   const pagerQs = canal === "llamadas" ? null : f;
   const body = `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
 <h1 style="margin:0">Contactos</h1>
+<div style="display:flex;align-items:center;gap:10px">
+${user.role === "admin" ? contactosAgentPill(canal, req.originalUrl) : ""}
 <a class="btn" href="/crm/contactos/nuevo">+ Nuevo contacto</a>
+</div>
 </div>
 <p class="sub">Se actualiza sola.</p>
 ${tabs}
@@ -4223,16 +4257,22 @@ crm.get("/integraciones/google/conectar", (_req, res) => {
   }
 });
 
-crm.post("/integraciones/correo/activar-envio", (_req, res) => {
+// "volver" opcional (26/10/2026, petición real: "que arriba a la derecha
+// de Contactos salga el agente... y poder activarlo/pausarlo ahí mismo")
+// -- mismo interruptor real de siempre, solo que ahora también se puede
+// disparar desde Contactos y vuelve a Contactos, no solo desde
+// Integraciones. Sin "volver" en el cuerpo (los formularios viejos de
+// Integraciones no lo mandan), se comporta exactamente igual que antes.
+crm.post("/integraciones/correo/activar-envio", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setEmailAutoSendEnabled(true, me(res).email);
-  back(res, "/crm/integraciones", "Envío automático de correo activado.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Envío automático de correo activado.");
 });
 
-crm.post("/integraciones/correo/desactivar-envio", (_req, res) => {
+crm.post("/integraciones/correo/desactivar-envio", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setEmailAutoSendEnabled(false, me(res).email);
-  back(res, "/crm/integraciones", "Modo de prueba activado -- el correo ya no envía respuestas reales.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Modo de prueba activado -- el correo ya no envía respuestas reales.");
 });
 
 // WhatsApp vía Zernio (18/10/2026, para no depender de la verificación de
@@ -4286,28 +4326,28 @@ crm.get("/integraciones/whatsapp/callback", (req, res) => {
   res.redirect(`/crm/integraciones${qs ? `?${qs}` : ""}`);
 });
 
-crm.post("/integraciones/whatsapp/agente/activar", (_req, res) => {
+crm.post("/integraciones/whatsapp/agente/activar", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setWhatsappZernioAgentEnabled(true, me(res).email);
-  back(res, "/crm/integraciones", "Carolina activada en WhatsApp -- ya contesta ella sola los mensajes nuevos de este número.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Carolina activada en WhatsApp -- ya contesta ella sola los mensajes nuevos de este número.");
 });
 
-crm.post("/integraciones/whatsapp/agente/desactivar", (_req, res) => {
+crm.post("/integraciones/whatsapp/agente/desactivar", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setWhatsappZernioAgentEnabled(false, me(res).email);
-  back(res, "/crm/integraciones", "Carolina pausada en WhatsApp -- los mensajes nuevos avisan al equipo, nadie los contesta solo.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Carolina pausada en WhatsApp -- los mensajes nuevos avisan al equipo, nadie los contesta solo.");
 });
 
-crm.post("/integraciones/telefono/activar", (_req, res) => {
+crm.post("/integraciones/telefono/activar", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setVoiceAgentEnabled(true, me(res).email);
-  back(res, "/crm/integraciones", "Miguel activado -- vuelve a contestar las llamadas nuevas.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Miguel activado -- vuelve a contestar las llamadas nuevas.");
 });
 
-crm.post("/integraciones/telefono/desactivar", (_req, res) => {
+crm.post("/integraciones/telefono/desactivar", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Solo el administrador");
   setVoiceAgentEnabled(false, me(res).email);
-  back(res, "/crm/integraciones", "Miguel desactivado -- las llamadas nuevas sonarán en los móviles de Ramón y José.");
+  back(res, safeVolver(req.body.volver, "/crm/integraciones"), "Miguel desactivado -- las llamadas nuevas sonarán en los móviles de Ramón y José.");
 });
 
 crm.post("/integraciones/google/desconectar", async (_req, res) => {
