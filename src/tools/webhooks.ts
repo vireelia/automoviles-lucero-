@@ -75,6 +75,19 @@ export function handleRetellWebhook(payload: any) {
     // JSON. Lo rellena el propio análisis de Retell leyendo la llamada
     // real -- no es un evento en vivo por cada intento.
     transfer_outcome: analysis.custom_analysis_data?.transfer_outcome ?? null,
+    // Motivo real de la llamada (25/10/2026, encargo: "6.3. Motivo de la
+    // llamada" tiene que ser distinto de "6.4. Resumen" y nunca
+    // sobrescribirse entre llamadas) -- Retell YA analiza esto en cada
+    // llamada (post_call_analysis_data, scripts/sync-retell.mjs) pero nunca
+    // se guardaba. intent es un enum real (comprar/vender_o_tasar/trámite/
+    // consulta_general/reclamación/otro); vehicle_of_interest es lo que
+    // Retell entendió en ESA llamada concreta (puede ser distinto del
+    // vehicle_interest guardado en el lead, que es acumulado). Ninguno de
+    // los dos se inventa aquí: si Retell no los da, quedan en null y el
+    // CRM no muestra "Motivo" para esa llamada.
+    intent: analysis.custom_analysis_data?.intent ?? null,
+    call_vehicle_of_interest: analysis.custom_analysis_data?.vehicle_of_interest ?? null,
+    outcome: analysis.custom_analysis_data?.outcome ?? null,
     custom_analysis_data: analysis.custom_analysis_data ?? {},
     max_pause_sec: maxPauseSec,
     needs_review: needsReview,

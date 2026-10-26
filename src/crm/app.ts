@@ -162,7 +162,14 @@ type CallAnalysis = {
   recording_url?: string | null;
   transcript?: string | null;
   direction?: string | null;
+  transfer_outcome?: string | null;
   internal_note?: string | null;
+  internal_note_by?: string | null;
+  // Motivo real (25/10/2026) -- del post_call_analysis_data de Retell, no
+  // inventado; ausente en llamadas anteriores a este cambio.
+  intent?: string | null;
+  call_vehicle_of_interest?: string | null;
+  outcome?: string | null;
   created_at: string;
 };
 type VehicleOverride = { vehicle_id: string; price_eur: number };
@@ -1029,7 +1036,7 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
 <header id="sidebar">
-<div class="brand"><button class="sidebar-toggle" type="button" aria-label="Contraer o expandir el menú" onclick="luceroToggleSidebar()">☰</button><div><span class="wordmark">LUCERO<em>PRO</em></span><span class="subbrand">AUTOMÓVILES LUCERO</span></div></div>
+<div class="brand"><button class="sidebar-toggle" type="button" aria-label="Contraer o expandir el menú" onclick="luceroToggleSidebar()">☰</button><a href="/crm" style="text-decoration:none"><span class="wordmark">LUCERO<em>PRO</em></span><span class="subbrand">AUTOMÓVILES LUCERO</span></a></div>
 <nav>${navItems.map((it) => `<a href="${it.href}" class="${section === it.label ? "on" : ""}" title="${esc(it.label)}"><span class="navicon">${navIcon(it.key)}</span><span class="navlabel">${esc(it.label)}</span></a>`).join("")}</nav>
 <div class="sidebar-user"><div class="avatar">${esc(avatarInitials(user.name))}</div><div style="min-width:0"><div class="uname">${esc(user.name)}</div><div class="urole">${esc(roleLabel[user.role] ?? user.role)}</div></div><form method="post" action="/crm/salir"><button class="btn light" type="submit">Salir</button></form></div>
 </header>
@@ -2537,13 +2544,14 @@ const CONTACTOS_CANALES = ["mensajes", "whatsapp", "correo", "llamadas"] as cons
 type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
 const CONTACTOS_PAGE_SIZE = 50;
 
-function contactosUrl(navBase: string, f: MsgFilter, q: string, pageNum: number, id?: string): string {
+function contactosUrl(navBase: string, f: MsgFilter | null, q: string, pageNum: number, id?: string): string {
   const params: string[] = [];
-  if (f !== "todos") params.push(`f=${f}`);
+  if (f && f !== "todos") params.push(`f=${f}`);
   if (q) params.push(`q=${encodeURIComponent(q)}`);
   if (pageNum > 1) params.push(`page=${pageNum}`);
   if (id) params.push(`id=${encodeURIComponent(id)}`);
-  return params.length ? `${navBase}?${params.join("&")}` : navBase;
+  if (!params.length) return navBase;
+  return `${navBase}${navBase.includes("?") ? "&" : "?"}${params.join("&")}`;
 }
 function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: string | null, email?: string | null): string {
   const name = lead?.name || fallbackName;
@@ -2555,7 +2563,7 @@ ${avatarBadge(phone || email || name, name, 52)}
 <div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}</p></div>
 </div>`;
 }
-function cpager(navBase: string, f: MsgFilter, q: string, pageNum: number, totalPages: number, total: number, count: number): string {
+function cpager(navBase: string, f: MsgFilter | null, q: string, pageNum: number, totalPages: number, total: number, count: number): string {
   if (total === 0) return "";
   const from = (pageNum - 1) * CONTACTOS_PAGE_SIZE + 1;
   const to = from + count - 1;
@@ -2568,36 +2576,80 @@ function cpager(navBase: string, f: MsgFilter, q: string, pageNum: number, total
   return `<div class="cpager"><span>Mostrando ${from}-${to} de ${total}</span><div>${nums.join(" ")}${pageNum < totalPages ? pageLink(pageNum + 1, "›") : ""}</div></div>`;
 }
 
-function callsContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+const CALL_INTENT_LABEL: Record<string, string> = {
+  comprar: "Quiere comprar", vender_o_tasar: "Quiere vender o tasar", tramite: "Trámite",
+  consulta_general: "Consulta general", reclamacion: "Reclamación", otro: "Otro motivo",
+};
+// Filtro específico de llamadas (25/10/2026, encargo: el selector debe
+// distinguir Entrantes/Salientes/Perdidas/Contestadas/Transferidas a un
+// empleado/Atendidas por el asistente virtual/Pendientes de revisar) --
+// todo con campos reales ya capturados (direction, call_successful,
+// transfer_outcome, needs_review), ninguno inventado.
+type CallFilter = "todas" | "entrantes" | "salientes" | "perdidas" | "contestadas" | "transferidas" | "ia" | "revisar";
+const CALL_FILTER_LABEL: [CallFilter, string][] = [
+  ["todas", "Todas las llamadas"], ["entrantes", "Entrantes"], ["salientes", "Salientes"],
+  ["perdidas", "Perdidas"], ["contestadas", "Contestadas"], ["transferidas", "Transferidas a un empleado"],
+  ["ia", "Atendidas por el asistente virtual"], ["revisar", "Pendientes de revisar"],
+];
+function matchesCallFilter(cf: CallFilter, m: CallAnalysis): boolean {
+  if (cf === "todas") return true;
+  if (cf === "entrantes") return m.direction === "inbound";
+  if (cf === "salientes") return m.direction === "outbound";
+  if (cf === "perdidas") return m.call_successful === false;
+  if (cf === "contestadas") return m.call_successful === true;
+  if (cf === "transferidas") return m.transfer_outcome === "transferido_ramon" || m.transfer_outcome === "transferido_jose";
+  if (cf === "ia") return !m.transfer_outcome || m.transfer_outcome === "no_aplico";
+  if (cf === "revisar") return Boolean(m.needs_review);
+  return true;
+}
+function callFilterDropdown(navBase: string, cf: CallFilter, q: string): string {
+  const qs = q ? `&q=${encodeURIComponent(q)}` : "";
+  return `<select onchange="location.href=this.value" style="width:auto;min-width:220px;margin:0">${CALL_FILTER_LABEL.map(([k, label]) => `<option value="${esc(navBase)}?cf=${k}${qs}" ${cf === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+}
+function callsContactos(cf: CallFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
   const dirLabel: Record<string, string> = { inbound: "Entrante", outbound: "Saliente" };
   const all = list<CallAnalysis>("call_analyses");
-  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from_number, m.summary)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const filtered = all.filter((m) => matchesCallFilter(cf, m) && searchMatches(q, m.from_number, m.summary)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
   const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
   const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const callStatusTag = (m: CallAnalysis) => m.call_successful === false
+    ? `<span class="tag" style="background:var(--urgent);color:#fff;font-size:10px;padding:2px 6px">Perdida</span>`
+    : m.call_successful === true
+      ? `<span class="tag" style="background:var(--ok);color:#fff;font-size:10px;padding:2px 6px">Contestada</span>`
+      : "";
   const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay llamadas en esta vista.</div>` : pageItems.map((m) => {
     const lead = findLeadForContact(allLeads, m.from_number, null);
     const name = lead?.name || m.from_number || "Número desconocido";
     const sub = lead?.vehicle_interest || m.summary || "Sin resumen";
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+    return `<a href="${esc(contactosUrl(navBase, null, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
 ${avatarBadge(m.from_number || m.id, name)}
 <div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(sub)}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${m.needs_review ? `<span class="tag" style="background:var(--urgent);color:#fff;font-size:10px;padding:2px 6px">Revisar</span>` : ""}</div>
+<div class="rmeta"><time>${esc(time)}</time>${callStatusTag(m)}${m.needs_review ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Revisar</span>` : ""}</div>
 </a>`;
   }).join("");
   if (!selected) return { rows, detail: `<div class="empty">No hay llamadas en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
   const lead = findLeadForContact(allLeads, selected.from_number, null);
   const [fecha, hora] = fmtDate(selected.created_at).split(", ");
   const dur = selected.duration_ms == null ? "—" : `${Math.floor(selected.duration_ms / 60000)}:${String(Math.round((selected.duration_ms % 60000) / 1000)).padStart(2, "0")}`;
-  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
+  const volver = contactosUrl(navBase, null, q, pageNum, selected.id);
+  // Motivo (6.3 del encargo) vs Resumen (6.4): dos campos reales distintos
+  // de Retell -- intent/call_vehicle_of_interest son el análisis de ESTA
+  // llamada concreta (nunca se sobrescriben entre llamadas, cada una tiene
+  // su propio registro), summary es la síntesis. Si Retell no dio intent
+  // para esta llamada (llamadas de antes de hoy), no se muestra Motivo.
+  const motivoText = selected.intent
+    ? `${CALL_INTENT_LABEL[selected.intent] ?? selected.intent}${selected.call_vehicle_of_interest ? ` -- ${selected.call_vehicle_of_interest}` : ""}.`
+    : null;
   const detail = `${contactDetailHeader(lead, selected.from_number || "Número desconocido", selected.from_number, lead?.email ?? null)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Fecha<b>${esc(fecha ?? "—")}</b></div><div>Hora<b>${esc(hora ?? "—")}</b></div><div>Duración<b>${dur}</b></div><div>Tipo<b>${esc(dirLabel[selected.direction ?? ""] ?? "—")}</b></div><div>Responsable<b>Miguel (IA)</b></div></div>
 ${selected.issues_detected && selected.issues_detected !== "ninguno" ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px"><b>Incidencia detectada:</b> ${esc(selected.issues_detected)}</div>` : ""}
+${motivoText ? `<h3 style="margin-bottom:6px">Motivo de la llamada</h3><p>${esc(motivoText)}</p>` : ""}
 <h3 style="margin-bottom:6px">Resumen</h3><p>${selected.summary ? esc(selected.summary) : "Sin resumen disponible."}</p>
-${selected.recording_url ? `<h3 style="margin-bottom:6px">Grabación</h3><audio controls preload="none" style="width:100%"><source src="${esc(selected.recording_url)}"></audio>` : ""}
-${selected.transcript ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--accent)">Ver transcripción completa</summary><div class="box" style="white-space:pre-wrap;font-size:13px;margin-top:8px">${esc(selected.transcript)}</div></details>` : ""}
+<h3 style="margin-bottom:6px">Grabación</h3>${selected.recording_url ? `<audio controls preload="none" style="width:100%"><source src="${esc(selected.recording_url)}"></audio>` : `<p class="sub">Grabación no disponible para esta llamada.</p>`}
+${selected.transcript ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--accent)">Ver transcripción completa</summary><div class="box" style="white-space:pre-wrap;font-size:13px;margin-top:8px">${esc(selected.transcript)}</div></details>` : `<p class="sub" style="margin-top:8px">Transcripción no disponible para esta llamada.</p>`}
 <form method="post" action="/crm/llamadas/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.from_number)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
@@ -2609,6 +2661,7 @@ ${selected.needs_review ? `<div class="activity-item ia">⚠️ Marcada para rev
 ${selected.read ? `<div class="activity-item ia">Leída</div>` : ""}
 ${selected.archived ? `<div class="activity-item ia">Archivada</div>` : ""}
 <h3>Notas internas</h3>
+${selected.internal_note ? `<p class="sub" style="margin:0 0 6px">Última nota -- ${esc(selected.internal_note_by ?? "equipo")}</p>` : ""}
 <form method="post" action="/crm/llamadas/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
   return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
 }
@@ -2830,6 +2883,7 @@ crm.get("/contactos/:canal", (req, res) => {
   const canal = req.params.canal as ContactoCanal;
   if (!CONTACTOS_CANALES.includes(canal)) return back(res, "/crm/contactos/mensajes", "Esa sección de Contactos no existe");
   const f = msgFilterFromQuery(req);
+  const cf: CallFilter = CALL_FILTER_LABEL.some(([k]) => k === req.query.cf) ? (req.query.cf as CallFilter) : "todas";
   const q = String(req.query.q ?? "").trim();
   const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
   const selectedIdRaw = typeof req.query.id === "string" ? req.query.id : undefined;
@@ -2857,9 +2911,10 @@ ${tabLink("correo", "Correo", pendingCo)}
       ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
       : canal === "mensajes"
         ? mensajesContactos(f, q, pageNum, navBase, allLeads, selectedIdRaw)
-        : callsContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw);
+        : callsContactos(cf, q, pageNum, `${navBase}?cf=${cf}`, allLeads, appts, resv, today, financing, selectedIdRaw);
   const withAnswered = canal !== "llamadas";
   const listLabel: Record<ContactoCanal, string> = { mensajes: "Todos los mensajes", whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
+  const pagerQs = canal === "llamadas" ? null : f;
   const body = `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
 <h1 style="margin:0">Contactos</h1>
 <a class="btn" href="/crm/contactos/nuevo">+ Nuevo contacto</a>
@@ -2867,13 +2922,13 @@ ${tabLink("correo", "Correo", pendingCo)}
 <p class="sub">Se actualiza sola.</p>
 ${tabs}
 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-${filterDropdown(navBase, f, q, withAnswered, listLabel[canal])}
+${canal === "llamadas" ? callFilterDropdown(navBase, cf, q) : filterDropdown(navBase, f, q, withAnswered, listLabel[canal])}
 ${searchBox(navBase, f, q, canal === "correo" ? "Buscar por remitente, asunto o portal" : "Buscar por número de teléfono")}
 </div>
 <div class="contactos-shell" id="contactos-panel" data-canal="${canal}">
 <div class="contactos-list">
 <div class="contactos-list-scroll">${built.rows}</div>
-${cpager(navBase, f, q, pageNum, built.totalPages, built.total, built.rows ? Math.min(CONTACTOS_PAGE_SIZE, built.total - (pageNum - 1) * CONTACTOS_PAGE_SIZE) : 0)}
+${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pageNum, built.totalPages, built.total, built.rows ? Math.min(CONTACTOS_PAGE_SIZE, built.total - (pageNum - 1) * CONTACTOS_PAGE_SIZE) : 0)}
 </div>
 <div class="contactos-detail">${built.detail}</div>
 <div class="contactos-activity">${built.activity}</div>
