@@ -872,6 +872,7 @@ const NAV_ICON_PATHS: Record<string, string> = {
   bell: "M12 3a5 5 0 0 0-5 5v3.3c0 .6-.2 1.2-.6 1.7L5 15h14l-1.4-2c-.4-.5-.6-1.1-.6-1.7V8a5 5 0 0 0-5-5Zm-2.5 15a2.5 2.5 0 0 0 5 0",
   plus: "M12 5v14M5 12h14",
   chevron: "M6 9l6 6 6-6",
+  help: "M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01",
 };
 function navIcon(key: string, size = 18): string {
   const d = NAV_ICON_PATHS[key] ?? NAV_ICON_PATHS.user;
@@ -1280,6 +1281,7 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 <a class="topbar-icon" href="/crm/seguimiento" title="Crear una tarea">${navIcon("plus", 18)}</a>
 <a class="topbar-icon" href="${msgHref}" title="${esc(msgTitle)}">${navIcon("message", 18)}${msgTotal > 0 ? `<span class="badge">${msgTotal > 99 ? "99+" : msgTotal}</span>` : ""}</a>
 <a class="topbar-icon" href="/crm" title="${esc(notifTitle)}">${navIcon("bell", 18)}${notifTotal > 0 ? `<span class="badge">${notifTotal > 99 ? "99+" : notifTotal}</span>` : ""}</a>
+<a class="topbar-icon" href="/crm/ayuda" title="Guía rápida: qué es cada sección">${navIcon("help", 18)}</a>
 <span class="topbar-status"><span class="dot ${integrationsOk ? "ok" : "down"}"></span>${integrationsOk ? "Asistentes activos" : "Revisar asistentes"}</span>
 <a class="topbar-biz" href="/crm/integraciones" style="margin-left:auto">Automóviles Lucero${navIcon("chevron", 14)}</a>
 </div>
@@ -3349,6 +3351,47 @@ ${mientrasTanto.length ? `<h2>Mientras tanto</h2>${mientrasTanto.map((m) => `<p>
 // anunciados (vendidos/reservados, dato 100% real de vehicle-state.ts) --
 // como no hay sincronización automática con los portales, alguien tiene
 // que ir a quitarlos a mano, y hoy no había ninguna lista de cuáles.
+// Guía rápida (26/10/2026, petición real: "añade un tutorial explicando
+// cada seccion del crm... para que los chicos no se pierdan"). El texto de
+// cada sección es el MISMO que ya se ve al entrar en ella (su <p class="sub">
+// real) -- copiado aquí a mano una vez, nunca generado aparte, para que la
+// guía nunca diga algo distinto de lo que la propia sección ya explica.
+// La lista de secciones es NAV_ITEMS, la misma que pinta el menú -- si un
+// día se añade o se quita una sección del menú, esta página la sigue
+// automáticamente, nunca hay dos listas que puedan desincronizarse.
+const AYUDA_DESCRIPTIONS: Record<string, string> = {
+  "/crm": "El resumen del día: visitas de hoy, reservas por atender, clientes nuevos y lo pendiente de todos los canales, todo en una sola pantalla al entrar.",
+  "/crm/coches": "El catálogo real de vehículos. Toca un coche para cambiar si está disponible, reservado o vendido, y su precio.",
+  "/crm/clientes": "Miguel, Carolina y Daniel anotan solos lo que quiere cada cliente, sea cual sea el canal. Tú solo lo lees y llamas si hace falta. Los clientes fríos sin contacto se archivan solos -- nunca se borran, solo dejan de aparecer aquí.",
+  "/crm/anuncios": "Qué coches ya no deberían seguir anunciados en los portales (Coches.net, Milanuncios, Wallapop) porque se reservaron o vendieron -- como esos portales no se sincronizan solos todavía, hay que ir a retirarlos a mano.",
+  "/crm/studio": "Genera vídeos e imágenes publicitarias de los coches con IA, y los publica en redes sociales. Solo admin, porque cada generación tiene un coste real.",
+  "/crm/contactos": "Las conversaciones reales de WhatsApp, correo y llamadas -- cada canal con su agente de IA encargado (Carolina, Daniel y Miguel). Tú solo lees y entras si hace falta.",
+  "/crm/agenda": "Visitas, llamadas y tareas de todos los canales, cruzadas en una sola vista -- cada fila enlaza a su sección real para gestionarla.",
+  "/crm/citas": "Los días y horas en que vendrán los clientes a ver un coche.",
+  "/crm/reservas": "Una reserva aparta un coche con una señal de 500 €. Cuando el cliente paga, compruébalo y pulsa \"Confirmar la reserva\".",
+  "/crm/ventas": "El historial real de ventas cerradas -- importe, canal y quién la generó (Miguel, Carolina o Daniel), nunca una cifra inventada.",
+  "/crm/seguimiento": "Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar...), otras se añaden a mano.",
+  "/crm/informes": "Conteos reales del periodo que elijas -- leads, visitas, reservas, ventas, conversión. \"Sin datos\" significa que todavía no hay ningún caso real que medir, nunca un error.",
+  "/crm/asistentes": "Configuración y actividad real de los 3 asistentes de IA (Miguel, Carolina, Daniel): si están respondiendo, cuánto han atendido, su último evento. Solo admin.",
+  "/crm/integraciones": "Las conexiones técnicas del CRM: Google (correo/calendario), WhatsApp, teléfono. Aquí se activa o pausa cada agente para su canal. Solo admin.",
+  "/crm/equipo": "Da de alta a Ramón, José y al resto del equipo, y cambia contraseñas. Solo admin.",
+  "/crm/ajustes": "Datos reales del negocio tal y como los usa hoy el agente de IA (teléfonos, dirección, criterios de financiación...) -- lo editable aquí toma efecto al momento. Solo admin.",
+  "/crm/papelera": "Aquí quedan las reservas, visitas, avisos y clientes que se eliminaron -- nada se borra para siempre hasta que lo confirmes aquí. Solo admin.",
+};
+crm.get("/ayuda", (req, res) => {
+  const user = me(res);
+  const items = NAV_ITEMS.filter((it) => !it.adminOnly || user.role === "admin");
+  const row = (it: (typeof NAV_ITEMS)[number]) => `<div class="record-row">
+<div class="ibtn" style="pointer-events:none">${navIcon(it.key, 18)}</div>
+<div class="who" style="flex:2;min-width:260px"><b>${esc(it.label)}</b><span style="white-space:normal;overflow:visible;text-overflow:clip;line-height:1.5">${esc(AYUDA_DESCRIPTIONS[it.href] ?? "")}</span></div>
+${it.adminOnly ? `<span class="tag">Solo admin</span>` : ""}
+<a class="link" href="${esc(it.href)}">Ir →</a>
+</div>`;
+  const body = `<h1>Guía rápida</h1>
+<p class="sub">Qué es cada sección del menú, en una frase -- para no perderse las primeras veces. Pulsa "Ir" para abrirla directamente.</p>
+<div class="records-list">${items.map(row).join("")}</div>`;
+  res.type("html").send(page("Guía rápida", user, body, msgOf(req)));
+});
 crm.get("/anuncios", (req, res) => {
   const vehicles = currentVehicles();
   const toRemove = vehicles
