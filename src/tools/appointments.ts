@@ -13,10 +13,12 @@ function now() {
 }
 
 // Horario confirmado por el negocio 29/09/2026 (Sección 21): L-V 09:30-14:00
-// y 16:30-19:00; S-D solo con cita previa y confirmación.
+// y 16:30-19:00; S-D solo con cita previa y confirmación. Corregido
+// 26/10/2026 (aviso real: "el horario es hasta las 19:30") -- cierre real
+// de la tarde 19:30, no 19:00.
 const WEEKDAY_WINDOWS = [
   { start: 9 * 60 + 30, end: 14 * 60 },
-  { start: 16 * 60 + 30, end: 19 * 60 },
+  { start: 16 * 60 + 30, end: 19 * 60 + 30 },
 ];
 
 function parseTime(requested_time?: string): number | null {
@@ -125,7 +127,7 @@ export async function createAppointment(args: {
     return envelope({
       status: "denied",
       error_code: "outside_business_hours",
-      data: { hours: "L-V 09:30-14:00 y 16:30-19:00" },
+      data: { hours: "L-V 09:30-14:00 y 16:30-19:30" },
       source: "política confirmada por el negocio 29/09/2026",
     });
   }
@@ -179,7 +181,7 @@ export function updateAppointment(args: { appointment_id: string; requested_date
   if (args.requested_time) {
     const minutes = parseTime(args.requested_time);
     if (minutes !== null && !isNonBookingDay(args.requested_date ?? appt.requested_date) && !withinWeekdayWindow(minutes)) {
-      return envelope({ status: "denied", error_code: "outside_business_hours", data: { hours: "L-V 09:30-14:00 y 16:30-19:00" } });
+      return envelope({ status: "denied", error_code: "outside_business_hours", data: { hours: "L-V 09:30-14:00 y 16:30-19:30" } });
     }
   }
 

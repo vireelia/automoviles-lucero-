@@ -148,7 +148,7 @@ function checkTeamUpcomingVisits() {
 // hacia el número del negocio. Lo que sí hace este aviso es invitar a una
 // respuesta rápida (un emoji basta) -- si contestan, esa respuesta SÍ es
 // un mensaje suyo real y les reabre la ventana para el día siguiente. Una
-// sola vez al día, cerca del cierre de la tarde (19:00), nunca de madrugada.
+// sola vez al día, cerca del cierre de la tarde (19:30), nunca de madrugada.
 const DAILY_KEEPALIVE_TARGET_MINUTES = 19 * 60 + 30; // 19:30 Madrid (a petición real)
 
 function madridNowMinutes(): number {
