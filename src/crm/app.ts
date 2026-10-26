@@ -3608,6 +3608,34 @@ crm.post("/coches/:id", (req, res) => {
   back(res, `/crm/coches/${v.id}`, "Coche guardado");
 });
 
+// Paleta categórica validada (skill de dataviz, references/palette.md --
+// 8 tonos, orden fijo, separación mínima de contraste comprobada para
+// daltonismo con el script del propio skill) -- reutilizada tal cual,
+// nunca una elegida a ojo. Solo para Informes (26/10/2026, "D1" -- antes
+// eran números y frases sueltas, ahora un embudo y barras reales con los
+// mismos datos de siempre).
+const CHART_CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+function funnelChart(stages: { label: string; count: number }[]): string {
+  const max = Math.max(1, ...stages.map((s) => s.count));
+  const H = 84;
+  const bars = stages.map((s) => {
+    const h = Math.max(3, Math.round((s.count / max) * H));
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;min-width:0">
+<div style="width:100%;max-width:110px;height:${h}px;background:${CHART_CATEGORICAL[0]};border-radius:4px 4px 0 0"></div>
+<span style="font-size:11.5px;color:var(--ink-dim);text-align:center">${esc(s.label)} <b style="color:var(--ink)">${s.count}</b></span>
+</div>`;
+  }).join("");
+  return `<div style="display:flex;align-items:flex-end;gap:10px;height:${H}px;margin:6px 0 2px">${bars}</div>`;
+}
+function hBarChart(rows: [string, number][]): string {
+  if (rows.length === 0) return `<p class="sub">Sin datos todavía.</p>`;
+  const max = Math.max(1, ...rows.map(([, n]) => n));
+  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">${rows.map(([label, n], i) => {
+    const w = Math.max(4, Math.round((n / max) * 100));
+    const color = CHART_CATEGORICAL[i % CHART_CATEGORICAL.length];
+    return `<div style="display:flex;align-items:center;gap:8px"><span style="width:160px;font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0">${esc(label)}</span><div style="flex:1;background:var(--panel);border-radius:4px;height:11px"><div style="width:${w}%;height:100%;background:${color};border-radius:4px"></div></div><b style="font-size:12.5px;width:28px;text-align:right;flex-shrink:0">${n}</b></div>`;
+  }).join("")}</div>`;
+}
 // ---------- Informes comerciales ----------
 // Fase 4 de la mejora integral del CRM (20/10/2026, sección 18): reutiliza
 // exactamente los mismos filtros temporales de Clientes (Fase 1) y el
@@ -3728,6 +3756,7 @@ ${stat(ventasPerdidas.length, "ventas perdidas")}
 ${stat(tareasVencidas, "tareas vencidas")}
 </div>
 <div class="box"><h3 style="margin-top:0">Conversión del periodo</h3>
+${funnelChart([{ label: "Leads", count: leadsNuevos }, { label: "Visitas", count: leadsConVisita }, { label: "Reservas", count: leadsConReserva }, { label: "Ventas", count: ventasCerradas }])}
 <p>Lead → visita: <b>${pct(convLeadVisita)}</b> · Visita → reserva: <b>${pct(convVisitaReserva)}</b> · Reserva → venta: <b>${pct(convReservaVenta)}</b></p>
 <p class="sub">Tiempo medio hasta el primer contacto humano (handoff real): ${avgFirstContactHours !== null ? `${avgFirstContactHours.toFixed(1)} horas` : "sin datos todavía"}</p>
 </div>
@@ -3736,8 +3765,8 @@ ${stat(tareasVencidas, "tareas vencidas")}
 <p class="sub">WhatsApp, chat y correo todavía no tienen coste medido por canal -- no se muestra un número para no inventarlo.</p>
 </div>
 ${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos de venta perdida</h3>${[...motivosPerdida.entries()].map(([m, n]) => `<p>${esc(m)}: <b>${n}</b></p>`).join("")}</div>` : ""}
-<div class="box"><h3 style="margin-top:0">Leads por canal de primera captación</h3>${[...porOrigen.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>
-${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${[...ventasPorCanalConversion.entries()].map(([c, n]) => `<p>${esc(c)}: <b>${n}</b></p>`).join("")}</div>` : ""}
+<div class="box"><h3 style="margin-top:0">Leads por canal de primera captación</h3>${hBarChart([...porOrigen.entries()].sort((a, b) => b[1] - a[1]))}</div>
+${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0">Ventas cerradas por canal de conversión (reserva)</h3>${hBarChart([...ventasPorCanalConversion.entries()].sort((a, b) => b[1] - a[1]))}</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Calidad de datos y duplicados (histórico completo, no solo el periodo)</h3>
 <p>Grupos de teléfono duplicado: <b>${realDupGroups.length}</b> (${dupRowCount} fichas en total) · Sin teléfono ni nombre: <b>${sinTelefonoNiNombre}</b></p>
 ${realDupGroups.length > 0
