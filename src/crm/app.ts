@@ -449,7 +449,13 @@ function autoArchiveColdLeads(): void {
 // pon el nombre, no quiero códigos que confundan". Busca en Clientes por
 // el mismo contacto antes de rendirse; nunca inventa un nombre.
 function findLeadByContact(contact: string): Lead | undefined {
-  if (contact.includes("@")) return list<Lead>("leads").find((l) => l.phone === contact);
+  // FALLO REAL detectado (26/10/2026, al completar nombre/vehículo/correo
+  // en Visitas/Reservas): esto solo miraba el correo guardado en el campo
+  // antiguo "phone" -- un lead moderno que entra solo por correo usa el
+  // campo "email" dedicado (ver el comentario de Lead.email), así que no
+  // se encontraba nunca y se perdían su nombre y su vehículo de interés
+  // real. Se comprueban los dos campos.
+  if (contact.includes("@")) return list<Lead>("leads").find((l) => l.phone === contact || l.email === contact);
   const digits = normalizePhoneDigits(contact);
   if (!digits) return undefined;
   return list<Lead>("leads").find((l) => normalizePhoneDigits(l.phone) === digits);
@@ -631,6 +637,15 @@ function dayLabel(isoDate: string | undefined): { weekday: string; day: string; 
 function phoneLink(contact: string | null | undefined): string {
   if (!contact || contact.includes("@") || !/\d{6,}/.test(contact)) return "";
   return `<a class="btn light" href="tel:${esc(contact)}">Llamar</a>`;
+}
+// Botón de correo real (26/10/2026, petición real: "que se le pueda
+// contactar a todosss" en Visitas/Reservas) -- hasta ahora solo había
+// forma de contactar por teléfono/WhatsApp; un cliente que solo dejó
+// correo (p. ej. relay de Coches.net sin teléfono real) se quedaba sin
+// ningún botón de contacto en estas tarjetas.
+function mailLink(email: string | null | undefined): string {
+  if (!email) return "";
+  return `<a class="btn light" href="mailto:${esc(email)}">Correo</a>`;
 }
 function option(value: string, label: string, selected: string | undefined) {
   return `<option value="${esc(value)}"${selected === value ? " selected" : ""}>${esc(label)}</option>`;
@@ -1302,11 +1317,46 @@ function msgOf(req: express.Request): string | undefined {
 }
 
 // ---------- tarjetas reutilizables ----------
+// Ficha de contacto completa en Visitas/Reservas (26/10/2026, petición
+// real: "ojo que ningun cliente se quede sin nombre, vehiculo, telefono y
+// correo si tiene, y que se le pueda contactar a todos, hora y fecha que
+// pregunto o se le contacto") -- antes solo se mostraba un teléfono o
+// nombre suelto (contactLabel) y nunca el correo ni cuándo se había
+// preguntado. Se completa cruzando con la ficha real en Clientes por
+// teléfono; nunca se inventa lo que de verdad falta -- se avisa con
+// honestidad (igual que "Sin nombre" ya hace en Clientes) en vez de
+// dejar la línea en blanco sin más.
+function clientContactBlock(lead: Lead | undefined, contact: string | null | undefined, createdAt: string): string {
+  const name = lead?.name ?? null;
+  // "lead_phone" a veces guarda de verdad un correo, no un teléfono (igual
+  // que ya distinguen phoneLink/waButton con contact.includes("@")) -- un
+  // cliente que solo dejó correo (p. ej. relay de Coches.net sin teléfono
+  // real). Sin esto, ese correo saldría mal etiquetado como "Teléfono".
+  const isEmailContact = !!contact && contact.includes("@");
+  const phone = isEmailContact ? null : contact;
+  const email = lead?.email ?? (isEmailContact ? contact : null);
+  const lastContact = lead?.updated_at && lead.updated_at !== createdAt ? lead.updated_at : null;
+  return `<p>Cliente: <b>${name ? esc(name) : "Sin nombre"}</b>${!name ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}</p>
+<p>Teléfono: <b>${phone ? esc(phone) : "Sin teléfono"}</b>${!phone ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : ""}${email ? ` · Correo: <b>${esc(email)}</b>` : ""}</p>
+<p>Preguntó el ${esc(fmtDate(createdAt))}${lastContact ? ` · Último contacto: ${esc(fmtDate(lastContact))}` : ""}</p>`;
+}
+// Vehículo por el que pregunta, con reserva (vehicle_id siempre real) pero
+// visita (vehicle_id opcional -- puede no haberse enlazado al catálogo
+// todavía): si falta, se usa el interés guardado en la ficha del cliente
+// antes de rendirse, nunca se deja la visita sin ningún coche mostrado.
+function appointmentVehicleLabel(a: Appointment, lead: Lead | undefined): string {
+  if (a.vehicle_id) return vehicleName(a.vehicle_id);
+  if (lead?.vehicle_interest) return lead.vehicle_interest;
+  return "Vehículo sin especificar";
+}
+
 function apptCard(a: Appointment): string {
   const d = dayLabel(a.requested_date);
   const tone = a.status === "requested" ? "pending" : a.status === "confirmed" ? "done" : "off";
-  const veh = vehicleName(a.vehicle_id);
+  const lead = a.lead_phone ? findLeadByContact(a.lead_phone) : undefined;
+  const veh = appointmentVehicleLabel(a, lead);
   const whatsapp = waButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
+  const mail = mailLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
   const actions = [
     a.status === "requested" ? button("Confirmar la visita", "confirmar", "ok") : "",
     a.status === "confirmed" ? button("No se presentó", "no_presentado", "light") : "",
@@ -1328,10 +1378,10 @@ ${simpleCheckbox("citas-bulk", a.id)}
 <div class="when"><span>${esc(d.weekday)}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span><em>${esc(a.requested_time ?? "")}</em></div>
 <div class="info"><h3>${esc(veh)}</h3>
 <p><span class="tag">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span>${a.appointment_type ? `<span class="tag">${esc(a.appointment_type)}</span>` : ""} <span class="tag">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></p>
-<p>Cliente: <b>${esc(contactLabel(a.lead_phone, null))}</b></p>
+${clientContactBlock(lead, a.lead_phone, a.created_at)}
 ${a.notes ? `<p>${esc(a.notes)}</p>` : ""}
 <form method="post" action="/crm/citas/${esc(a.id)}">${actions}
-${phoneLink(a.lead_phone)}${whatsapp}
+${phoneLink(a.lead_phone)}${whatsapp}${mail}
 <div class="row"><div><label>Otro día</label><input type="date" name="fecha" value="${esc(a.requested_date ?? "")}"></div>
 <div><label>Otra hora</label><input type="time" name="hora" value="${esc(a.requested_time ?? "")}"></div></div>
 <button class="btn light" type="submit" name="accion" value="cambiar">Cambiar día y hora</button>
@@ -1342,6 +1392,8 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   const sold = getOfficialStatus(r.vehicle_id) === "SOLD";
   const tone = sold ? "off" : r.status === "pending_verification" ? "urgent" : r.status === "pending_payment" ? "pending" : r.status === "confirmed" ? "done" : "off";
   const veh = vehicleName(r.vehicle_id);
+  const lead = r.lead_phone ? findLeadByContact(r.lead_phone) : undefined;
+  const mail = mailLink(lead?.email ?? (r.lead_phone?.includes("@") ? r.lead_phone : null));
   const actions: string[] = [];
   if (r.status === "pending_payment") actions.push(button("Ha pagado", "pagado", "warn"));
   if (r.status === "pending_verification") {
@@ -1380,10 +1432,10 @@ function reservationCard(r: Reservation, user: CrmUser): string {
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <h3>${esc(veh)}</h3>
 <p><span class="tag">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="tag">${r.amount_eur} €</span> <span class="tag">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></p>
-<p>Cliente: <b>${esc(contactLabel(r.lead_phone, null))}</b></p>
-<p>Desde el ${esc(fmtDate(r.created_at))}${r.verified_by ? ` · confirmada por ${esc(r.verified_by)}` : ""}</p>
+${clientContactBlock(lead, r.lead_phone, r.created_at)}
+${r.verified_by ? `<p>Confirmada por ${esc(r.verified_by)}</p>` : ""}
 ${expiryLine}
-<form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}
+<form method="post" action="/crm/reservas/${esc(r.id)}">${actions.join("")}${phoneLink(r.lead_phone)}${whatsapp}${mail}
 <div class="row"><div><label>Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
 <div><label>Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div></div>
 <button class="btn light" type="submit" name="accion" value="editar">Guardar cambios</button>
