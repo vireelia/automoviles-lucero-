@@ -954,6 +954,16 @@ h2{font-size:20px;margin:20px 0 10px}
 .sub{color:var(--ink-dim);margin:0 0 16px;font-size:15px}
 .msg{background:var(--ok-bg);border:1px solid var(--ok);padding:12px 16px;border-radius:9px;margin-bottom:16px;font-size:15px;font-weight:600;color:var(--ink)}
 .card{background:#fff;border:1px solid var(--border);border-radius:7px;padding:14px 16px;margin-bottom:12px;box-shadow:none;display:flex;gap:14px;flex-wrap:wrap;position:relative}
+/* Inicio en dos columnas (26/10/2026, "F1" -- petición real: "es una
+   lista larga de secciones apiladas" -- quería la ESTRUCTURA distinta,
+   no solo el estilo). Izquierda: lo urgente/de hoy (avisos, pendientes,
+   visitas y reservas de hoy). Derecha, más estrecha: lo que entra nuevo
+   (clientes de hoy, próximas visitas). En pantalla estrecha se apila
+   igual que antes -- ninguna columna queda más angosta que el contenido. */
+.home-cols{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.home-main{flex:2 1 480px;min-width:0}
+.home-side{flex:1 1 300px;min-width:0}
+@media(max-width:860px){.home-cols{flex-direction:column}}
 /* Fichas de clientes en horizontal, varias por fila (22/10/2026, petición
    real: "ese orden usalo para los clientes... en todas las secciones" --
    mismo criterio visto en el CRM de Klikar: grid que reparte en columnas
@@ -1795,13 +1805,19 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 <a class="stat" href="/crm/reservas"><b>${activeReservations.length}</b><span>reservas activas</span></a>
 <a class="stat" href="/crm/clientes"><b>${leadsSinResponsable.length}</b><span>leads sin responsable</span></a>
 </div>
+<div class="home-cols">
+<div class="home-main">
 ${alertBlock}
 ${todoBlock}
-<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="records-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", todayAppts.length + upcoming.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="records-list">${todayAppts.map(apptCard).join("")}</div>`}
+<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="records-list">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}
+</div>
+<div class="home-side">
+<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="records-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="records-list">${upcoming.map(apptCard).join("")}</div>`}
-<h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="records-list">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
+</div>
+</div>`;
   res.type("html").send(page("Inicio", me(res), body, msgOf(req)));
 });
 
