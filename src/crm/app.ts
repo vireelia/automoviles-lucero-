@@ -21,6 +21,7 @@ import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGI
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
 import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
+import { businessInfo } from "../data/business-info.js";
 import { existsSync as fileExists } from "fs";
 import path from "path";
 import {
@@ -3479,12 +3480,61 @@ ${rendimientoRows}
 ${ventas.length === 0 ? `<div class="empty">Todavía no hay ninguna venta marcada como cerrada.</div>` : `<div class="records-list">${ventas.map(row).join("")}</div>`}`;
   res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
 });
+// Ajustes: datos reales del negocio (26/10/2026, "construyelo" sobre el
+// placeholder) -- businessInfo es el MISMO archivo que usa el propio
+// agente de IA para responder (src/data/business-info.ts), así que esto
+// nunca puede desincronizarse de lo que Miguel/Carolina/Daniel dicen de
+// verdad. Es de SOLO LECTURA a propósito: ese archivo también alimenta
+// los prompts (prompt-*.md) y varias tools que validan contra él en
+// código -- un editor en el propio CRM que cambiara esto de verdad en
+// caliente es un cambio de arquitectura más grande (mover estos datos a
+// una colección que las tools lean en cada llamada), no algo que se deba
+// inventar a mitad de sesión. Se explica así, con honestidad, en vez de
+// fingir un editor que en realidad no cambiaría nada.
+function ajustesConfirmBadge(status: string | undefined): string {
+  if (status === "owner_confirmed") return `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Confirmado</span>`;
+  return `<span class="tag" style="background:var(--warn-bg);color:var(--warn)">Sin confirmar</span>`;
+}
+function ajustesRow(label: string, value: string, status?: string): string {
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><span style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0">${esc(label)}</span><span style="display:flex;align-items:center;gap:8px;text-align:right;min-width:0"><b style="font-size:13.5px">${esc(value)}</b>${status ? ajustesConfirmBadge(status) : ""}</span></div>`;
+}
 crm.get("/ajustes", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
-  const body = placeholderPage("Ajustes", "Un panel propio de configuración general (horarios, datos del negocio, plantillas) todavía no está construido.", [
-    { href: "/crm/integraciones", text: "Ver conexiones y agentes de IA" },
-    { href: "/crm/equipo", text: "Ver usuarios del equipo" },
-  ]);
+  const b = businessInfo;
+  const body = `<h1>Ajustes</h1>
+<p class="sub">Datos reales del negocio tal y como los usa hoy el agente de IA (mismo archivo, nunca se desincronizan) -- de solo lectura por ahora.</p>
+<div class="box" style="background:var(--panel)"><b>Editar estos datos desde aquí todavía no está construido.</b>
+<p class="sub" style="margin:8px 0 0">Cambiar algo aquí requiere editar el código y volver a desplegar -- el agente lee este mismo archivo directamente. Convertirlo en algo editable en caliente desde el CRM es un cambio de arquitectura más grande (que las herramientas del agente lean de una base de datos en vez del código); se puede plantear si hace falta de verdad.</p>
+</div>
+<div class="box"><h3 style="margin-top:0">Horarios y ubicación</h3>
+${ajustesRow("Visitas entre semana", b.hours.weekdays.visits.join(" y "), b.hours.validation_status)}
+${ajustesRow("Fin de semana", b.hours.weekend)}
+${ajustesRow("Teléfono atendido", b.phone_hours === "24h" ? "24 h (Miguel)" : b.phone_hours)}
+${ajustesRow("Dirección", b.location.address.value, b.location.address.validation_status)}
+${ajustesRow("Cómo llegar", b.location.how_to_arrive)}
+</div>
+<div class="box"><h3 style="margin-top:0">Contacto</h3>
+${ajustesRow("WhatsApp del negocio", b.whatsapp.number, b.whatsapp.validation_status)}
+${ajustesRow("Ramón", `${b.responsables.ramon.transfer_number}`, b.responsables.ramon.validation_status)}
+${ajustesRow("José", `${b.responsables.jose.transfer_number}`, b.responsables.jose.validation_status)}
+</div>
+<div class="box"><h3 style="margin-top:0">Financiación</h3>
+${ajustesRow("Precio mínimo", `${b.financing.criteria.min_price_eur.toLocaleString("es-ES")} €`, b.financing.validation_status)}
+${ajustesRow("Km máximo", `menos de ${b.financing.criteria.max_km.toLocaleString("es-ES")} km`)}
+${ajustesRow("Antigüedad máxima", `${b.financing.criteria.max_age_years} años`)}
+${ajustesRow("Plazo", `${b.financing.criteria.term_months.min}-${b.financing.criteria.term_months.max} meses`)}
+</div>
+<div class="box"><h3 style="margin-top:0">Garantía y reserva</h3>
+${ajustesRow("Garantía", `${b.warranty.duration_months} meses o ${b.warranty.max_km.toLocaleString("es-ES")} km (lo que ocurra primero)`, b.warranty.validation_status)}
+${ajustesRow("Cubre", b.warranty.covers.join(" y "))}
+${ajustesRow("Señal de reserva", `${b.reservation.amount_eur} €`, b.reservation.validation_status)}
+${ajustesRow("Plazo de la reserva", `${b.reservation.duration_days} días`)}
+${ajustesRow("Precio de traspaso", "Sin confirmar -- nunca se da una cifra al cliente", b.transfer_fee.validation_status)}
+</div>
+<div class="box" style="background:#fdecea;border:1px solid #f3c6c1"><b>Plantillas: todavía no está construido.</b>
+<p class="sub" style="margin:6px 0 0">No hay editor de plantillas de mensajes en el CRM todavía. Las 10 plantillas de <a class="link" href="/crm/studio">Studio IA</a> son otra cosa (generación de imagen/vídeo), no texto de respuesta.</p>
+</div>
+<p class="sub"><a class="link" href="/crm/integraciones">Ver conexiones y agentes de IA →</a> · <a class="link" href="/crm/equipo">Ver usuarios del equipo →</a></p>`;
   res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
 });
 
