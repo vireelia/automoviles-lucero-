@@ -299,6 +299,72 @@ async function sendZernioWhatsappNewConversation(zernio: Zernio, accountId: stri
   }
 }
 
+// Plantilla real enviada a revisión de Meta (27/10/2026, "construye la
+// plantilla" -- tras el caso real de Robert Leonardo, cliente de Coches.net
+// que pidió WhatsApp y al que Direct Send rechazó). Deja contactar primero
+// a un cliente nuevo cuando la cuenta no es elegible para Direct Send
+// (TIER_250 de momento, confirmado real). Meta tarda en revisarla (días,
+// nunca instantáneo) -- se comprueba el estado real cada vez que se usa,
+// nunca se asume aprobada. Texto real registrado en Meta: "Hola, le
+// escribe Automóviles Lucero. Vimos su interés en el {{1}}. Escríbanos por
+// aquí si quiere que le ayudemos con más información o para agendar una
+// visita." -- categoría UTILITY, español.
+const CONTACTO_INICIAL_TEMPLATE_ID = "2797957090597965";
+const CONTACTO_INICIAL_TEMPLATE_NAME = "contacto_inicial_vehiculo";
+
+export async function isContactoInicialTemplateApproved(): Promise<boolean> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return false;
+  try {
+    const { data } = await zernio.whatsapp.getWhatsAppTemplateById({
+      path: { templateId: CONTACTO_INICIAL_TEMPLATE_ID },
+      query: { accountId },
+    });
+    return data?.template?.status === "APPROVED";
+  } catch {
+    return false;
+  }
+}
+
+// Solo para abrir conversación con un vehículo real como único parámetro --
+// el texto de la plantilla ya aprobada por Meta no se puede reescribir
+// (Meta solo aprobó esa frase exacta), así que esto nunca sustituye la
+// respuesta real que Carolina ya redactó, solo abre la puerta para que esa
+// respuesta se pueda enviar después dentro de la ventana de 24h que esto
+// abre.
+export async function sendZernioWhatsappVehicleContactTemplate(phone: string, vehicleLabel: string): Promise<ZernioWhatsappSendResult> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data, error } = await zernio.messages.createInboxConversation({
+      body: {
+        accountId,
+        participantId: normalizeParticipantId(phone),
+        templateName: CONTACTO_INICIAL_TEMPLATE_NAME,
+        templateLanguage: "es",
+        templateParams: [vehicleLabel],
+      },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const message = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
+    }
+    const messageId = data?.data?.messageId;
+    const conversationId = data?.data?.conversationId;
+    if (!messageId || !conversationId) return { ok: false, error: "zernio_sin_message_id_template" };
+    rememberWhatsappConversation(phone, conversationId, accountId);
+    return { ok: true, messageId };
+  } catch (err) {
+    if (err instanceof ZernioApiError) {
+      return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Verificación de la firma del webhook (HMAC-SHA256 sobre el cuerpo crudo,
 // hex, sin prefijo) -- igual que retell-signature.ts/twilio-signature.ts:
 // si no coincide, nunca se procesa el evento.

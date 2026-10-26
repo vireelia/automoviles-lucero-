@@ -8,6 +8,7 @@ import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
 import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
+import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
 
 export type InboundEmail = {
   messageKey: string;
@@ -223,6 +224,21 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
         recordInbox(email, "sent_whatsapp_automatico", { portal: "Coches.net" });
         writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_automatico", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
         return { outcome: "sent_whatsapp_automatico", reply };
+      }
+
+      // Plantilla real aprobada por Meta como segundo intento real (27/10/2026,
+      // caso real de Robert Leonardo) -- solo si hay un vehículo real que
+      // poner como parámetro y la plantilla ya está aprobada de verdad (se
+      // comprueba cada vez, nunca se asume). Si esto funciona, se abre la
+      // ventana de 24h y Carolina ya puede seguir la conversación real
+      // después con la respuesta que ya tenía redactada.
+      if (vehicleLabel && (await isContactoInicialTemplateApproved())) {
+        const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel);
+        if (templateSent.ok) {
+          recordInbox(email, "sent_whatsapp_plantilla", { portal: "Coches.net" });
+          writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+          return { outcome: "sent_whatsapp_plantilla" };
+        }
       }
 
       const failReason = explainWhatsappSendError(sent.error);
