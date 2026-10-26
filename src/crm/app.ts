@@ -70,6 +70,13 @@ type Lead = {
   // que se deriva sola de citas/reservas reales, ver leadPhase().
   sale_outcome?: "cerrada" | "perdida" | null;
   lost_reason?: string | null;
+  // Fecha real de cierre (26/10/2026, sección Ventas: "importes, comisiones,
+  // histórico") -- updated_at NO sirve para esto, se pisa con cualquier otra
+  // edición posterior de la ficha (nombre, notas...), así que un historial
+  // ordenado por fecha de venta necesitaba su propio campo. Ausente en
+  // ventas cerradas antes de este cambio -- se muestran como "Sin fecha
+  // registrada", nunca se les asigna una fecha inventada.
+  sale_closed_at?: string | null;
   // Comercial responsable y próxima acción (20/10/2026, secciones 6.4/13):
   // campos explícitos, nadie los deriva por el cliente.
   assigned_to?: string | null;
@@ -3388,11 +3395,55 @@ ${dayKeys.map((d) => agendaDaySection(d, byDay.get(d) ?? [], today)).join("")}
 ${sinFecha.length ? `<div class="agenda-day"><div class="agenda-day-head"><b>Sin fecha</b></div>${sinFecha.map((e) => e.row.html).join("")}</div>` : ""}`;
   res.type("html").send(page("Agenda", me(res), body, msgOf(req)));
 });
+// Reserva real detrás de una venta cerrada (26/10/2026, sección Ventas) --
+// mismo cruce ya usado en Informes (ventasPorCanalConversion) para saber el
+// canal de conversión, reutilizado aquí para sacar el vehículo/importe real.
+// lead_phone de la reserva puede guardar un teléfono o un correo (igual que
+// en el resto del CRM) -- se prueban los dos contra el lead. Si un cliente
+// tiene varias reservas, se usa la más reciente.
+function reservationForLead(l: Lead, resv: Reservation[]): Reservation | undefined {
+  return resv
+    .filter((r) => r.lead_phone && (r.lead_phone === l.phone || r.lead_phone === l.email))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+}
 crm.get("/ventas", (req, res) => {
-  const body = placeholderPage("Ventas", "Un resumen propio de ventas cerradas (importes, comisiones, histórico) todavía no está construido.", [
-    { href: "/crm/embudo", text: "Ver el embudo comercial" },
-    { href: "/crm/informes", text: "Ver los informes ya disponibles" },
-  ]);
+  const allLeads = list<Lead>("leads");
+  const allResv = list<Reservation>("reservations");
+  const ventas = allLeads
+    .filter((l) => l.sale_outcome === "cerrada")
+    .map((l) => {
+      const resv = reservationForLead(l, allResv);
+      const importe = resv ? priceOf(resv.vehicle_id) : null;
+      return { lead: l, resv, importe };
+    })
+    .sort((a, b) => (b.lead.sale_closed_at ?? "").localeCompare(a.lead.sale_closed_at ?? ""));
+  const conImporte = ventas.filter((v) => v.importe !== null);
+  const importeTotal = conImporte.reduce((sum, v) => sum + (v.importe ?? 0), 0);
+  const row = (v: (typeof ventas)[number]) => {
+    const d = v.lead.sale_closed_at ? dayLabel(madridDateOnly(v.lead.sale_closed_at)) : null;
+    const veh = v.resv ? vehicleName(v.resv.vehicle_id) : "Sin reserva vinculada";
+    const importeTxt = v.importe !== null ? `${v.importe.toLocaleString("es-ES")} €` : "Desconocido";
+    const canal = ORIGIN[v.resv?.channel ?? ""] ?? "Origen desconocido";
+    return `<div class="record-row">
+<div class="datebadge" style="background:var(--ok-bg);color:#1f7a42">${d ? `<span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span>` : `<b style="font-size:13px">Sin fecha</b>`}</div>
+<div class="who"><b>${v.lead.name ? esc(v.lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}</span></div>
+<div class="meta"><span style="font-size:14px;font-weight:800;color:${v.importe !== null ? "#1f7a42" : "var(--ink-dim)"}">${importeTxt}</span><span class="lastcontact">${esc(canal)}${v.lead.assigned_to ? ` · ${esc(v.lead.assigned_to)}` : ""}</span></div>
+<div class="acts"><a class="link" href="/crm/buscar?q=${esc(v.lead.phone ?? v.lead.email ?? "")}">Ver cliente →</a></div>
+</div>`;
+  };
+  const body = `<h1>Ventas</h1>
+<p class="sub">Historial real de ventas cerradas (Clientes → "✅ Venta cerrada") cruzado con la reserva que llevó a esa venta, cuando existe -- nunca un importe inventado.</p>
+<div class="box" style="background:#fdecea;border:1px solid #f3c6c1">
+<b>Comisiones: todavía no está construido.</b>
+<p class="sub" style="margin:6px 0 0">No hay ningún % de comisión configurado por comercial en el sistema -- en cuanto nos deis esa tabla real, se añade aquí. De momento se puede ver quién tiene asignada cada venta (columna de la derecha de cada fila).</p>
+</div>
+<div class="stats">
+${`<div class="stat"><b>${ventas.length}</b><span>ventas cerradas</span></div>`}
+${`<div class="stat"><b>${importeTotal.toLocaleString("es-ES")} €</b><span>importe total conocido</span></div>`}
+${`<div class="stat"><b>${ventas.length - conImporte.length}</b><span>sin reserva vinculada</span></div>`}
+</div>
+<p class="sub"><a class="link" href="/crm/embudo">Ver el embudo comercial →</a> · <a class="link" href="/crm/informes">Ver conversión y motivos de venta perdida en Informes →</a></p>
+${ventas.length === 0 ? `<div class="empty">Todavía no hay ninguna venta marcada como cerrada.</div>` : `<div class="records-list">${ventas.map(row).join("")}</div>`}`;
   res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
 });
 crm.get("/ajustes", (req, res) => {
@@ -3795,12 +3846,15 @@ crm.post("/clientes/:id", (req, res) => {
   else if (accion === "venta_cerrada") {
     lead.sale_outcome = "cerrada";
     lead.lost_reason = null;
+    lead.sale_closed_at = now();
   } else if (accion === "venta_perdida") {
     lead.sale_outcome = "perdida";
     lead.lost_reason = String(req.body.lost_reason ?? "").trim() || "Otro";
+    lead.sale_closed_at = null;
   } else if (accion === "reabrir") {
     lead.sale_outcome = null;
     lead.lost_reason = null;
+    lead.sale_closed_at = null;
   } else if (accion === "actualizar_embudo") {
     // Edición rápida desde el Embudo (20/10/2026, sección 13) -- solo toca
     // responsable/próxima acción, nunca nombre/coche/notas (eso sigue
