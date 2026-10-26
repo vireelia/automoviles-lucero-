@@ -3381,6 +3381,17 @@ const AYUDA_DESCRIPTIONS: Record<string, string> = {
   "/crm/ajustes": "Datos reales del negocio tal y como los usa hoy el agente de IA (teléfonos, dirección, criterios de financiación...) -- lo editable aquí toma efecto al momento. Solo admin.",
   "/crm/papelera": "Aquí quedan las reservas, visitas, avisos y clientes que se eliminaron -- nada se borra para siempre hasta que lo confirmes aquí. Solo admin.",
 };
+// Reescrita (26/10/2026, aviso real: "es una guia explicativa de como
+// funciona el crm, no de como ir a cada seccion") -- lo primero ya no es
+// la lista de secciones, es el flujo real de negocio que el CRM
+// automatiza: de dónde salen los clientes, qué hace cada agente de IA
+// solo, y en qué momento exacto entra el equipo. Todo lo de aquí abajo es
+// el mismo comportamiento real ya construido (Clientes/Visitas/Reservas/
+// Ventas, canConfirmPayments, etc.) -- nunca un paso inventado que el CRM
+// no haga de verdad.
+function ayudaStep(num: number, title: string, text: string): string {
+  return `<div style="display:flex;gap:14px;padding:14px 0;border-bottom:1px solid #f0f1f3"><div style="width:28px;height:28px;border-radius:999px;background:var(--panel);color:var(--ink-dim);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0">${num}</div><div><b style="font-size:14.5px">${esc(title)}</b><p style="margin:4px 0 0;font-size:13.5px;color:var(--ink-dim);line-height:1.5">${text}</p></div></div>`;
+}
 crm.get("/ayuda", (req, res) => {
   const user = me(res);
   const items = NAV_ITEMS.filter((it) => !it.adminOnly || user.role === "admin");
@@ -3391,7 +3402,22 @@ ${it.adminOnly ? `<span class="tag">Solo admin</span>` : ""}
 <a class="link" href="${esc(it.href)}">Ir →</a>
 </div>`;
   const body = `<h1>Guía rápida</h1>
-<p class="sub">Qué es cada sección del menú, en una frase -- para no perderse las primeras veces. Pulsa "Ir" para abrirla directamente.</p>
+<p class="sub">Cómo funciona el CRM de verdad, paso a paso -- el índice de secciones queda más abajo, por si hace falta ir directo a una.</p>
+<div class="box"><h3 style="margin-top:0">El flujo real, de principio a fin</h3>
+${ayudaStep(1, "El cliente escribe o llama", "Nunca contestáis vosotros primero. Cada canal tiene su agente de IA encargado: <b>Miguel</b> por teléfono, <b>Carolina</b> por WhatsApp, <b>Daniel</b> por correo. Atienden solos, 24h, y anotan todo lo que dice el cliente -- nombre, coche de interés, cuándo quiere venir.")}
+${ayudaStep(2, "El agente lo anota en Clientes", "Cada cliente que escribe o llama aparece solo en <b>Clientes</b>, con su temperatura real (caliente/tibio/frío según lo decidido que esté) y qué coche le interesa. No hay que dar de alta a nadie a mano -- solo si alguien llega por otra vía y queréis añadirlo vosotros.")}
+${ayudaStep(3, "Si quiere ver el coche, queda una Visita", "El agente agenda la cita él solo en <b>Visitas</b>, dentro del horario real del concesionario. Vosotros solo tenéis que confirmarla o cancelarla cuando corresponda -- el cliente ya sabe el día y la hora.")}
+${ayudaStep(4, "Si quiere apartarlo, se inicia una Reserva", "Una señal de 500 € aparta el coche 15 días. El agente nunca confirma el pago solo -- en <b>Reservas</b> veis cuáles están esperando que alguien compruebe el justificante, y pulsáis \"Confirmar\" cuando sea de verdad.")}
+${ayudaStep(5, "Cuando se cierra la venta, lo marcáis vosotros", "Esa sí es una decisión humana: en la ficha del cliente (dentro de <b>Clientes</b>) hay un botón \"✅ Venta cerrada\" -- nadie más lo pulsa solo. A partir de ahí aparece en <b>Ventas</b>, con su importe real.")}
+${ayudaStep(6, "Si el agente no puede resolverlo solo, os avisa", "Eso es un aviso urgente o una tarea en <b>Tareas</b>/<b>Agenda</b> -- nunca se queda callado esperando. La campana de arriba (🔔) os dice si hay avisos urgentes o tareas vencidas de verdad. El punto rojo/verde junto a \"Revisar asistentes\" es otra cosa: dice si la conexión técnica de los agentes (WhatsApp, Google, teléfono) está bien puesta, no si hay algo pendiente.")}
+</div>
+<div class="box"><h3 style="margin-top:0">Quién puede hacer qué</h3>
+<p>Los 3 roles reales del equipo (se configuran en Usuarios):</p>
+<p><b>Equipo</b>: ve y trabaja con todo lo de arriba, pero no puede confirmar un pago de reserva ni marcar una venta como vendida/entregada.</p>
+<p><b>Comercial</b>: además de lo anterior, sí puede confirmar pagos de reserva y marcar "vendido y entregado".</p>
+<p><b>Administrador</b>: todo lo anterior, más las secciones técnicas (Integraciones, Asistentes, Ajustes, Usuarios, Papelera, Studio IA).</p>
+</div>
+<h2>Índice de secciones</h2>
 <div class="records-list">${items.map(row).join("")}</div>`;
   res.type("html").send(page("Guía rápida", user, body, msgOf(req)));
 });
