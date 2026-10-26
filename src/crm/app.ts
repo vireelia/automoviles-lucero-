@@ -1017,6 +1017,36 @@ h2{font-size:20px;margin:20px 0 10px}
 .record-row .edits{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;border-top:1px solid #f0f1f3;padding-top:10px;margin-top:2px}
 .record-row .edits label{font-size:11.5px;margin:0 0 3px}
 .record-row .edits input{width:auto;margin:0;padding:7px 9px;font-size:13px}
+/* Tarjeta alta de Clientes con menú "⋯" (26/10/2026, "pasame un diseño
+   diferente" -- opción A elegida tras ver mockups reales). Vuelve a un
+   grid de tarjetas (como .cards-grid) en vez de la fila de una línea,
+   con avatar+nombre arriba, coche debajo, y Archivar/Eliminar detrás de
+   un <details> nativo (sin JS nuevo) para no llenar la tarjeta de
+   botones. Llamar/WhatsApp/Correo se quedan siempre a la vista. */
+.lead-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.lead-card .lc-head{display:flex;align-items:flex-start;gap:12px}
+.lead-card .avatar{width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+.lead-card .lc-who{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.lead-card .lc-who b{font-size:15px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.lead-card .lc-who span{font-size:13px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.lead-card .lc-vehicle{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink);background:var(--panel);border-radius:9px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lead-card .lc-vehicle svg{flex-shrink:0;color:var(--ink-dim)}
+.lead-card .lc-meta{display:flex;align-items:center;justify-content:space-between}
+.lead-card .temp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;white-space:nowrap}
+.lead-card .temp i{width:7px;height:7px;border-radius:999px;display:inline-block}
+.lead-card .lastcontact{font-size:12.5px;color:var(--ink-dim);white-space:nowrap}
+.lead-card .flags{display:flex;flex-wrap:wrap;gap:6px}
+.lead-card .lc-acts{display:flex;align-items:center;gap:7px;padding-top:8px;border-top:1px solid #f0f1f3}
+/* Menú "⋯" con <details>/<summary> nativos -- sin JavaScript nuevo, se
+   abre y cierra solo con el comportamiento del navegador. */
+.row-menu{position:relative;margin-left:auto;flex-shrink:0}
+.row-menu summary{list-style:none;cursor:pointer;width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--ink-dim);font-size:16px}
+.row-menu summary::-webkit-details-marker{display:none}
+.row-menu[open] summary{background:var(--panel);color:var(--ink)}
+.row-menu .menu-pop{position:absolute;right:0;top:32px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 4px 16px rgba(0,0,0,.14);padding:6px;display:flex;flex-direction:column;gap:2px;z-index:20;min-width:150px}
+.row-menu .menu-pop form{margin:0}
+.row-menu .menu-pop button{all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 10px;border-radius:6px;font-size:13px;color:var(--ink)}
+.row-menu .menu-pop button:hover{background:var(--panel)}
 .record-row .btn{font-size:13px;padding:6px 10px;margin:0}
 .card .info{flex:1;min-width:220px}
 .card h3{margin:0 0 6px;font-size:18px}
@@ -1664,17 +1694,18 @@ function whatsappGreetingFor(l: Lead, appts: Appointment[]): string {
   }
   return `${greeting}, le escribe Automóviles Lucero${vehiclePart}.${visitPart} ¿En qué le podemos ayudar?`;
 }
-// Fila compacta (26/10/2026, "mandame ideas de tarjetas y diseño... vamos
-// a probar esta" -- opción B de 3 ideas, elegida por Eliud tras ver un
-// mockup real con datos de ejemplo). Mismos datos y mismas acciones de
-// siempre (nada nuevo, nada quitado) -- solo una fila de una línea en vez
-// de una tarjeta alta, para ver muchos clientes de un vistazo. El color
-// del avatar pasa a ser el de la temperatura (antes era un color fijo por
-// persona, pensado para distinguir personas en una conversación -- aquí
-// interesa más distinguir de un vistazo quién está caliente).
+// Tarjeta alta con menú "⋯" (26/10/2026, "pasame un diseño diferente" ->
+// opción A de las ideas mandadas, elegida tras ver mockups reales de A y
+// D: "A en vez de la fila actual"). Mismos datos y mismas acciones de
+// siempre -- Llamar/WhatsApp/Correo quedan fijos en icono; Archivar/
+// Eliminar se esconden detrás de "⋯" (un <details> nativo, sin
+// JavaScript nuevo) para no llenar la tarjeta de botones. El color del
+// avatar sigue siendo el de la temperatura (igual que en la fila
+// anterior) para poder distinguir quién está caliente de un vistazo.
 function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, appts: Appointment[], volver?: string): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
   const [avatarBg, avatarFg] = TEMP_AVATAR[l.temperature] ?? TEMP_AVATAR.COLD;
+  const tempColor = t.cls === "t-hot" ? "var(--accent)" : t.cls === "t-warm" ? "#f97316" : "#2563eb";
   const displayName = leadDisplayName(l);
   const whatsapp = waIconButton(l.phone, whatsappGreetingFor(l, appts));
   const mail = mailIconLink(l.email ?? null);
@@ -1683,10 +1714,11 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
   // búsqueda) para volver exactamente ahí, no a la lista sin filtrar.
   const volverField = volver ? `<input type="hidden" name="volver" value="${esc(volver)}">` : "";
   const del = user.role === "admin"
-    ? `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
+    ? `<form method="post" action="/crm/clientes/${esc(l.id)}">${volverField}${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
     : "";
-  const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}<button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
+  const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}">${volverField}<button type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
   const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk">` : "";
+  const menu = `<details class="row-menu"><summary aria-label="Más acciones">⋯</summary><div class="menu-pop">${archiveBtn}${del}</div></details>`;
   // Origen (primera captación) y canal (último contacto) son dos conceptos
   // distintos que ya se guardan por separado (20/10/2026, sección 7) --
   // antes solo se mostraba uno. Se muestran los dos, y solo el canal si
@@ -1699,9 +1731,8 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
   const duplicateWarning = duplicate
     ? `<a class="tag" href="/crm/clientes/${esc(duplicate.id)}" style="background:#fde2e1;color:#7a1c17;text-decoration:none">⚠️ Posible duplicado: mismo teléfono que ${esc(leadDisplayName(duplicate))}</a>`
     : "";
-  // Segunda línea de avisos (duplicado/sin nombre/no contactar/archivado +
-  // fase + origen): solo aparece cuando hay algo real que avisar, para que
-  // la fila normal se quede en una sola línea.
+  // Avisos reales (duplicado/sin nombre/no contactar/archivado + fase +
+  // origen): solo ocupan sitio cuando hay algo real que avisar.
   const flags = [
     !l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
     l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : "",
@@ -1710,20 +1741,23 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
     `<span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span>`,
     channelTags,
   ].filter(Boolean).join(" ");
-  return `<div class="record-row">
+  return `<div class="lead-card">
+<div class="lc-head">
 ${sel}
 <div class="avatar" style="background:${avatarBg};color:${avatarFg}">${esc(avatarInitials(displayName))}</div>
-<div class="who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "")}</span></div>
-<div class="situation" title="${esc(situation(l))}">${esc(situation(l))}</div>
-<div class="meta">
-<span class="temp" style="color:${t.cls === "t-hot" ? "var(--accent)" : t.cls === "t-warm" ? "#f97316" : "#2563eb"}"><i style="background:currentColor"></i>${esc(t.help.charAt(0).toUpperCase() + t.help.slice(1))}</span>
+<div class="lc-who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "")}</span></div>
+${menu}
+</div>
+<div class="lc-vehicle" title="${esc(situation(l))}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16.5h14M6.5 16.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm11 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5 12.5l1.3-4a2 2 0 0 1 1.9-1.4h7.6a2 2 0 0 1 1.9 1.4l1.3 4H5Z"/></svg>${esc(situation(l))}</div>
+<div class="lc-meta">
+<span class="temp" style="color:${tempColor}"><i style="background:currentColor"></i>${esc(t.help.charAt(0).toUpperCase() + t.help.slice(1))}</span>
 <span class="lastcontact">${esc(fmtDate(l.updated_at ?? l.created_at))}</span>
 </div>
-<div class="acts">
-<a class="btn light" href="/crm/clientes/${esc(l.id)}">Ficha</a>
-${phoneIconLink(l.phone)}${whatsapp}${mail}${archiveBtn}${del}
-</div>
 ${flags ? `<div class="flags">${flags}</div>` : ""}
+<div class="lc-acts">
+${phoneIconLink(l.phone)}${whatsapp}${mail}
+<a class="link" style="margin-left:auto;font-size:13px;font-weight:700" href="/crm/clientes/${esc(l.id)}">Ver ficha →</a>
+</div>
 </div>`;
 }
 
@@ -1862,7 +1896,7 @@ ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBu
 <h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="records-list">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}
 </div>
 <div class="home-side">
-<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="records-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
+<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="cards-grid">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="records-list">${upcoming.map(apptCard).join("")}</div>`}
 </div>
 </div>`;
@@ -1885,7 +1919,7 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
-${leads.length > 0 ? `<div class="records-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}</div>` : ""}
+${leads.length > 0 ? `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}</div>` : ""}
 ${appts.length > 0 || resv.length > 0 ? `<div class="records-list">${appts.map(apptCard).join("")}${resv.map((r) => reservationCard(r, me(res))).join("")}</div>` : ""}
 <div class="cards-grid">
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -3473,7 +3507,7 @@ ${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin con
 </div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="records-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
