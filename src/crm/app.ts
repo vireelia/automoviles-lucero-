@@ -3337,10 +3337,36 @@ function placeholderPage(title: string, why: string, mientrasTanto: { href: stri
 <div class="box" style="background:var(--panel)"><b>Esta sección todavía está en construcción.</b><p class="sub" style="margin:8px 0 0">${esc(why)}</p></div>
 ${mientrasTanto.length ? `<h2>Mientras tanto</h2>${mientrasTanto.map((m) => `<p><a class="link" href="${esc(m.href)}">${esc(m.text)} →</a></p>`).join("")}` : ""}`;
 }
+// Anuncios (26/10/2026, "construye esto" sobre el placeholder) -- publicar
+// y SINCRONIZAR anuncios de verdad en Coches.net/Wallapop/Milanuncios
+// sigue sin poder construirse: no hay acceso de API a esos portales
+// (pending_from_owner en business-info.ts, "Acceso de lectura real a
+// Coches.net/Wallapop" -- Eliud lo pedirá directamente), y los 34
+// vehículos del catálogo real no tienen ningún enlace individual guardado
+// todavía (ref_cochesnet/ref_wallapop/ref_dealcar están a null en los 34,
+// comprobado en vehicles-seed.ts -- no inventar un enlace que no existe).
+// Lo real y útil que SÍ se puede dar hoy: qué coches ya no deberían seguir
+// anunciados (vendidos/reservados, dato 100% real de vehicle-state.ts) --
+// como no hay sincronización automática con los portales, alguien tiene
+// que ir a quitarlos a mano, y hoy no había ninguna lista de cuáles.
 crm.get("/anuncios", (req, res) => {
-  const body = placeholderPage("Anuncios", "Publicar y gestionar anuncios en portales (Coches.net, Milanuncios...) desde aquí todavía no está construido.", [
-    { href: "/crm/coches", text: "Ver y editar el catálogo de vehículos" },
-  ]);
+  const vehicles = currentVehicles();
+  const toRemove = vehicles
+    .map((v) => ({ v, status: getOfficialStatus(v.id) }))
+    .filter((x) => x.status !== "AVAILABLE");
+  const row = (v: typeof vehicles[number], status: OfficialVehicleStatus) =>
+    `<div class="record-row"><div class="who"><b>${esc(vehicleName(v.id))}</b><span>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</span></div><span class="tag" style="${STATUS_TAG[status]}">${esc(VEHICLE_TEXT[status])}</span><a class="link" href="/crm/coches/${esc(v.id)}">Ver coche →</a></div>`;
+  const body = `<h1>Anuncios</h1>
+<p class="sub">Publicar y gestionar anuncios en portales (Coches.net, Milanuncios, Wallapop) desde aquí todavía no está construido -- no hay acceso de API a esos portales (pendiente del negocio). Mientras tanto, lo real que sí se puede controlar desde aquí:</p>
+<div class="box" style="background:var(--warn-bg);border:1px solid #f0dcb3"><b>${toRemove.length} vehículo${toRemove.length === 1 ? "" : "s"} que probablemente sigue${toRemove.length === 1 ? "" : "n"} anunciado${toRemove.length === 1 ? "" : "s"} y ya no debería${toRemove.length === 1 ? "" : "n"}</b>
+<p class="sub" style="margin:6px 0 0">Reservado o vendido aquí, pero sin conexión automática con los portales -- hay que retirarlos a mano en cada sitio donde estén publicados.</p>
+</div>
+${toRemove.length === 0 ? `<div class="empty">Ningún vehículo pendiente de retirar -- todo lo reservado o vendido ya debería estar fuera de los portales.</div>` : `<div class="records-list">${toRemove.map((x) => row(x.v, x.status)).join("")}</div>`}
+<div class="box"><h3 style="margin-top:0">Perfiles del negocio en los portales</h3>
+<p><a class="link" href="${esc(businessInfo.profiles.cochesnet)}" target="_blank" rel="noopener">Coches.net →</a></p>
+<p><a class="link" href="${esc(businessInfo.profiles.wallapop)}" target="_blank" rel="noopener">Wallapop →</a></p>
+</div>
+<p class="sub"><a class="link" href="/crm/coches">Ver y editar el catálogo de vehículos →</a> · <a class="link" href="/crm/studio">Generar imágenes/vídeos y publicar en redes (Studio IA) →</a></p>`;
   res.type("html").send(page("Anuncios", me(res), body, msgOf(req)));
 });
 // ---------- Agenda ----------
