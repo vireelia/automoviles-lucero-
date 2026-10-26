@@ -99,7 +99,7 @@ export async function createReservationPending(args: { vehicle_id: string; lead_
   };
   appendToCollection("reservations", reservation);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
-  await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount });
+  await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount, channel: args.channel ?? null });
 
   const conflicts = [
     "Datos bancarios/Bizum para el pago de la señal NO están configurados en este sistema todavía -- deriva con create_handoff para que el equipo le pase las instrucciones de pago reales. No inventes un número de cuenta ni un enlace de pago.",

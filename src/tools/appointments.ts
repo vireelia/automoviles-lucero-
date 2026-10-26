@@ -106,7 +106,7 @@ export async function createAppointment(args: {
       created_at: now(),
     };
     appendToCollection("appointments", appointment);
-    await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
+    await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
     createAutoTask({
       lead_phone: args.lead_phone ?? null,
       type: "confirmar_visita",
@@ -152,7 +152,7 @@ export async function createAppointment(args: {
     created_at: now(),
   };
   appendToCollection("appointments", appointment);
-  await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time });
+  await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
   if (canAutoConfirm) {
     await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
   } else {
@@ -202,7 +202,7 @@ export async function cancelAppointment(args: { appointment_id: string; reason?:
   appt.status = "cancelled";
   appt.cancel_reason = args.reason ?? null;
   writeCollection("appointments", appointments);
-  await notifyVisitCancelled({ lead_phone: appt.lead_phone, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time });
+  await notifyVisitCancelled({ lead_phone: appt.lead_phone, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time, channel: appt.channel ?? null });
 
   return envelope({ status: "ok", data: appt, source: "registro interno" });
 }

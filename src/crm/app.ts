@@ -1912,10 +1912,10 @@ crm.get("/", (req, res) => {
             return `<div class="card" style="position:relative"><div class="info">
 ${me(res).role === "admin" ? simpleCheckbox("alertas-bulk", a.id) : ""}
 <h3>${esc(contactLabel(a.lead_phone, a.name))}</h3>
-<p><span class="tletra t-hot">${a.kind === "lead_caliente" ? "C" : a.kind === "reserva_pendiente" ? "R" : "!"}</span><span class="tag t-hot">${a.kind === "lead_caliente" ? "Caliente" : a.kind === "reserva_pendiente" ? "RESERVA 500€" : "Urgente"}</span> ${portal ? platformTag(portal) : ""} ${esc(fmtDate(a.created_at))}</p>
+<p><span class="tletra t-hot">${a.kind === "lead_caliente" ? "C" : a.kind === "reserva_pendiente" ? "R" : "!"}</span><span class="tag t-hot">${a.kind === "lead_caliente" ? "Caliente" : a.kind === "reserva_pendiente" ? "RESERVA 500€" : "Urgente"}</span> ${portal ? platformTag(portal) : a.channel ? platformTag(ORIGIN[a.channel] ?? a.channel) : ""} ${esc(fmtDate(a.created_at))}</p>
 <p>${esc(reasonClean)}</p>
 <p>Aviso por correo: ${esc(emailLabels[a.email_status] ?? a.email_status)}</p>
-${phoneLink(a.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), waMessageFor(a.lead_phone, a.name)) : ""}
+${phoneLink(a.lead_phone)}${waLink ? waButton(waLink.replace("https://wa.me/", ""), waMessageFor(a.lead_phone, a.name)) : waButton(a.lead_phone, waMessageFor(a.lead_phone, a.name))}
 <form method="post" action="/crm/alertas/${esc(a.id)}" style="display:inline"><button class="btn ok" type="submit">Ya le he llamado</button></form>
 ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.id)}" style="display:inline"><button class="btn danger" type="submit" name="accion" value="eliminar" onclick="return confirm('¿Eliminar esta alerta para siempre? Úsalo solo para pruebas.')">Eliminar</button></form>` : ""}
 </div></div>`;
@@ -2097,10 +2097,10 @@ crm.post("/citas/:id", async (req, res) => {
     // esto se quedaba sin avisar a Ramón/José -- notifyVisitCancelled ya
     // existe y se usa desde el agente, pero cancelar a mano desde el CRM
     // nunca pasaba por ahí. Mismo aviso, mismo sitio, sin duplicar lógica.
-    await notifyVisitCancelled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
+    await notifyVisitCancelled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time, channel: a.channel ?? null });
   } else if (accion === "devolver") {
     a.status = "requested";
-    await notifyVisitScheduled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time });
+    await notifyVisitScheduled({ lead_phone: a.lead_phone, vehicle_id: a.vehicle_id, requested_date: a.requested_date, requested_time: a.requested_time, channel: a.channel ?? null });
   } else if (accion === "no_presentado") {
     a.status = "no_presentado";
     // Seguimiento comercial (20/10/2026, sección 14, "un cliente no se

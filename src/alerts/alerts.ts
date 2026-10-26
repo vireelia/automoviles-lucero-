@@ -12,6 +12,11 @@ export type Alert = {
   kind: AlertKind;
   lead_phone: string | null;
   name: string | null;
+  // Canal real de origen (27/10/2026, "marca de donde viene como te dije")
+  // -- antes estas alertas (reserva/visita/handoff) no decían por dónde
+  // había llegado el cliente, a diferencia de las de Coches.net/Wallapop
+  // (que sí lo llevan dentro del propio texto del motivo).
+  channel: string | null;
   reason: string;
   // draft_note (15/10/2026, a petición real -- "qué podemos hacer para
   // mejorar eso" sobre Wallapop: no hay API de mensajería para responder
@@ -114,6 +119,7 @@ export function raiseAlert(input: {
   kind: AlertKind;
   lead_phone?: string | null;
   name?: string | null;
+  channel?: string | null;
   reason: string;
   draft_note?: string | null;
 }): Alert | null {
@@ -134,6 +140,7 @@ export function raiseAlert(input: {
     kind: input.kind,
     lead_phone: input.lead_phone ?? null,
     name: input.name ?? null,
+    channel: input.channel ?? null,
     reason: input.reason,
     draft_note: input.draft_note ?? null,
     status: selfResolving ? "atendida" : "pendiente",

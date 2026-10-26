@@ -167,6 +167,7 @@ export async function createHandoff(args: {
     kind: args.reason_type === "reserva" ? "reserva_pendiente" : "handoff_urgente",
     lead_phone: leadPhone ?? null,
     reason: args.reason ?? (args.urgency === "alta" ? "Atención urgente" : "Solicitud de atención"),
+    channel: args.channel ?? null,
   });
   // Seguimiento comercial (20/10/2026, sección 14): deduplicada por el id
   // real del handoff, nunca se repite si este mismo se reprocesa.

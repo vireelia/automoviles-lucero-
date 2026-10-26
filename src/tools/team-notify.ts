@@ -58,8 +58,8 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
 // intento (a cada uno de los dos, por separado) queda registrado en
 // "team_notifications", igual que whatsapp_queue para clientes -- consultable
 // vía /debug/team_notifications.
-async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null): Promise<void> {
-  raiseAlert({ kind, lead_phone: leadPhone, reason: whatsappText });
+async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null, name?: string | null, channel?: string | null): Promise<void> {
+  raiseAlert({ kind, lead_phone: leadPhone, name: name ?? null, channel: channel ?? null, reason: whatsappText });
   for (const member of team()) {
     let whatsappOk = false;
     try {
@@ -138,6 +138,7 @@ export async function notifyVisitUpcoming(args: {
   lead_phone: string | null | undefined;
   vehicle_id: string | null | undefined;
   requested_time: string | null | undefined;
+  channel?: string | null;
 }): Promise<void> {
   const name = leadName(args.lead_phone);
   const contact = name === "sin nombre" ? args.lead_phone ?? "un cliente" : name;
@@ -145,6 +146,8 @@ export async function notifyVisitUpcoming(args: {
     "visita_proxima",
     `Recuerda que a las ${args.requested_time ?? "?"} tienes una visita con ${contact}.`,
     args.lead_phone ?? null,
+    name === "sin nombre" ? null : name,
+    args.channel,
   );
 }
 
@@ -153,14 +156,18 @@ export async function notifyVisitScheduled(args: {
   vehicle_id: string | null | undefined;
   requested_date: string | null | undefined;
   requested_time: string | null | undefined;
+  channel?: string | null;
 }): Promise<void> {
-  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
+  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, name);
   const vehicle = vehicleLabel(args.vehicle_id);
   const when = args.requested_date && args.requested_time ? `${args.requested_date} a las ${args.requested_time}` : args.requested_date || "fecha por confirmar";
   await notifyTeam(
     "visita_agendada",
     `📅 Nueva visita -- ${contact} -- ${vehicle} -- ${when}`,
     args.lead_phone ?? null,
+    name === "sin nombre" ? null : name,
+    args.channel,
   );
 }
 
@@ -169,14 +176,18 @@ export async function notifyVisitCancelled(args: {
   vehicle_id: string | null | undefined;
   requested_date: string | null | undefined;
   requested_time: string | null | undefined;
+  channel?: string | null;
 }): Promise<void> {
-  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
+  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, name);
   const vehicle = vehicleLabel(args.vehicle_id);
   const when = args.requested_date && args.requested_time ? `${args.requested_date} a las ${args.requested_time}` : args.requested_date || "sin fecha";
   await notifyTeam(
     "visita_cancelada",
     `❌ Visita cancelada -- ${contact} -- ${vehicle} -- ${when}`,
     args.lead_phone ?? null,
+    name === "sin nombre" ? null : name,
+    args.channel,
   );
 }
 
@@ -188,17 +199,21 @@ export async function notifyVisitCancelled(args: {
 // hasta que se revisó a mano. Ahora toda solicitud de atención avisa al
 // equipo por los mismos dos canales que una visita o reserva -- la urgencia
 // solo decide la prioridad de la tarea de seguimiento, nunca si se avisa o no.
-export async function notifyHandoffRequested(args: { kind: AlertKind; lead_phone: string | null | undefined; reason: string }): Promise<void> {
-  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
-  await notifyTeam(args.kind, `🔔 ${contact} -- ${args.reason}`, args.lead_phone ?? null);
+export async function notifyHandoffRequested(args: { kind: AlertKind; lead_phone: string | null | undefined; reason: string; channel?: string | null }): Promise<void> {
+  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, name);
+  await notifyTeam(args.kind, `🔔 ${contact} -- ${args.reason}`, args.lead_phone ?? null, name === "sin nombre" ? null : name, args.channel);
 }
 
-export async function notifyReservation(args: { lead_phone: string | null | undefined; vehicle_id: string; amount_eur: number }): Promise<void> {
-  const contact = contactLine(args.lead_phone, leadName(args.lead_phone));
+export async function notifyReservation(args: { lead_phone: string | null | undefined; vehicle_id: string; amount_eur: number; channel?: string | null }): Promise<void> {
+  const name = leadName(args.lead_phone);
+  const contact = contactLine(args.lead_phone, name);
   const vehicle = vehicleLabel(args.vehicle_id);
   await notifyTeam(
     "reserva_pendiente",
     `💰 Nueva reserva -- ${contact} -- ${vehicle} -- señal de ${args.amount_eur} €`,
     args.lead_phone ?? null,
+    name === "sin nombre" ? null : name,
+    args.channel,
   );
 }
