@@ -16,6 +16,7 @@ import { normalizePhone, upsertLead } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
+import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
@@ -726,11 +727,14 @@ const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean
   { key: "home", href: "/crm", label: "Inicio" },
   { key: "car", href: "/crm/coches", label: "Vehículos" },
   { key: "megaphone", href: "/crm/anuncios", label: "Anuncios" },
+  // A petición real (25/10/2026, "las secciones de fuera de llamada,
+  // mensajes, whatsapp y correos, déjalas en contacto, fuera no hace
+  // falta que estén"): Mensajes/WhatsApp/Llamadas/Correo ya no están
+  // sueltas en el menú -- solo como pestañas dentro de Contactos
+  // (/crm/contactos/whatsapp|correo|llamadas, que siguen existiendo
+  // tal cual, nada se rompe). "Mensajes" se elimina del todo, pestaña
+  // incluida, a petición expresa.
   { key: "user", href: "/crm/contactos", label: "Contactos" },
-  { key: "message", href: "/crm/contactos/mensajes", label: "Mensajes" },
-  { key: "phone", href: "/crm/contactos/whatsapp", label: "WhatsApp" },
-  { key: "phone", href: "/crm/contactos/llamadas", label: "Llamadas" },
-  { key: "mail", href: "/crm/contactos/correo", label: "Correo" },
   { key: "calendar", href: "/crm/agenda", label: "Agenda" },
   { key: "pin", href: "/crm/citas", label: "Visitas" },
   { key: "bookmark", href: "/crm/reservas", label: "Reservas" },
@@ -2413,8 +2417,10 @@ ${msgCheckbox("/crm/whatsapp", m.id)}
 <p class="meta"><span class="tag">WhatsApp directo</span> · ${esc(fmtDate(m.created_at))}</p>
 <p>${answeredTag(m)}${m.answered && m.delivered === false ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">No entregado (WhatsApp no conectado)</span>` : ""}${m.archived ? ` <span class="tag">Archivado</span>` : ""}</p>
 ${emailPreviewBox(m.text)}
-${m.reply_text ? `<p style="margin-top:10px"><b>Respuesta de la IA:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.reply_text)}</div>` : ""}
-<form method="post" action="/crm/whatsapp/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(m.phone)}
+${m.reply_text ? `<p style="margin-top:10px"><b>Última respuesta:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.reply_text)}</div>` : ""}
+<form method="post" action="/crm/whatsapp/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">
+<label>Responder por WhatsApp</label><textarea name="respuesta" rows="3" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
+${phoneLink(m.phone)}
 ${!m.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!m.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
@@ -2433,7 +2439,7 @@ ${whatsappPanel(f, q, me(res), "/crm/whatsapp")}`;
   res.type("html").send(page("WhatsApp", me(res), body, msgOf(req)));
 });
 
-crm.post("/whatsapp/:id", (req, res) => {
+crm.post("/whatsapp/:id", async (req, res) => {
   const accion = String(req.body.accion ?? "");
   const volver = safeVolver(req.body.volver, "/crm/whatsapp");
   const items = list<WhatsappMessage>("whatsapp_inbox");
@@ -2443,6 +2449,23 @@ crm.post("/whatsapp/:id", (req, res) => {
     m.internal_note = String(req.body.nota ?? "").trim() || null;
     save("whatsapp_inbox", items);
     return back(res, volver, "Nota guardada");
+  }
+  // Responder de verdad desde el CRM (25/10/2026, petición real: "que se
+  // pueda hablar con el cliente desde whatsapp y correos") -- mismo envío
+  // real que ya usa Carolina (sendWhatsappText/Zernio), nunca se finge un
+  // envío: si WhatsApp no está conectado o ya pasaron las 24h desde el
+  // último mensaje del cliente (límite real de Meta, no de este CRM), el
+  // error se muestra tal cual, tal y como ya se documentó en CLAUDE.md.
+  if (accion === "responder") {
+    const text = String(req.body.respuesta ?? "").trim();
+    if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
+    const result = await sendWhatsappText(m.phone, text);
+    if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
+    m.answered = true;
+    m.answered_by = "equipo";
+    m.reply_text = text;
+    save("whatsapp_inbox", items);
+    return back(res, volver, "Respuesta enviada");
   }
   if (accion === "eliminar") {
     moveToTrash("whatsapp_inbox", m, `WhatsApp: ${m.phone}`, me(res).email);
@@ -2566,7 +2589,7 @@ crm.post("/llamadas-masivo", (req, res) => {
 // qué vehículo del catálogo se refiere podría mostrar el coche equivocado
 // a un cliente real, así que se muestra como texto, nunca como una ficha
 // de coche que parece más segura de lo que es.
-const CONTACTOS_CANALES = ["mensajes", "whatsapp", "correo", "llamadas"] as const;
+const CONTACTOS_CANALES = ["whatsapp", "correo", "llamadas"] as const;
 type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
 const CONTACTOS_PAGE_SIZE = 50;
 
@@ -2702,8 +2725,11 @@ ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehic
 <div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
 <h3 style="margin-bottom:6px">Mensaje</h3><div class="box" style="white-space:pre-wrap">${esc(selected.text)}</div>
-${selected.reply_text ? `<h3 style="margin-bottom:6px">Respuesta de la IA</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.reply_text)}</div>` : ""}
-<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.phone)}
+${selected.reply_text ? `<h3 style="margin-bottom:6px">Última respuesta</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.reply_text)}</div>` : ""}
+<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
+<label>Responder por WhatsApp</label><textarea name="respuesta" rows="4" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
+<p class="sub" style="margin:4px 0 14px;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
+${phoneLink(selected.phone)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 ${confirmButton("Eliminar", "eliminar", "danger", "¿Eliminar este mensaje? Se puede recuperar luego desde la Papelera.")}
@@ -2781,40 +2807,6 @@ ${avatarBadge(m.from, name)}
   return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
 }
 
-// Mensajes (25/10/2026, pestaña combinada del mockup): WhatsApp + Correo
-// mezclados por fecha real, cada fila con su icono de canal -- reusa
-// whatsappDetailFor/correoDetailFor para la ficha, nunca duplica datos.
-type MensajeRow = { id: string; created_at: string; canal: "whatsapp" | "correo"; wa?: WhatsappMessage; mail?: InboxMail };
-function mensajesContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
-  const waAll = list<WhatsappMessage>("whatsapp_inbox").filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text));
-  const mailAll = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text));
-  const merged: MensajeRow[] = [
-    ...waAll.map((m): MensajeRow => ({ id: m.id, created_at: m.created_at, canal: "whatsapp", wa: m })),
-    ...mailAll.map((m): MensajeRow => ({ id: m.id, created_at: m.created_at, canal: "correo", mail: m })),
-  ].sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const totalPages = Math.max(1, Math.ceil(merged.length / CONTACTOS_PAGE_SIZE));
-  const pageItems = merged.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
-  const selected = merged.find((r) => r.id === selectedIdRaw) ?? pageItems[0] ?? null;
-  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((r) => {
-    const phone = r.wa?.phone ?? null;
-    const email = r.mail?.from ?? null;
-    const lead = findLeadForContact(allLeads, phone, email);
-    const name = lead?.name || phone || email || "Desconocido";
-    const sub = r.canal === "whatsapp" ? r.wa!.text : (r.mail!.subject || "(sin asunto)");
-    const time = (fmtDate(r.created_at).split(", ")[1]) ?? "";
-    const answered = r.canal === "whatsapp" ? r.wa!.answered : r.mail!.answered;
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, r.id))}" class="contact-row${selected?.id === r.id ? " active" : ""}">
-${avatarBadge(phone || email || r.id, name)}
-<div class="rbody"><b>${esc(name)}</b><span class="rsub">${navIcon(r.canal === "whatsapp" ? "phone" : "mail", 12)} ${esc(sub)}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${!answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
-</a>`;
-  }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: merged.length, totalPages, selectedId: null };
-  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
-  const { detail, activity } = selected.canal === "whatsapp" ? whatsappDetailFor(selected.wa!, allLeads, volver) : correoDetailFor(selected.mail!, allLeads, volver);
-  return { rows, detail, activity, total: merged.length, totalPages, selectedId: selected.id };
-}
-
 // Secciones del mockup todavía sin módulo real detrás (25/10/2026,
 // Lucero PRO: "no quiero fallos" / nunca datos inventados) -- en vez de
 // quitarlas del menú o fingir contenido, un estado honesto de verdad: lo
@@ -2855,7 +2847,7 @@ crm.get("/ajustes", (req, res) => {
   res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
 });
 
-crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/mensajes"));
+crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/whatsapp"));
 
 // Alta manual de un contacto (25/10/2026, "+ Nuevo contacto" del mockup)
 // -- reusa upsertLead, el mismo que usan voz/chat/correo para dar de alta
@@ -2926,20 +2918,17 @@ crm.get("/contactos/:canal", (req, res) => {
   const tabLink = (key: ContactoCanal, label: string, count: number) =>
     `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag">${count > 99 ? "99+" : count}</span>` : ""}</a>`;
   const tabs = `<div class="htabs">
-${tabLink("mensajes", "Mensajes", pendingWa + pendingCo)}
 ${tabLink("whatsapp", "WhatsApp", pendingWa)}
-${tabLink("llamadas", "Llamadas", unreadLl)}
 ${tabLink("correo", "Correo", pendingCo)}
+${tabLink("llamadas", "Llamadas", unreadLl)}
 </div>`;
   const built = canal === "whatsapp"
     ? whatsappContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
     : canal === "correo"
       ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
-      : canal === "mensajes"
-        ? mensajesContactos(f, q, pageNum, navBase, allLeads, selectedIdRaw)
-        : callsContactos(cf, q, pageNum, `${navBase}?cf=${cf}`, allLeads, appts, resv, today, financing, selectedIdRaw);
+      : callsContactos(cf, q, pageNum, `${navBase}?cf=${cf}`, allLeads, appts, resv, today, financing, selectedIdRaw);
   const withAnswered = canal !== "llamadas";
-  const listLabel: Record<ContactoCanal, string> = { mensajes: "Todos los mensajes", whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
+  const listLabel: Record<ContactoCanal, string> = { whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
   const pagerQs = canal === "llamadas" ? null : f;
   const body = `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
 <h1 style="margin:0">Contactos</h1>
