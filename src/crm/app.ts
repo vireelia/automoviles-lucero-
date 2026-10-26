@@ -23,6 +23,7 @@ import { isHiggsfieldConnected } from "../studio/higgsfield.js";
 import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
 import { getBusinessConfig, saveBusinessOverrides } from "../data/business-config.js";
+import { getMessageTemplate, isMessageTemplateOverridden, saveMessageTemplate, resetMessageTemplate, renderTemplate, MESSAGE_TEMPLATE_DEFAULTS, MESSAGE_TEMPLATE_VARS, type MessageTemplateKey } from "../data/message-templates.js";
 import { existsSync as fileExists } from "fs";
 import path from "path";
 import {
@@ -1572,7 +1573,7 @@ function apptCard(a: Appointment): string {
   const [badgeBg, badgeFg] = ROW_TONE_COLOR[tone] ?? ROW_TONE_COLOR.off;
   const lead = a.lead_phone ? findLeadByContact(a.lead_phone) : undefined;
   const veh = appointmentVehicleLabel(a, lead);
-  const whatsapp = waIconButton(a.lead_phone, `Hola, le escribe Automóviles Lucero. Le esperamos el ${d.weekday} ${d.day} de ${d.month} a las ${a.requested_time ?? ""} para ver el ${veh}. ¿Le viene bien?`);
+  const whatsapp = waIconButton(a.lead_phone, renderTemplate(getMessageTemplate("visita_confirmacion"), { dia_semana: d.weekday, dia: d.day, mes: d.month, hora: a.requested_time ?? "", vehiculo: veh }));
   const mail = mailIconLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
   const contactPart = a.lead_phone && !a.lead_phone.includes("@") ? a.lead_phone : lead?.email ?? null;
   const actions = [
@@ -1648,7 +1649,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
     actions.push(confirmButton("Eliminar", "eliminar", "danger", `"${veh}" se borra para siempre del registro, no se puede deshacer.`));
   }
   const whatsapp = r.status === "pending_payment"
-    ? waIconButton(r.lead_phone, `Hola, le escribe Automóviles Lucero. Para apartar el ${veh} necesitamos 500 €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.`)
+    ? waIconButton(r.lead_phone, renderTemplate(getMessageTemplate("reserva_pago"), { vehiculo: veh, importe: String(businessInfo.reservation.amount_eur) }))
     : "";
   const canBulkDelete = (r.status === "cancelled" || r.status === "expired") && user.role === "admin";
   // Caducidad visible (22/10/2026): solo importa mientras la reserva sigue
@@ -3519,6 +3520,23 @@ function ajustesEditRow(label: string, name: string, value: string | number, ove
     : "";
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><label for="aj-${name}" style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0;margin:0">${esc(label)}</label><span style="display:flex;align-items:center;gap:8px"><input id="aj-${name}" name="${name}" type="${type}" value="${esc(String(value))}" style="width:220px;margin:0;text-align:right">${overridden ? `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Editado</span>` : ""}${resetBtn}</span></div>`;
 }
+// Plantillas de WhatsApp (26/10/2026, "construyelo" sobre el placeholder de
+// Plantillas) -- mismo candado de seguridad que ajustesEditRow: un botón
+// "Restablecer" aparte, nunca se borra sin querer al guardar en blanco.
+function ajustesTemplateRow(key: MessageTemplateKey, label: string): string {
+  const current = getMessageTemplate(key);
+  const overridden = isMessageTemplateOverridden(key);
+  const vars = MESSAGE_TEMPLATE_VARS[key].map((v) => `{{${v}}}`).join(", ");
+  const fieldName = `tpl_${key}`;
+  const resetBtn = overridden
+    ? `<button type="submit" name="restablecer_plantilla" value="${esc(key)}" class="btn light" onclick="return confirm('¿Quitar este texto y volver al de siempre?')">Restablecer</button>`
+    : "";
+  return `<div style="padding:12px 0;border-bottom:1px solid #f0f1f3">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px"><label for="aj-${fieldName}" style="font-size:13.5px;font-weight:700">${esc(label)}</label>${overridden ? `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Editado</span>` : ""}</div>
+<textarea id="aj-${fieldName}" name="${fieldName}" rows="3" style="width:100%;margin:0">${esc(current)}</textarea>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px"><span class="sub" style="font-size:12px">Variables disponibles: ${esc(vars)}</span>${resetBtn}</div>
+</div>`;
+}
 crm.get("/ajustes", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
   const b = businessInfo;
@@ -3541,6 +3559,11 @@ ${ajustesEditRow("Km máximo", "financing_max_km", cfg.financingMaxKm, cfg.hasOv
 ${ajustesEditRow("Antigüedad máxima (años)", "financing_max_age_years", cfg.financingMaxAgeYears, cfg.hasOverride.financingMaxAgeYears, "number")}
 <p class="sub" style="margin-top:10px">El plazo (36-72 meses) no es editable aquí -- está escrito tal cual dentro del prompt del agente, ver abajo.</p>
 </div>
+<div class="box"><h3 style="margin-top:0">Plantillas de WhatsApp</h3>
+<p class="sub">Los 2 mensajes rápidos que salen al pulsar el icono de WhatsApp en Visitas/Reservas -- edítalos aquí, toman efecto al momento. El saludo general de un cliente (en Clientes) no está aquí: cambia solo según si de verdad tiene una visita o un coche de interés registrado, no es un texto fijo que se pueda aplanar en una plantilla sin perder esa lógica.</p>
+${ajustesTemplateRow("visita_confirmacion", "Confirmar visita")}
+${ajustesTemplateRow("reserva_pago", "Pedir el pago de la reserva")}
+</div>
 <button class="btn ok" type="submit">Guardar cambios</button>
 </form>
 <div class="box"><h3 style="margin-top:0">Horarios, garantía y reserva -- de solo lectura</h3>
@@ -3554,9 +3577,6 @@ ${ajustesRow("Señal de reserva", `${b.reservation.amount_eur} €`, b.reservati
 ${ajustesRow("Plazo de la reserva", `${b.reservation.duration_days} días`)}
 ${ajustesRow("Plazo de financiación", `${b.financing.criteria.term_months.min}-${b.financing.criteria.term_months.max} meses`)}
 ${ajustesRow("Precio de traspaso", "Sin confirmar -- nunca se da una cifra al cliente", b.transfer_fee.validation_status)}
-</div>
-<div class="box" style="background:#fdecea;border:1px solid #f3c6c1"><b>Plantillas: todavía no está construido.</b>
-<p class="sub" style="margin:6px 0 0">No hay editor de plantillas de mensajes en el CRM todavía. Las 10 plantillas de <a class="link" href="/crm/studio">Studio IA</a> son otra cosa (generación de imagen/vídeo), no texto de respuesta.</p>
 </div>
 <p class="sub"><a class="link" href="/crm/integraciones">Ver conexiones y agentes de IA →</a> · <a class="link" href="/crm/equipo">Ver usuarios del equipo →</a></p>`;
   res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
@@ -3579,6 +3599,12 @@ crm.post("/ajustes", (req, res) => {
     saveBusinessOverrides({ [restablecer]: null }, me(res).email);
     return back(res, "/crm/ajustes", "Restablecido al valor de siempre");
   }
+  const restablecerPlantilla = String(req.body.restablecer_plantilla ?? "") as MessageTemplateKey | "";
+  if (restablecerPlantilla) {
+    if (!(restablecerPlantilla in MESSAGE_TEMPLATE_DEFAULTS)) return back(res, "/crm/ajustes", "No reconozco esa plantilla");
+    resetMessageTemplate(restablecerPlantilla);
+    return back(res, "/crm/ajustes", "Plantilla restablecida al texto de siempre");
+  }
   // Botón "Guardar cambios": un campo vacío NUNCA borra nada -- solo se
   // guarda lo que de verdad se escribió.
   const patch: Record<string, string | number> = {};
@@ -3592,8 +3618,19 @@ crm.post("/ajustes", (req, res) => {
     const n = Number(raw);
     if (Number.isFinite(n)) patch[key] = n;
   }
-  if (Object.keys(patch).length === 0) return back(res, "/crm/ajustes", "No había ningún cambio que guardar");
-  saveBusinessOverrides(patch, me(res).email);
+  let savedAnything = false;
+  if (Object.keys(patch).length > 0) {
+    saveBusinessOverrides(patch, me(res).email);
+    savedAnything = true;
+  }
+  for (const key of Object.keys(MESSAGE_TEMPLATE_DEFAULTS) as MessageTemplateKey[]) {
+    const v = String(req.body[`tpl_${key}`] ?? "").trim();
+    if (v) {
+      saveMessageTemplate(key, v, me(res).email);
+      savedAnything = true;
+    }
+  }
+  if (!savedAnything) return back(res, "/crm/ajustes", "No había ningún cambio que guardar");
   back(res, "/crm/ajustes", "Cambios guardados -- el agente ya los usa");
 });
 
