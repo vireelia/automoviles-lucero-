@@ -866,8 +866,8 @@ nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
 h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
 h2{font-size:20px;margin:20px 0 10px}
 .sub{color:var(--ink-dim);margin:0 0 16px;font-size:15px}
-.msg{background:var(--ok-bg);border:1px solid var(--ok);padding:12px 16px;border-radius:12px;margin-bottom:16px;font-size:15px;font-weight:600;color:var(--ink)}
-.card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(16,24,40,.04);display:flex;gap:16px;flex-wrap:wrap;position:relative}
+.msg{background:var(--ok-bg);border:1px solid var(--ok);padding:12px 16px;border-radius:9px;margin-bottom:16px;font-size:15px;font-weight:600;color:var(--ink)}
+.card{background:#fff;border:1px solid var(--border);border-radius:9px;padding:16px 18px;margin-bottom:14px;box-shadow:none;display:flex;gap:16px;flex-wrap:wrap;position:relative}
 /* Fichas de clientes en horizontal, varias por fila (22/10/2026, petición
    real: "ese orden usalo para los clientes... en todas las secciones" --
    mismo criterio visto en el CRM de Klikar: grid que reparte en columnas
@@ -886,15 +886,15 @@ h2{font-size:20px;margin:20px 0 10px}
 .card .tletra{width:26px;height:26px;font-size:13px}
 .card .origen{font-size:13px;padding:3px 8px}
 .card .btn{font-size:14px;padding:8px 14px;margin:4px 6px 4px 0}
-.when{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:12px;padding:10px 14px;text-align:center;min-width:100px}
+.when{background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:10px 14px;text-align:center;min-width:100px}
 .when b{display:block;font-size:32px;line-height:1}
 .when span{font-size:14px;display:block;color:var(--ink-dim)}
 .when em{font-style:normal;font-size:21px;font-weight:700;display:block;margin-top:4px}
 .tag{display:inline-block;padding:5px 11px;border-radius:999px;font-size:14px;margin:4px 6px 4px 0;background:var(--panel)}
-.todo{background:var(--warn-bg);border:1px solid var(--warn);border-radius:12px;padding:14px 16px;margin-bottom:20px}
+.todo{background:var(--warn-bg);border:1px solid var(--warn);border-radius:9px;padding:14px 16px;margin-bottom:20px}
 .todo a{display:block;font-size:16px;padding:8px 0;color:var(--ink);font-weight:600;text-decoration:none}
-.allok{background:var(--ok-bg);border:1px solid var(--ok);border-radius:12px;padding:16px;margin-bottom:20px;font-size:17px;font-weight:700;color:var(--ink)}
-.empty{background:#fff;border:1px solid var(--border);border-radius:12px;padding:18px;color:var(--ink-dim);font-size:15px}
+.allok{background:var(--ok-bg);border:1px solid var(--ok);border-radius:9px;padding:16px;margin-bottom:20px;font-size:17px;font-weight:700;color:var(--ink)}
+.empty{background:#fff;border:1px solid var(--border);border-radius:9px;padding:18px;color:var(--ink-dim);font-size:15px}
 .urgent{border-left:4px solid var(--urgent)}.pending{border-left:4px solid var(--warn)}.done{border-left:4px solid var(--ok)}.off{border-left:4px solid var(--off);opacity:.75}
 /* Módulo mensajes/clientes (18/10/2026): "leído" y "respondido" son estados
    distintos -- sin responder resalta (fondo claro, texto en negrita);
@@ -907,7 +907,7 @@ h2{font-size:20px;margin:20px 0 10px}
 .msg-read h3,.msg-read .meta{font-weight:400}
 .estado-ia{background:#e0ecff;color:#1d3a8a}
 .estado-equipo{background:#e3f6e8;color:#1d6b3d}
-.bulkbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:#fff;border-radius:16px;padding:14px 18px;margin:0 0 16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.bulkbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:#fff;border:1px solid var(--border);border-radius:9px;padding:14px 18px;margin:0 0 16px;box-shadow:none}
 .bulkbar label{font-size:17px;font-weight:600;display:flex;align-items:center;gap:6px}
 .msgsel{width:22px;height:22px;margin:0}
 .filterbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
@@ -918,7 +918,7 @@ input,select,textarea{font:inherit;font-size:15px;padding:10px 12px;border:1px s
 label{font-size:14px;font-weight:700;color:var(--ink)}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:640px){.row{grid-template-columns:1fr}h1{font-size:23px}}
-.box{background:#fff;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-wrap:break-word;word-break:break-word}
+.box{background:#fff;border:1px solid var(--border);border-radius:9px;padding:18px 20px;margin-bottom:18px;box-shadow:none;overflow-wrap:break-word;word-break:break-word}
 /* Integraciones en dos columnas (21/10/2026, a petición real: "ponlas en
    un lado como el crm de klikar") -- lista lateral de secciones a la
    izquierda (ancla a cada caja), contenido a la derecha. Solo esta
@@ -938,7 +938,7 @@ label{font-size:14px;font-weight:700;color:var(--ink)}
 .side-content{flex:1;min-width:0}
 @media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
-.stat{background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px;text-decoration:none;color:inherit;border-left:4px solid var(--accent);box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.stat{background:#fff;border:1px solid var(--border);border-radius:9px;padding:14px 16px;text-decoration:none;color:inherit;border-left:4px solid var(--accent);box-shadow:none}
 .stat b{display:block;font-size:30px;line-height:1;color:var(--ink)}
 .stat span{font-size:14px;color:var(--ink-dim)}
 /* Tarjetas grandes de filtro (21/10/2026, a petición real: "usa la misma
