@@ -3500,8 +3500,24 @@ function ajustesConfirmBadge(status: string | undefined): string {
 function ajustesRow(label: string, value: string, status?: string): string {
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><span style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0">${esc(label)}</span><span style="display:flex;align-items:center;gap:8px;text-align:right;min-width:0"><b style="font-size:13.5px">${esc(value)}</b>${status ? ajustesConfirmBadge(status) : ""}</span></div>`;
 }
+// Fallo real de Eliud (26/10/2026): "borre este numero sin querer y no
+// aparecio" -- al vaciar el campo de WhatsApp a mano y guardar sin
+// querer. Doble candado desde entonces: (1) el guardado general IGNORA
+// un campo que llega vacío -- vaciarlo y pulsar "Guardar cambios" ya NO
+// puede borrar nada, deja el valor como estaba; (2) quitar un valor
+// puesto a mano es una acción aparte y explícita, el botón ↺ de al lado,
+// con su propia confirmación -- nunca pasa sin querer.
 function ajustesEditRow(label: string, name: string, value: string | number, overridden: boolean, type = "text"): string {
-  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><label for="aj-${name}" style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0;margin:0">${esc(label)}</label><span style="display:flex;align-items:center;gap:8px"><input id="aj-${name}" name="${name}" type="${type}" value="${esc(String(value))}" style="width:220px;margin:0;text-align:right">${overridden ? `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Editado</span>` : ""}</span></div>`;
+  // Botón suelto, NO en su propio <form> -- ya está dentro del <form> grande
+  // de /crm/ajustes (un <form> anidado dentro de otro es HTML inválido y el
+  // navegador lo "explota": fue justo el fallo real, el clic acababa
+  // reenviando el formulario grande entero en vez de restablecer el campo).
+  // Mismo patrón que ya usa el resto del CRM (apptCard/reservationCard):
+  // un solo formulario, botones distinguidos por su name="restablecer".
+  const resetBtn = overridden
+    ? `<button type="submit" name="restablecer" value="${esc(name)}" class="ibtn" title="Quitar este valor y volver al de siempre" aria-label="Restablecer" onclick="return confirm('¿Quitar este valor puesto a mano y volver al de siempre?')">↺</button>`
+    : "";
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #f0f1f3"><label for="aj-${name}" style="font-size:13.5px;color:var(--ink-dim);flex-shrink:0;margin:0">${esc(label)}</label><span style="display:flex;align-items:center;gap:8px"><input id="aj-${name}" name="${name}" type="${type}" value="${esc(String(value))}" style="width:220px;margin:0;text-align:right">${overridden ? `<span class="tag" style="background:var(--ok-bg);color:#1f7a42">Editado</span>` : ""}${resetBtn}</span></div>`;
 }
 crm.get("/ajustes", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
@@ -3545,27 +3561,39 @@ ${ajustesRow("Precio de traspaso", "Sin confirmar -- nunca se da una cifra al cl
 <p class="sub"><a class="link" href="/crm/integraciones">Ver conexiones y agentes de IA →</a> · <a class="link" href="/crm/equipo">Ver usuarios del equipo →</a></p>`;
   res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
 });
+// Campos de texto/número de Ajustes que admiten valor a mano -- lista
+// blanca compartida entre el guardado general y el restablecer de abajo.
+const AJUSTES_TEXT_FIELDS = ["whatsapp_number", "ramon_phone", "jose_phone", "address", "how_to_arrive"] as const;
+const AJUSTES_NUM_FIELDS = ["financing_min_price_eur", "financing_max_km", "financing_max_age_years"] as const;
 crm.post("/ajustes", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
-  const num = (raw: unknown): number | null => {
-    const s = String(raw ?? "").trim();
-    if (s === "") return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  };
-  saveBusinessOverrides(
-    {
-      whatsapp_number: String(req.body.whatsapp_number ?? "").trim() || null,
-      ramon_phone: String(req.body.ramon_phone ?? "").trim() || null,
-      jose_phone: String(req.body.jose_phone ?? "").trim() || null,
-      address: String(req.body.address ?? "").trim() || null,
-      how_to_arrive: String(req.body.how_to_arrive ?? "").trim() || null,
-      financing_min_price_eur: num(req.body.financing_min_price_eur),
-      financing_max_km: num(req.body.financing_max_km),
-      financing_max_age_years: num(req.body.financing_max_age_years),
-    },
-    me(res).email,
-  );
+  // Botón ↺ de una fila concreta (name="restablecer") -- SOLO quita ese
+  // campo, ignora el resto de valores que el navegador manda igualmente al
+  // reenviar el formulario entero (son los que ya había, no una edición
+  // nueva de esos otros campos; tratarlos como guardado sería sorprendente).
+  const restablecer = String(req.body.restablecer ?? "");
+  if (restablecer) {
+    if (!(AJUSTES_TEXT_FIELDS as readonly string[]).includes(restablecer) && !(AJUSTES_NUM_FIELDS as readonly string[]).includes(restablecer)) {
+      return back(res, "/crm/ajustes", "No reconozco ese campo");
+    }
+    saveBusinessOverrides({ [restablecer]: null }, me(res).email);
+    return back(res, "/crm/ajustes", "Restablecido al valor de siempre");
+  }
+  // Botón "Guardar cambios": un campo vacío NUNCA borra nada -- solo se
+  // guarda lo que de verdad se escribió.
+  const patch: Record<string, string | number> = {};
+  for (const key of AJUSTES_TEXT_FIELDS) {
+    const v = String(req.body[key] ?? "").trim();
+    if (v) patch[key] = v;
+  }
+  for (const key of AJUSTES_NUM_FIELDS) {
+    const raw = String(req.body[key] ?? "").trim();
+    if (raw === "") continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) patch[key] = n;
+  }
+  if (Object.keys(patch).length === 0) return back(res, "/crm/ajustes", "No había ningún cambio que guardar");
+  saveBusinessOverrides(patch, me(res).email);
   back(res, "/crm/ajustes", "Cambios guardados -- el agente ya los usa");
 });
 
