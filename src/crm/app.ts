@@ -12,7 +12,7 @@ import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
 import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
-import { normalizePhone } from "../tools/leads.js";
+import { normalizePhone, upsertLead } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
@@ -279,10 +279,26 @@ function contactLeadBlock(allLeads: Lead[], user: CrmUser, appts: Appointment[],
   }
   return leadCard(lead, user, leadPhase(lead, appts, resv, today, financing), findPossibleDuplicate(lead, allLeads), appts);
 }
-// Iniciales en insignia gris (25/10/2026, Contactos Pro) -- a petición
-// real ("no me gusta ese diseño circular en las tarjetas"): mismo
-// cuadrado redondeado gris que ya usa el menú lateral, nunca un círculo
-// de color. Un único lenguaje visual para toda la app.
+// Avatar circular de color por contacto (25/10/2026, Lucero PRO -- "hazlo
+// exactamente igual" al mockup de referencia, que sí lleva círculos de
+// color). Solo lo usa Contactos; el cuadrado gris se queda para el menú
+// lateral y el usuario conectado, que son insignias de interfaz, no de
+// persona. Puramente decorativo para distinguir filas de un vistazo,
+// nunca significa nada por sí mismo -- determinista: el mismo teléfono/
+// correo siempre sale del mismo color.
+const AVATAR_PALETTE: [string, string][] = [
+  ["#fde4cf", "#b5551f"], ["#fde0e6", "#b5365b"], ["#f3e8c7", "#8a6a1a"], ["#d9f2e3", "#1f8a55"],
+  ["#e6e0fb", "#5b3fb0"], ["#fdf3c0", "#8a6d12"], ["#d3f3ef", "#1b8278"], ["#dce8fb", "#2c5fb0"],
+];
+function avatarColor(key: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+}
+function avatarBadge(key: string, name: string, size = 36): string {
+  const [bg, fg] = avatarColor(key || name);
+  return `<div class="avatar" style="width:${size}px;height:${size}px;background:${bg};color:${fg};font-size:${Math.round(size * 0.34)}px">${esc(avatarInitials(name))}</div>`;
+}
 function avatarInitials(name: string): string {
   const trimmed = name.trim();
   // Sin ficha todavía: el "nombre" es el teléfono/correo en crudo -- las 2
@@ -557,6 +573,32 @@ function vehicleName(id: string | undefined | null): string {
   const v = currentVehicles().find((x) => x.id === id);
   return v ? `${v.make} ${v.model} ${v.year ?? ""}`.trim() : "Coche sin nombre";
 }
+// Tarjeta de vehículo en la ficha de un contacto (25/10/2026, mockup) --
+// SOLO cuando `vehicle_interest` (texto libre que escribe el agente de
+// IA) coincide EXACTO, sin difusión, con un coche real del catálogo. Se
+// prueban 3 formas reales de nombrarlo (sin versión, con versión, con
+// año) porque el agente no siempre incluye todos los datos -- nunca se
+// adivina "el más parecido": si ninguna forma coincide del todo, no hay
+// tarjeta, se queda como texto (ver contactDetailHeader/Interés). Sin
+// foto: el catálogo real (vehicles-seed.ts) no guarda ninguna imagen, así
+// que no se inventa una.
+function findExactVehicleMatch(interest: string | null | undefined): import("../data/vehicles-seed.js").Vehicle | null {
+  const key = (interest ?? "").trim().toLowerCase();
+  if (!key) return null;
+  return currentVehicles().find((v) => {
+    const forms = [`${v.make} ${v.model}`, `${v.make} ${v.model} ${v.version}`, vehicleName(v.id)];
+    return forms.some((f) => f.trim().toLowerCase() === key);
+  }) ?? null;
+}
+function vehicleCard(v: import("../data/vehicles-seed.js").Vehicle): string {
+  return `<div class="box" style="display:flex;gap:14px;align-items:center">
+<div>
+<b style="font-size:15px">${esc(`${v.make} ${v.model} ${v.version}`.trim())}</b>
+<p class="sub" style="margin:2px 0 0">${esc(priceOf(v.id).toLocaleString("es-ES"))} € · ${esc(v.fuel)}${v.year ? ` · ${v.year}` : ""} · ${esc(v.km.toLocaleString("es-ES"))} km</p>
+<a class="link" href="/crm/coches/${esc(v.id)}" style="font-size:13px">Ver vehículo →</a>
+</div>
+</div>`;
+}
 function priceOf(vehicleId: string): number {
   const override = list<VehicleOverride>("vehicle_overrides").find((o) => o.vehicle_id === vehicleId);
   return override?.price_eur ?? vehiclesSeed.find((v) => v.id === vehicleId)?.price_eur ?? 0;
@@ -660,40 +702,70 @@ function toggleCard(href: string, icon: string, iconBg: string, iconColor: strin
 }
 
 // ---------- pantalla ----------
-// Rediseño visual CRM PRO (25/10/2026, "el rediseño visual completo
-// primero (menú, Hoy, identidad)"): las mismas 14 rutas reales de
-// siempre, reagrupadas visualmente según el encargo maestro (Principal /
-// Comercial / Comunicación / Operación / Análisis / Administración) --
-// ninguna ruta nueva, ninguna ruta eliminada. Secciones del encargo sin
-// página real detrás (Anuncios, Agenda-calendario, Ventas, Ajustes,
-// Ayuda, Asistentes como página propia) NO se añaden aquí -- se añadirían
-// cuando (y solo cuando) existan de verdad, nunca antes. "Coches" y
-// "Equipo" se renombran a "Vehículos"/"Usuarios" (puro vocabulario, sus
-// rutas en /crm/coches y /crm/equipo no cambian).
-const NAV_GROUPS: { label: string; items: [string, string][] }[] = [
-  { label: "Principal", items: [["/crm", "Hoy"], ["/crm/entrada", "Entrada de leads"]] },
-  { label: "Comercial", items: [["/crm/clientes", "Clientes y oportunidades"], ["/crm/embudo", "Embudo comercial"], ["/crm/seguimiento", "Seguimiento"], ["/crm/publicidad", "Clientes para publicidad"]] },
-  { label: "Comunicación", items: [["/crm/contactos/whatsapp", "Contactos"], ["/crm/incidencias", "Incidencias"]] },
-  { label: "Operación", items: [["/crm/citas", "Visitas"], ["/crm/reservas", "Reservas"], ["/crm/coches", "Vehículos"]] },
-  { label: "Análisis", items: [["/crm/informes", "Informes"]] },
+// Lucero PRO (25/10/2026, "hazlo exactamente igual" al mockup de
+// referencia): menú lateral en lista plana, con el orden y las 19
+// secciones exactas del mockup. Las páginas reales que ya existían y no
+// aparecen en el mockup (Clientes y oportunidades, Embudo comercial,
+// Seguimiento -> ya es "Tareas" aquí, Incidencias, Entrada de leads,
+// Clientes para publicidad, Studio IA) NO se eliminan -- sus rutas siguen
+// vivas y alcanzables (desde "Editar/ver ficha" en Contactos, desde
+// Buscar, o por URL directa), simplemente no están en este menú, mismo
+// criterio que ya se usó al sacar Llamadas/WhatsApp/Correos del menú
+// cuando se construyó Contactos. Las 4 secciones del mockup sin página
+// real detrás (Anuncios/Agenda/Ventas/Ajustes) se construyen como rutas
+// reales con un estado honesto "en construcción" -- nunca decorativas,
+// nunca con datos inventados.
+const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean }[] = [
+  { key: "home", href: "/crm", label: "Inicio" },
+  { key: "car", href: "/crm/coches", label: "Vehículos" },
+  { key: "megaphone", href: "/crm/anuncios", label: "Anuncios" },
+  { key: "user", href: "/crm/contactos", label: "Contactos" },
+  { key: "message", href: "/crm/contactos/mensajes", label: "Mensajes" },
+  { key: "phone", href: "/crm/contactos/whatsapp", label: "WhatsApp" },
+  { key: "phone", href: "/crm/contactos/llamadas", label: "Llamadas" },
+  { key: "mail", href: "/crm/contactos/correo", label: "Correo" },
+  { key: "calendar", href: "/crm/agenda", label: "Agenda" },
+  { key: "pin", href: "/crm/citas", label: "Visitas" },
+  { key: "bookmark", href: "/crm/reservas", label: "Reservas" },
+  { key: "trending", href: "/crm/ventas", label: "Ventas" },
+  { key: "check", href: "/crm/seguimiento", label: "Tareas" },
+  { key: "chart", href: "/crm/informes", label: "Informes" },
+  { key: "cpu", href: "/crm/integraciones#agentes-ia", label: "Asistentes", adminOnly: true },
+  { key: "plug", href: "/crm/integraciones", label: "Integraciones", adminOnly: true },
+  { key: "users", href: "/crm/equipo", label: "Usuarios", adminOnly: true },
+  { key: "settings", href: "/crm/ajustes", label: "Ajustes", adminOnly: true },
+  { key: "trash", href: "/crm/papelera", label: "Papelera", adminOnly: true },
 ];
-const ADMIN_NAV_GROUP: { label: string; items: [string, string][] } = {
-  label: "Administración",
-  items: [["/crm/integraciones", "Integraciones"], ["/crm/equipo", "Usuarios"], ["/crm/papelera", "Papelera"], ["/crm/studio", "Studio IA"]],
+// Iconos de línea minimalistas, inline (sin depender de ningún CDN/
+// librería externa -- este backend no sirve assets de terceros). Un solo
+// trazo por icono, mismo estilo visual que el mockup.
+const NAV_ICON_PATHS: Record<string, string> = {
+  home: "M3 10.5 12 3l9 7.5M5.5 9.5V20a1 1 0 0 0 1 1h3.5v-6h4v6H17a1 1 0 0 0 1-1V9.5",
+  car: "M5 16.5h14M6.5 16.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm11 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5 12.5l1.3-4a2 2 0 0 1 1.9-1.4h7.6a2 2 0 0 1 1.9 1.4l1.3 4H5Z",
+  megaphone: "M3 10v4a1 1 0 0 0 1 1h2l5.5 4V5L6 9H4a1 1 0 0 0-1 1Zm14-2.2a4 4 0 0 1 0 8.4M19 4.5a8 8 0 0 1 0 15",
+  user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 9c0-4 3.6-7 8-7s8 3 8 7",
+  message: "M21 11.5a8.5 8.5 0 0 1-12.3 7.6L4 20l1-4.7a8.5 8.5 0 1 1 16-3.8Z",
+  phone: "M6.6 10.8a15.3 15.3 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.2 2.5.6 3.6a1 1 0 0 1-.25 1l-2.25 2.2Z",
+  mail: "M4 5.5h16a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Zm-.6 1.1 8.6 6.3 8.6-6.3",
+  calendar: "M7 3v3.2M17 3v3.2M4.5 9h15M5.5 5.5h13a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Z",
+  pin: "M12 21s7-6.3 7-11.5A7 7 0 0 0 5 9.5C5 14.7 12 21 12 21Zm0-9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
+  bookmark: "M6.5 3h11a1 1 0 0 1 1 1v17l-6.5-4-6.5 4V4a1 1 0 0 1 1-1Z",
+  trending: "M3 17l6-6 4 4 7.5-8.5M14 6.5h6.5V13",
+  check: "M9 12.2l2 2 4-4.2M5.5 4h13a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z",
+  chart: "M4.5 20V10.5M11 20V4.5M17.5 20v-7M4.5 20h16",
+  cpu: "M8.5 4v3M12 4v3M15.5 4v3M8.5 17v3M12 17v3M15.5 17v3M4 8.5h3M4 12h3M4 15.5h3M17 8.5h3M17 12h3M17 15.5h3M7.5 7.5h9v9h-9Z",
+  plug: "M9 3v5M15 3v5M6 8h12l-1 4.7a5 5 0 0 1-10 0L6 8Zm3 10v3m6-3v3",
+  users: "M15.5 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.9M16.5 3.1a4 4 0 0 1 0 7.8",
+  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-2.1a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V19a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V4a2 2 0 0 1 4 0v.1c0 .7.4 1.3 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1c.3.6.9 1 1.6 1H20a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z",
+  trash: "M4 7h16M9.5 7V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7m-8 0 1 12.2a1 1 0 0 0 1 .8h5.6a1 1 0 0 0 1-.8L18 7",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm9 2-5.2-5.2",
+  bell: "M12 3a5 5 0 0 0-5 5v3.3c0 .6-.2 1.2-.6 1.7L5 15h14l-1.4-2c-.4-.5-.6-1.1-.6-1.7V8a5 5 0 0 0-5-5Zm-2.5 15a2.5 2.5 0 0 0 5 0",
+  plus: "M12 5v14M5 12h14",
+  chevron: "M6 9l6 6 6-6",
 };
-
-// Iniciales para la insignia de cada enlace del menú cuando está
-// colapsado (25/10/2026) -- puramente decorativo, nunca sustituye al
-// texto (que sigue siendo el nombre real de la sección al expandir). Dos
-// palabras -> una letra de cada una (p.ej. "Clientes y oportunidades" ->
-// "CO"); una sola palabra -> sus 3 primeras letras, para no confundir
-// "Incidencias"/"Informes"/"Integraciones" con el mismo "IN".
-const NAV_STOPWORDS = new Set(["y", "de", "del", "la", "el", "los", "las", "en", "para", "con"]);
-function navInitials(label: string): string {
-  const words = label.split(/\s+/).filter((w) => w && !NAV_STOPWORDS.has(w.toLowerCase()));
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
-  const letters = (words[0] ?? label).replace(/[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]/g, "");
-  return (letters.slice(0, 3) || "·").toUpperCase();
+function navIcon(key: string, size = 18): string {
+  const d = NAV_ICON_PATHS[key] ?? NAV_ICON_PATHS.user;
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
 }
 
 function page(section: string, user: CrmUser, body: string, msg?: string): string {
@@ -701,10 +773,7 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   // petición real ("a esa seccion, solo puedo acceder yo y el correo de
   // automoviles lucero o administradores") queda reservada a admins, igual
   // que Papelera/Integraciones/Equipo.
-  const navGroups: { label: string; items: [string, string][] }[] = [
-    ...NAV_GROUPS,
-    ...(user.role === "admin" ? [ADMIN_NAV_GROUP] : []),
-  ];
+  const navItems = NAV_ITEMS.filter((it) => !it.adminOnly || user.role === "admin");
   // Datos reales para la barra superior (25/10/2026) -- nunca inventados,
   // mismos conteos/condiciones ya usados en Hoy y en Correos/WhatsApp/
   // Incidencias, recalculados aquí porque la barra la comparten todas
@@ -742,43 +811,50 @@ body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;b
    propio <main> no cambia). En móvil (<=900px) la barra lateral vuelve a
    ser horizontal, sin colapsar (es más usable con poco ancho).*/
 body{display:flex;min-height:100vh}
-header{background:var(--panel);color:var(--ink);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:14px;flex:0 0 220px;width:220px;height:100vh;position:sticky;top:0;align-self:flex-start;transition:width .15s,flex-basis .15s}
+header{background:var(--bg);color:var(--ink);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:14px;flex:0 0 226px;width:226px;height:100vh;position:sticky;top:0;align-self:flex-start;transition:width .15s,flex-basis .15s}
 header .brand{display:flex;align-items:center;gap:10px}
-header .brand strong{font-size:17px;white-space:nowrap;overflow:hidden}
-header form{margin-top:auto}
+header .brand .wordmark{font-size:19px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;letter-spacing:-.02em}
+header .brand .wordmark em{font-style:normal;background:var(--accent);color:#fff;font-size:11px;font-weight:800;padding:2px 7px;border-radius:999px;margin-left:5px;vertical-align:2px}
+header .brand .subbrand{display:block;font-size:9.5px;font-weight:600;letter-spacing:.09em;color:var(--ink-dim);white-space:nowrap;overflow:hidden;margin-top:1px}
 .sidebar-toggle{background:none;border:1px solid var(--border);border-radius:8px;width:30px;height:30px;flex:0 0 30px;font-size:15px;line-height:1;cursor:pointer;color:var(--ink-dim)}
-.sidebar-toggle:hover{background:#fff}
-nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto}
-nav .navgroup{margin-top:10px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-dim);padding:0 10px}
-nav .navgroup:first-child{margin-top:0}
-nav a{color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;font-size:14px}
-nav a .navinit{flex:0 0 26px;width:26px;height:24px;border-radius:7px;background:#eceff3;color:var(--ink-dim);font-size:10px;letter-spacing:-.02em;font-weight:700;display:flex;align-items:center;justify-content:center}
+.sidebar-toggle:hover{background:var(--panel)}
+nav{display:flex;flex-direction:column;gap:1px;flex:1;overflow-y:auto}
+nav a{color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:9px;font-size:13.5px}
+nav a .navicon{flex:0 0 18px;display:flex;color:var(--ink-dim)}
 nav a .navlabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-nav a:hover{background:#eceff3}
-nav a.on{background:var(--accent);color:#fff;font-weight:700}
-nav a.on .navinit{background:rgba(255,255,255,.25);color:#fff}
+nav a:hover{background:var(--panel)}
+nav a.on{background:var(--accent-dim);color:var(--accent);font-weight:700}
+nav a.on .navicon{color:var(--accent)}
+.sidebar-user{display:flex;align-items:center;gap:10px;padding:10px 6px 2px;border-top:1px solid var(--border);margin-top:4px}
+.sidebar-user .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
+.sidebar-user .uname{font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar-user .urole{font-size:11px;color:var(--ink-dim)}
+.sidebar-user form{margin:0 0 0 auto}
+.sidebar-user form button{padding:5px 9px;font-size:12px;margin:0}
 header.collapsed{width:60px;flex:0 0 60px;padding:16px 8px}
-header.collapsed .brand strong,header.collapsed nav .navgroup,header.collapsed nav a .navlabel,header.collapsed form button{display:none}
+header.collapsed .brand .wordmark,header.collapsed .brand .subbrand,header.collapsed nav a .navlabel,header.collapsed .sidebar-user .uname,header.collapsed .sidebar-user .urole,header.collapsed .sidebar-user form{display:none}
 header.collapsed nav a{justify-content:center;padding:9px 0}
-header.collapsed form{display:flex;justify-content:center}
+header.collapsed .sidebar-user{justify-content:center}
 .appcol{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
 .topbar{display:flex;align-items:center;gap:10px;background:var(--bg);border-bottom:1px solid var(--border);padding:10px 18px;position:sticky;top:0;z-index:5;flex-wrap:wrap}
-.topbar-search{flex:1;min-width:200px;max-width:460px;margin:0;display:flex;gap:6px}
-.topbar-search input{flex:1;margin:0;padding:8px 12px;font-size:14px}
-.topbar-pill{display:inline-flex;align-items:center;gap:5px;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;white-space:nowrap}
-.topbar-pill:hover{background:#eceff3}
-.topbar-dot{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
-.topbar-dot.ok{background:var(--ok)}
-.topbar-dot.down{background:var(--urgent)}
-.topbar-user{margin-left:auto;font-size:13px;color:var(--ink-dim);white-space:nowrap;text-align:right}
-.topbar-user small{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.topbar-search{flex:1;min-width:200px;max-width:520px;margin:0;display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:0 6px 0 10px}
+.topbar-search svg{flex:0 0 16px;color:var(--ink-dim)}
+.topbar-search input{flex:1;margin:0;padding:9px 6px;font-size:14px;background:transparent;border:0}
+.topbar-search kbd{font:inherit;font-size:11px;color:var(--ink-dim);background:#fff;border:1px solid var(--border);border-radius:6px;padding:2px 6px;margin:0}
+.topbar-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--ink);text-decoration:none;position:relative;flex-shrink:0}
+.topbar-icon:hover{background:var(--panel)}
+.topbar-icon .badge{position:absolute;top:-6px;right:-6px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;border-radius:999px;min-width:17px;height:17px;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.topbar-status{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);white-space:nowrap}
+.topbar-status .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+.topbar-status .dot.ok{background:var(--ok)}
+.topbar-status .dot.down{background:var(--urgent)}
+.topbar-biz{display:flex;align-items:center;gap:4px;font-size:14px;font-weight:700;color:var(--ink);text-decoration:none;white-space:nowrap}
 main{flex:1;min-width:0;max-width:1440px;width:100%;margin:0 auto;padding:18px}
 @media(max-width:900px){
 body{display:block}
 header{position:static;width:auto!important;flex:none!important;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
-header form{margin-top:0}
 nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible}
-nav .navgroup{display:none}
+.sidebar-user{border-top:0}
 }
 h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
 h2{font-size:20px;margin:20px 0 10px}
@@ -846,6 +922,12 @@ label{font-size:14px;font-weight:700;color:var(--ink)}
 .side-nav a:hover{background:#e4e7ec}
 .side-nav a.on-tab{background:var(--accent);color:#fff}
 .side-nav a.on-tab .tag{background:#fff!important;color:var(--accent)!important}
+/* Pestañas horizontales de Contactos (25/10/2026, mockup: Mensajes/
+   WhatsApp/Llamadas/Correo arriba, subrayado rojo en la activa). */
+.htabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin-bottom:16px;flex-wrap:wrap}
+.htabs a{display:inline-flex;align-items:center;gap:6px;padding:4px 2px 11px;color:var(--ink-dim);text-decoration:none;font-size:14px;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px}
+.htabs a.on-tab{color:var(--ink);border-bottom-color:var(--accent)}
+.htabs a .tag{background:var(--accent);color:#fff;font-size:11px;padding:1px 7px}
 .side-content{flex:1;min-width:0}
 @media(max-width:900px){.side-layout{flex-direction:column}.side-nav{position:static;flex-direction:row;flex-wrap:wrap;width:100%}}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
@@ -923,7 +1005,7 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .contact-row{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
 .contact-row:hover{background:var(--panel)}
 .contact-row.active{background:var(--accent-dim)}
-.contact-row .avatar{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:var(--ink-dim);background:#eceff3;flex-shrink:0}
+.contact-row .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0}
 .contact-row .rbody{flex:1;min-width:0}
 .contact-row .rbody b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .contact-row .rbody .rsub{display:block;font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -947,23 +1029,27 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 @media print{header,nav,.noprint,.btn{display:none!important}body{background:#fff}main{max-width:none}.card{box-shadow:none;border:1px solid #999}}
 </style></head><body>
 <header id="sidebar">
-<div class="brand"><button class="sidebar-toggle" type="button" aria-label="Contraer o expandir el menú" onclick="luceroToggleSidebar()">☰</button><strong>Automóviles Lucero</strong></div>
-<nav>${navGroups.map((g) => `<div class="navgroup">${esc(g.label)}</div>${g.items.map(([href, label]) => `<a href="${href}" class="${section === label ? "on" : ""}" title="${esc(label)}"><span class="navinit">${esc(navInitials(label))}</span><span class="navlabel">${esc(label)}</span></a>`).join("")}`).join("")}</nav>
-<form method="post" action="/crm/salir" style="margin:0"><button class="btn light" type="submit">Salir</button></form></header>
+<div class="brand"><button class="sidebar-toggle" type="button" aria-label="Contraer o expandir el menú" onclick="luceroToggleSidebar()">☰</button><div><span class="wordmark">LUCERO<em>PRO</em></span><span class="subbrand">AUTOMÓVILES LUCERO</span></div></div>
+<nav>${navItems.map((it) => `<a href="${it.href}" class="${section === it.label ? "on" : ""}" title="${esc(it.label)}"><span class="navicon">${navIcon(it.key)}</span><span class="navlabel">${esc(it.label)}</span></a>`).join("")}</nav>
+<div class="sidebar-user"><div class="avatar">${esc(avatarInitials(user.name))}</div><div style="min-width:0"><div class="uname">${esc(user.name)}</div><div class="urole">${esc(roleLabel[user.role] ?? user.role)}</div></div><form method="post" action="/crm/salir"><button class="btn light" type="submit">Salir</button></form></div>
+</header>
 <div class="appcol">
 <div class="topbar noprint">
-<form class="topbar-search" method="get" action="/crm/buscar"><input name="q" placeholder="Buscar: nombre, teléfono o coche" required><button class="btn" type="submit" style="padding:8px 14px;font-size:13px;margin:0">Buscar</button></form>
-<a class="topbar-pill" href="/crm/seguimiento" title="Crear una tarea">+ Tarea</a>
-<a class="topbar-pill" href="${msgHref}" title="${esc(msgTitle)}">✉ ${msgTotal}</a>
-<a class="topbar-pill" href="/crm" title="${esc(notifTitle)}">🔔 ${notifTotal}</a>
-${user.role === "admin" ? `<a class="topbar-dot ${integrationsOk ? "ok" : "down"}" href="/crm/integraciones" title="${integrationsOk ? "Integraciones operativas" : "Hay alguna integración caída -- revisa Integraciones"}"></a>` : ""}
-<span class="topbar-user">${esc(user.name)}<small>${esc(roleLabel[user.role] ?? user.role)}</small></span>
+<form class="topbar-search" method="get" action="/crm/buscar">${navIcon("search", 16)}<input id="lucero-search" name="q" placeholder="Buscar contactos, vehículos, matrículas..." required><kbd>⌘K</kbd></form>
+<a class="topbar-icon" href="/crm/seguimiento" title="Crear una tarea">${navIcon("plus", 18)}</a>
+<a class="topbar-icon" href="${msgHref}" title="${esc(msgTitle)}">${navIcon("message", 18)}${msgTotal > 0 ? `<span class="badge">${msgTotal > 99 ? "99+" : msgTotal}</span>` : ""}</a>
+<a class="topbar-icon" href="/crm" title="${esc(notifTitle)}">${navIcon("bell", 18)}${notifTotal > 0 ? `<span class="badge">${notifTotal > 99 ? "99+" : notifTotal}</span>` : ""}</a>
+<span class="topbar-status"><span class="dot ${integrationsOk ? "ok" : "down"}"></span>${integrationsOk ? "Asistentes activos" : "Revisar asistentes"}</span>
+<a class="topbar-biz" href="/crm/integraciones" style="margin-left:auto">Automóviles Lucero${navIcon("chevron", 14)}</a>
 </div>
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}${body}</main>
 </div>
 <script>
 function luceroToggleSidebar(){try{var h=document.getElementById('sidebar');var on=h.classList.toggle('collapsed');localStorage.setItem('lucero_sidebar_collapsed',on?'1':'0')}catch(e){}}
 (function(){try{if(localStorage.getItem('lucero_sidebar_collapsed')==='1'){var h=document.getElementById('sidebar');if(h)h.classList.add('collapsed')}}catch(e){}})();
+document.addEventListener("keydown", function (e) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); var s = document.getElementById("lucero-search"); if (s) s.focus(); }
+});
 </script>
 <script>
 // Mantiene el scroll al enviar un formulario (14/10/2026, a petición real:
@@ -1443,7 +1529,7 @@ ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBu
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="cards-grid">${todayAppts.map(apptCard).join("")}</div>`}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="cards-grid">${upcoming.map(apptCard).join("")}</div>`}
 <h2>Reservas que hay que atender</h2>${toAttend.length === 0 ? `<div class="empty">No hay reservas esperando.</div>` : `<div class="cards-grid">${toAttend.map((r) => reservationCard(r, me(res))).join("")}</div>`}`;
-  res.type("html").send(page("Hoy", me(res), body, msgOf(req)));
+  res.type("html").send(page("Inicio", me(res), body, msgOf(req)));
 });
 
 // ---------- Buscar ----------
@@ -1807,7 +1893,7 @@ crm.get("/seguimiento", (req, res) => {
   if (f === "completadas") items = items.filter((t) => t.status === "completada");
   items = items.sort((a, b) => (b.priority === "alta" ? 1 : 0) - (a.priority === "alta" ? 1 : 0) || (a.due_at ?? "9999").localeCompare(b.due_at ?? "9999"));
   const pill = (k: string, label: string) => `<a href="/crm/seguimiento?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
-  const body = `<h1>Seguimiento</h1>
+  const body = `<h1>Tareas</h1>
 <p class="sub">Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar, cliente que no se presentó, handoff urgente), otras se añaden a mano.</p>
 ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">🔥 ${hotWithoutAction.length} cliente(s) caliente(s) sin próxima acción definida: ${hotWithoutAction.map((l) => `<a class="link" href="/crm/clientes?q=${esc(l.phone ?? "")}">${esc(leadDisplayName(l))}</a>`).join(", ")}</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Añadir una tarea</h3>
@@ -1820,7 +1906,7 @@ ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;bord
 <button class="btn ok" type="submit">Crear tarea</button></form></div>
 <p>${pill("pendientes", "Pendientes")} ${pill("vencidas", "Vencidas")} ${pill("completadas", "Completadas")} ${pill("todas", "Todas")}</p>
 ${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : `<div class="cards-grid">${items.map(taskCard).join("")}</div>`}`;
-  res.type("html").send(page("Seguimiento", me(res), body, msgOf(req)));
+  res.type("html").send(page("Tareas", me(res), body, msgOf(req)));
 });
 crm.post("/seguimiento", (req, res) => {
   const type = String(req.body.type ?? "otra") as TaskType;
@@ -2123,7 +2209,17 @@ function filterPills(base: string, f: MsgFilter, q: string, withAnswered: boolea
     ? [["todos", "Todos"], ["pendientes", "Pendientes"], ["respondidos", "Respondidos"], ["sin_leer", "Sin leer"], ["archivados", "Archivados"]]
     : [["todos", "Todas"], ["sin_leer", "Sin leer"], ["archivados", "Archivadas"]];
   const qs = q ? `&q=${encodeURIComponent(q)}` : "";
-  return `<div class="filterbar">${labels.map(([k, label]) => `<a class="tag" href="${base}?f=${k}${qs}" style="${f === k ? "outline:4px solid #1d2b44" : ""}">${esc(label)}</a>`).join("")}</div>`;
+  return `<div class="filterbar">${labels.map(([k, label]) => `<a class="tag" href="${base}?f=${k}${qs}" style="${f === k ? "outline:3px solid var(--accent)" : ""}">${esc(label)}</a>`).join("")}</div>`;
+}
+// Desplegable de filtro (25/10/2026, Contactos -- mockup: "Todas las
+// llamadas" como <select>, no pastillas). Mismos valores/semántica que
+// filterPills, solo cambia la forma; navega de verdad al elegir.
+function filterDropdown(base: string, f: MsgFilter, q: string, withAnswered: boolean, allLabel: string): string {
+  const labels: [MsgFilter, string][] = withAnswered
+    ? [["todos", allLabel], ["pendientes", "Pendientes"], ["respondidos", "Respondidos"], ["sin_leer", "Sin leer"], ["archivados", "Archivados"]]
+    : [["todos", allLabel], ["sin_leer", "Sin leer"], ["archivados", "Archivadas"]];
+  const qs = q ? `&q=${encodeURIComponent(q)}` : "";
+  return `<select onchange="location.href=this.value" style="width:auto;min-width:200px;margin:0">${labels.map(([k, label]) => `<option value="${esc(base)}?f=${k}${qs}" ${f === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
 }
 function searchBox(base: string, f: MsgFilter, q: string, placeholder: string): string {
   return `<form class="search" method="get" action="${base}">${f !== "todos" ? `<input type="hidden" name="f" value="${esc(f)}">` : ""}<input name="q" placeholder="${esc(placeholder)}" value="${esc(q)}"><button class="btn" type="submit">Buscar</button>${q ? `<a class="btn light" href="${base}${f !== "todos" ? `?f=${f}` : ""}">Quitar filtro</a>` : ""}</form>`;
@@ -2430,7 +2526,7 @@ crm.post("/llamadas-masivo", (req, res) => {
 // qué vehículo del catálogo se refiere podría mostrar el coche equivocado
 // a un cliente real, así que se muestra como texto, nunca como una ficha
 // de coche que parece más segura de lo que es.
-const CONTACTOS_CANALES = ["whatsapp", "correo", "llamadas"] as const;
+const CONTACTOS_CANALES = ["mensajes", "whatsapp", "correo", "llamadas"] as const;
 type ContactoCanal = (typeof CONTACTOS_CANALES)[number];
 const CONTACTOS_PAGE_SIZE = 50;
 
@@ -2448,7 +2544,7 @@ function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: st
     ? `<span class="tag" style="background:var(--ok-bg);color:#1d6b3d">Cliente</span>`
     : `<span class="tag" style="background:#fdecea;color:#7a1c17">Sin ficha</span>`;
   return `<div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
-<div class="avatar" style="width:52px;height:52px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--ink-dim);background:#eceff3;flex-shrink:0">${esc(avatarInitials(name))}</div>
+${avatarBadge(phone || email || name, name, 52)}
 <div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}</p></div>
 </div>`;
 }
@@ -2478,7 +2574,7 @@ function callsContactos(f: MsgFilter, q: string, pageNum: number, navBase: strin
     const sub = lead?.vehicle_interest || m.summary || "Sin resumen";
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar">${esc(avatarInitials(name))}</div>
+${avatarBadge(m.from_number || m.id, name)}
 <div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(sub)}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${m.needs_review ? `<span class="tag" style="background:var(--urgent);color:#fff;font-size:10px;padding:2px 6px">Revisar</span>` : ""}</div>
 </a>`;
@@ -2489,7 +2585,7 @@ function callsContactos(f: MsgFilter, q: string, pageNum: number, navBase: strin
   const dur = selected.duration_ms == null ? "—" : `${Math.floor(selected.duration_ms / 60000)}:${String(Math.round((selected.duration_ms % 60000) / 1000)).padStart(2, "0")}`;
   const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
   const detail = `${contactDetailHeader(lead, selected.from_number || "Número desconocido", selected.from_number, lead?.email ?? null)}
-${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Fecha<b>${esc(fecha ?? "—")}</b></div><div>Hora<b>${esc(hora ?? "—")}</b></div><div>Duración<b>${dur}</b></div><div>Tipo<b>${esc(dirLabel[selected.direction ?? ""] ?? "—")}</b></div><div>Responsable<b>Miguel (IA)</b></div></div>
 ${selected.issues_detected && selected.issues_detected !== "ninguno" ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px"><b>Incidencia detectada:</b> ${esc(selected.issues_detected)}</div>` : ""}
 <h3 style="margin-bottom:6px">Resumen</h3><p>${selected.summary ? esc(selected.summary) : "Sin resumen disponible."}</p>
@@ -2510,27 +2606,13 @@ ${selected.archived ? `<div class="activity-item ia">Archivada</div>` : ""}
   return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
 }
 
-function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
-  const all = list<WhatsappMessage>("whatsapp_inbox");
-  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
-  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
-  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
-  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((m) => {
-    const lead = findLeadForContact(allLeads, m.phone, null);
-    const name = lead?.name || m.phone;
-    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar">${esc(avatarInitials(name))}</div>
-<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.text)}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
-</a>`;
-  }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+// Ficha + actividad de un mensaje de WhatsApp (25/10/2026) -- factorizado
+// de whatsappContactos para que la pestaña combinada "Mensajes" pueda
+// reusar exactamente la misma ficha sin duplicar el HTML.
+function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: string): { detail: string; activity: string } {
   const lead = findLeadForContact(allLeads, selected.phone, null);
-  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
   const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
-${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${selected.answered ? (selected.answered_by === "ia" ? "Respondido (IA)" : "Respondido (equipo)") : "Pendiente"}</b></div></div>
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
 <h3 style="margin-bottom:6px">Mensaje</h3><div class="box" style="white-space:pre-wrap">${esc(selected.text)}</div>
@@ -2546,30 +2628,12 @@ ${selected.answered ? `<div class="activity-item ia">Respondido ${selected.answe
 ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 <h3>Notas internas</h3>
 <form method="post" action="/crm/whatsapp/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
-  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+  return { detail, activity };
 }
-
-function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
-  const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
-  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
-  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
-  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
-  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((m) => {
-    const lead = findLeadForContact(allLeads, null, m.from);
-    const name = lead?.name || m.from;
-    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
-<div class="avatar">${esc(avatarInitials(name))}</div>
-<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
-</a>`;
-  }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string): { detail: string; activity: string } {
   const lead = findLeadForContact(allLeads, null, selected.from);
-  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
   const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from)}
-${lead?.vehicle_interest ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>` : ""}
+${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Fecha<b>${esc(fmtDate(selected.created_at))}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${answeredTag(selected)}</b></div></div>
 ${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px">Hay que responder desde ${esc(platformLabel(selected.portal))}, no por correo.</div>` : ""}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
@@ -2586,14 +2650,170 @@ ${selected.answered ? `<div class="activity-item ia">Respondido ${selected.answe
 ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 <h3>Notas internas</h3>
 <form method="post" action="/crm/correos/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
+  return { detail, activity };
+}
+
+function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const all = list<WhatsappMessage>("whatsapp_inbox");
+  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((m) => {
+    const lead = findLeadForContact(allLeads, m.phone, null);
+    const name = lead?.name || m.phone;
+    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+${avatarBadge(m.phone, name)}
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.text)}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  const { detail, activity } = whatsappDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
   return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
 }
 
-crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/whatsapp"));
+function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
+  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((m) => {
+    const lead = findLeadForContact(allLeads, null, m.from);
+    const name = lead?.name || m.from;
+    const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+${avatarBadge(m.from, name)}
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  const { detail, activity } = correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
+  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+}
+
+// Mensajes (25/10/2026, pestaña combinada del mockup): WhatsApp + Correo
+// mezclados por fecha real, cada fila con su icono de canal -- reusa
+// whatsappDetailFor/correoDetailFor para la ficha, nunca duplica datos.
+type MensajeRow = { id: string; created_at: string; canal: "whatsapp" | "correo"; wa?: WhatsappMessage; mail?: InboxMail };
+function mensajesContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  const waAll = list<WhatsappMessage>("whatsapp_inbox").filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text));
+  const mailAll = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text));
+  const merged: MensajeRow[] = [
+    ...waAll.map((m): MensajeRow => ({ id: m.id, created_at: m.created_at, canal: "whatsapp", wa: m })),
+    ...mailAll.map((m): MensajeRow => ({ id: m.id, created_at: m.created_at, canal: "correo", mail: m })),
+  ].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const totalPages = Math.max(1, Math.ceil(merged.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = merged.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selected = merged.find((r) => r.id === selectedIdRaw) ?? pageItems[0] ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((r) => {
+    const phone = r.wa?.phone ?? null;
+    const email = r.mail?.from ?? null;
+    const lead = findLeadForContact(allLeads, phone, email);
+    const name = lead?.name || phone || email || "Desconocido";
+    const sub = r.canal === "whatsapp" ? r.wa!.text : (r.mail!.subject || "(sin asunto)");
+    const time = (fmtDate(r.created_at).split(", ")[1]) ?? "";
+    const answered = r.canal === "whatsapp" ? r.wa!.answered : r.mail!.answered;
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, r.id))}" class="contact-row${selected?.id === r.id ? " active" : ""}">
+${avatarBadge(phone || email || r.id, name)}
+<div class="rbody"><b>${esc(name)}</b><span class="rsub">${navIcon(r.canal === "whatsapp" ? "phone" : "mail", 12)} ${esc(sub)}</span></div>
+<div class="rmeta"><time>${esc(time)}</time>${!answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+</a>`;
+  }).join("");
+  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: merged.length, totalPages, selectedId: null };
+  const volver = contactosUrl(navBase, f, q, pageNum, selected.id);
+  const { detail, activity } = selected.canal === "whatsapp" ? whatsappDetailFor(selected.wa!, allLeads, volver) : correoDetailFor(selected.mail!, allLeads, volver);
+  return { rows, detail, activity, total: merged.length, totalPages, selectedId: selected.id };
+}
+
+// Secciones del mockup todavía sin módulo real detrás (25/10/2026,
+// Lucero PRO: "no quiero fallos" / nunca datos inventados) -- en vez de
+// quitarlas del menú o fingir contenido, un estado honesto de verdad: lo
+// que se puede hacer hoy mismo (enlaces a lo que sí existe) y que está
+// pendiente de construir. Nunca contadores ni listas falsas.
+function placeholderPage(title: string, why: string, mientrasTanto: { href: string; text: string }[]): string {
+  return `<h1>${esc(title)}</h1>
+<div class="box" style="background:var(--panel)"><b>Esta sección todavía está en construcción.</b><p class="sub" style="margin:8px 0 0">${esc(why)}</p></div>
+${mientrasTanto.length ? `<h2>Mientras tanto</h2>${mientrasTanto.map((m) => `<p><a class="link" href="${esc(m.href)}">${esc(m.text)} →</a></p>`).join("")}` : ""}`;
+}
+crm.get("/anuncios", (req, res) => {
+  const body = placeholderPage("Anuncios", "Publicar y gestionar anuncios en portales (Coches.net, Milanuncios...) desde aquí todavía no está construido.", [
+    { href: "/crm/coches", text: "Ver y editar el catálogo de vehículos" },
+    { href: "/crm/studio", text: "Generar contenido con el Studio IA" },
+  ]);
+  res.type("html").send(page("Anuncios", me(res), body, msgOf(req)));
+});
+crm.get("/agenda", (req, res) => {
+  const body = placeholderPage("Agenda", "Un calendario propio con todas las visitas, llamadas y tareas en una sola vista todavía no está construido.", [
+    { href: "/crm/citas", text: "Ver las visitas programadas" },
+    { href: "/crm/seguimiento", text: "Ver las tareas pendientes" },
+  ]);
+  res.type("html").send(page("Agenda", me(res), body, msgOf(req)));
+});
+crm.get("/ventas", (req, res) => {
+  const body = placeholderPage("Ventas", "Un resumen propio de ventas cerradas (importes, comisiones, histórico) todavía no está construido.", [
+    { href: "/crm/embudo", text: "Ver el embudo comercial" },
+    { href: "/crm/informes", text: "Ver los informes ya disponibles" },
+  ]);
+  res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
+});
+crm.get("/ajustes", (req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
+  const body = placeholderPage("Ajustes", "Un panel propio de configuración general (horarios, datos del negocio, plantillas) todavía no está construido.", [
+    { href: "/crm/integraciones", text: "Ver conexiones y agentes de IA" },
+    { href: "/crm/equipo", text: "Ver usuarios del equipo" },
+  ]);
+  res.type("html").send(page("Ajustes", me(res), body, msgOf(req)));
+});
+
+crm.get("/contactos", (_req, res) => res.redirect("/crm/contactos/mensajes"));
+
+// Alta manual de un contacto (25/10/2026, "+ Nuevo contacto" del mockup)
+// -- reusa upsertLead, el mismo que usan voz/chat/correo para dar de alta
+// un lead real; aparece después en Clientes y en Contactos como
+// cualquier otro. Va antes de "/contactos/:canal" porque si no, Express
+// trataría "nuevo" como si fuera un nombre de canal.
+crm.get("/contactos/nuevo", (req, res) => {
+  const body = `<h1>Nuevo contacto</h1>
+<p class="sub">Da de alta un cliente a mano -- queda guardado como cualquier otro lead real, y aparece también en Clientes.</p>
+<form class="box" method="post" action="/crm/contactos/nuevo">
+<div class="row">
+<div><label>Nombre</label><input name="nombre" required></div>
+<div><label>Teléfono o correo</label><input name="contacto" required placeholder="+34600111222 o nombre@correo.com"></div>
+</div>
+<div class="row">
+<div><label>Vehículo de interés</label><input name="vehicle_interest" placeholder="Ej. BMW Serie 3"></div>
+<div><label>Canal</label><select name="canal"><option value="WHATSAPP">WhatsApp</option><option value="VOICE">Teléfono</option><option value="EMAIL">Correo</option><option value="MANUAL" selected>Presencial / otro</option></select></div>
+</div>
+<button class="btn ok" type="submit">Crear contacto</button>
+<a class="btn light" href="/crm/contactos">Cancelar</a>
+</form>`;
+  res.type("html").send(page("Contactos", me(res), body, msgOf(req)));
+});
+crm.post("/contactos/nuevo", (req, res) => {
+  const nombre = String(req.body.nombre ?? "").trim();
+  const contacto = String(req.body.contacto ?? "").trim();
+  const vehicleInterest = String(req.body.vehicle_interest ?? "").trim();
+  const canal = String(req.body.canal ?? "MANUAL").trim();
+  if (!nombre || !contacto) return back(res, "/crm/contactos/nuevo", "Falta el nombre o el teléfono/correo");
+  const isEmail = contacto.includes("@");
+  const result = upsertLead({
+    name: nombre,
+    phone: isEmail ? undefined : contacto,
+    email: isEmail ? contacto : undefined,
+    vehicle_interest: vehicleInterest || undefined,
+    channel: canal,
+  });
+  if (result.status !== "ok" || !result.data) return back(res, "/crm/contactos/nuevo", "No se pudo crear el contacto");
+  back(res, `/crm/clientes/${result.data.id}`, "Contacto creado");
+});
 
 crm.get("/contactos/:canal", (req, res) => {
   const canal = req.params.canal as ContactoCanal;
-  if (!CONTACTOS_CANALES.includes(canal)) return back(res, "/crm/contactos/whatsapp", "Esa sección de Contactos no existe");
+  if (!CONTACTOS_CANALES.includes(canal)) return back(res, "/crm/contactos/mensajes", "Esa sección de Contactos no existe");
   const f = msgFilterFromQuery(req);
   const q = String(req.query.q ?? "").trim();
   const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
@@ -2609,26 +2829,31 @@ crm.get("/contactos/:canal", (req, res) => {
   const pendingCo = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
   const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
   const tabLink = (key: ContactoCanal, label: string, count: number) =>
-    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag" style="background:#fff;color:var(--accent)">${count}</span>` : ""}</a>`;
-  const tabs = `<div class="side-nav" style="flex:0 0 190px">
+    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag">${count > 99 ? "99+" : count}</span>` : ""}</a>`;
+  const tabs = `<div class="htabs">
+${tabLink("mensajes", "Mensajes", pendingWa + pendingCo)}
 ${tabLink("whatsapp", "WhatsApp", pendingWa)}
-${tabLink("correo", "Correo", pendingCo)}
 ${tabLink("llamadas", "Llamadas", unreadLl)}
+${tabLink("correo", "Correo", pendingCo)}
 </div>`;
   const built = canal === "whatsapp"
     ? whatsappContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
     : canal === "correo"
       ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
-      : callsContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw);
-  const panelTitle: Record<ContactoCanal, string> = { whatsapp: "WhatsApp -- Carolina", correo: "Correo -- Daniel", llamadas: "Llamadas -- Miguel" };
+      : canal === "mensajes"
+        ? mensajesContactos(f, q, pageNum, navBase, allLeads, selectedIdRaw)
+        : callsContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw);
   const withAnswered = canal !== "llamadas";
-  const body = `<h1>Contactos</h1><p class="sub">${esc(panelTitle[canal])} -- se actualiza sola.</p>
-<div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:14px">
-${tabs}
-<div style="flex:1;min-width:0">
-${filterPills(navBase, f, q, withAnswered)}
-${searchBox(navBase, f, q, canal === "correo" ? "Buscar por remitente, asunto o portal" : "Buscar por número de teléfono")}
+  const listLabel: Record<ContactoCanal, string> = { mensajes: "Todos los mensajes", whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
+  const body = `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+<h1 style="margin:0">Contactos</h1>
+<a class="btn" href="/crm/contactos/nuevo">+ Nuevo contacto</a>
 </div>
+<p class="sub">Se actualiza sola.</p>
+${tabs}
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+${filterDropdown(navBase, f, q, withAnswered, listLabel[canal])}
+${searchBox(navBase, f, q, canal === "correo" ? "Buscar por remitente, asunto o portal" : "Buscar por número de teléfono")}
 </div>
 <div class="contactos-shell" id="contactos-panel" data-canal="${canal}">
 <div class="contactos-list">
