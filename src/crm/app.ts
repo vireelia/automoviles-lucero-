@@ -3409,40 +3409,51 @@ function reservationForLead(l: Lead, resv: Reservation[]): Reservation | undefin
 crm.get("/ventas", (req, res) => {
   const allLeads = list<Lead>("leads");
   const allResv = list<Reservation>("reservations");
+  const users = listUsers();
   const ventas = allLeads
     .filter((l) => l.sale_outcome === "cerrada")
     .map((l) => {
       const resv = reservationForLead(l, allResv);
       const importe = resv ? priceOf(resv.vehicle_id) : null;
-      return { lead: l, resv, importe };
+      const comercial = l.assigned_to ? users.find((u) => u.email === l.assigned_to) : undefined;
+      const comision = importe !== null && comercial?.commission_pct != null ? (importe * comercial.commission_pct) / 100 : null;
+      return { lead: l, resv, importe, comercial, comision };
     })
     .sort((a, b) => (b.lead.sale_closed_at ?? "").localeCompare(a.lead.sale_closed_at ?? ""));
   const conImporte = ventas.filter((v) => v.importe !== null);
   const importeTotal = conImporte.reduce((sum, v) => sum + (v.importe ?? 0), 0);
+  const conComision = ventas.filter((v) => v.comision !== null);
+  const comisionTotal = conComision.reduce((sum, v) => sum + (v.comision ?? 0), 0);
+  const faltaConfigurarComision = ventas.filter((v) => v.importe !== null && v.lead.assigned_to && !v.comercial?.commission_pct).length;
   const row = (v: (typeof ventas)[number]) => {
     const d = v.lead.sale_closed_at ? dayLabel(madridDateOnly(v.lead.sale_closed_at)) : null;
     const veh = v.resv ? vehicleName(v.resv.vehicle_id) : "Sin reserva vinculada";
     const importeTxt = v.importe !== null ? `${v.importe.toLocaleString("es-ES")} €` : "Desconocido";
     const canal = ORIGIN[v.resv?.channel ?? ""] ?? "Origen desconocido";
+    const comercialTxt = v.comercial ? v.comercial.name : v.lead.assigned_to ? v.lead.assigned_to : "Sin asignar";
+    const comisionTxt = v.comision !== null
+      ? `${v.comision.toLocaleString("es-ES", { maximumFractionDigits: 2 })} € <span style="color:var(--ink-dim);font-weight:600">(${v.comercial!.commission_pct}%)</span>`
+      : v.lead.assigned_to && v.importe !== null
+        ? `<span style="color:var(--warn)">Sin % configurado</span>`
+        : `<span style="color:var(--ink-dim)">--</span>`;
     return `<div class="record-row">
 <div class="datebadge" style="background:var(--ok-bg);color:#1f7a42">${d ? `<span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(d.month)}</span>` : `<b style="font-size:13px">Sin fecha</b>`}</div>
 <div class="who"><b>${v.lead.name ? esc(v.lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}</span></div>
-<div class="meta"><span style="font-size:14px;font-weight:800;color:${v.importe !== null ? "#1f7a42" : "var(--ink-dim)"}">${importeTxt}</span><span class="lastcontact">${esc(canal)}${v.lead.assigned_to ? ` · ${esc(v.lead.assigned_to)}` : ""}</span></div>
+<div class="meta"><span style="font-size:14px;font-weight:800;color:${v.importe !== null ? "#1f7a42" : "var(--ink-dim)"}">${importeTxt}</span><span class="lastcontact">${esc(canal)} · ${esc(comercialTxt)}</span></div>
+<div class="meta" style="min-width:150px"><span style="font-size:13px;font-weight:700">${comisionTxt}</span></div>
 <div class="acts"><a class="link" href="/crm/buscar?q=${esc(v.lead.phone ?? v.lead.email ?? "")}">Ver cliente →</a></div>
 </div>`;
   };
   const body = `<h1>Ventas</h1>
 <p class="sub">Historial real de ventas cerradas (Clientes → "✅ Venta cerrada") cruzado con la reserva que llevó a esa venta, cuando existe -- nunca un importe inventado.</p>
-<div class="box" style="background:#fdecea;border:1px solid #f3c6c1">
-<b>Comisiones: todavía no está construido.</b>
-<p class="sub" style="margin:6px 0 0">No hay ningún % de comisión configurado por comercial en el sistema -- en cuanto nos deis esa tabla real, se añade aquí. De momento se puede ver quién tiene asignada cada venta (columna de la derecha de cada fila).</p>
-</div>
 <div class="stats">
 ${`<div class="stat"><b>${ventas.length}</b><span>ventas cerradas</span></div>`}
 ${`<div class="stat"><b>${importeTotal.toLocaleString("es-ES")} €</b><span>importe total conocido</span></div>`}
+${`<div class="stat"><b>${comisionTotal.toLocaleString("es-ES", { maximumFractionDigits: 2 })} €</b><span>comisión total conocida</span></div>`}
 ${`<div class="stat"><b>${ventas.length - conImporte.length}</b><span>sin reserva vinculada</span></div>`}
 </div>
-<p class="sub"><a class="link" href="/crm/embudo">Ver el embudo comercial →</a> · <a class="link" href="/crm/informes">Ver conversión y motivos de venta perdida en Informes →</a></p>
+${faltaConfigurarComision > 0 ? `<div class="box" style="background:var(--warn-bg);border:1px solid #f0dcb3"><b>${faltaConfigurarComision} venta(s) con comercial asignado pero sin % de comisión configurado.</b> <a class="link" href="/crm/equipo">Configúralo en Usuarios →</a></div>` : ""}
+<p class="sub"><a class="link" href="/crm/embudo">Ver el embudo comercial →</a> · <a class="link" href="/crm/informes">Ver conversión y motivos de venta perdida en Informes →</a> · <a class="link" href="/crm/equipo">Configurar comisiones por persona →</a></p>
 ${ventas.length === 0 ? `<div class="empty">Todavía no hay ninguna venta marcada como cerrada.</div>` : `<div class="records-list">${ventas.map(row).join("")}</div>`}`;
   res.type("html").send(page("Ventas", me(res), body, msgOf(req)));
 });
@@ -4186,19 +4197,24 @@ crm.get("/equipo", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
   const users = listUsers();
   const body = `<h1>Usuarios</h1>
-<p class="sub">Aquí das de alta a Ramón y a José, y cambias las contraseñas.</p>
+<p class="sub">Aquí das de alta a Ramón y a José, cambias las contraseñas y pones el % de comisión de cada uno (se usa en Ventas).</p>
 <div class="box"><h3 style="margin-top:0">Dar de alta a alguien</h3>
 <form method="post" action="/crm/equipo">
 <div class="row"><div><label>Nombre</label><input name="nombre" required></div>
 <div><label>Correo para entrar</label><input name="correo" type="email" required></div>
 <div><label>Contraseña (mínimo 8)</label>${pwInput('name="clave" minlength="8" required', 'pw-alta')}</div>
 <div><label>Puede…</label><select name="rol"><option value="equipo">Ver y trabajar (no confirma pagos)</option><option value="comercial">Comercial: confirma pagos y ventas</option><option value="admin">Todo, incluido el equipo</option></select></div></div>
+<label>Comisión en ventas (%, opcional)</label><input name="comision" type="number" min="0" max="100" step="0.1" style="max-width:140px">
 <button class="btn ok" type="submit">Dar de alta</button></form></div>
-${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}</p>
+${users.map((u) => `<div class="card"><div class="info"><h3>${esc(u.name)}</h3><p>${esc(u.email)} · ${esc(ROLE_NAME[u.role] ?? u.role)}${u.commission_pct != null ? ` · Comisión: ${u.commission_pct}%` : ""}</p>
 <form method="post" action="/crm/equipo/${esc(u.id)}">
 <label>Nueva contraseña</label>${pwInput('name="clave" minlength="8"', `pw-${esc(u.id)}`)}
 <button class="btn light" type="submit" name="accion" value="clave">Cambiar contraseña</button>
 ${u.id !== me(res).id ? button("Quitar el acceso", "quitar", "danger") : ""}
+</form>
+<form method="post" action="/crm/equipo/${esc(u.id)}" style="margin-top:8px;display:flex;align-items:flex-end;gap:10px">
+<div><label>Comisión en ventas (%)</label><input name="comision" type="number" min="0" max="100" step="0.1" value="${u.commission_pct ?? ""}" style="max-width:120px;margin:0"></div>
+<button class="btn light" type="submit" name="accion" value="comision">Guardar comisión</button>
 </form></div></div>`).join("")}`;
   res.type("html").send(page("Usuarios", me(res), body, msgOf(req)));
 });
@@ -4210,6 +4226,7 @@ crm.post("/equipo", (req, res) => {
   if (clave.length < 8) return back(res, "/crm/equipo", "La contraseña tiene que tener al menos 8 caracteres");
   const users = listUsers();
   if (users.some((u) => u.email === email)) return back(res, "/crm/equipo", "Ese correo ya tiene acceso");
+  const comisionAlta = Number(req.body.comision);
   users.push({
     id: crypto.randomUUID(),
     name: String(req.body.nombre ?? "").trim(),
@@ -4217,6 +4234,7 @@ crm.post("/equipo", (req, res) => {
     password_hash: hashPassword(clave),
     role: req.body.rol === "admin" ? "admin" : req.body.rol === "comercial" ? "comercial" : "equipo",
     created_at: now(),
+    commission_pct: Number.isFinite(comisionAlta) && comisionAlta >= 0 ? comisionAlta : null,
   });
   saveUsers(users);
   back(res, "/crm/equipo", "Persona dada de alta");
@@ -4231,6 +4249,13 @@ crm.post("/equipo/:id", (req, res) => {
     if (u.id === me(res).id) return back(res, "/crm/equipo", "No puedes quitarte el acceso a ti mismo");
     saveUsers(users.filter((x) => x.id !== u.id));
     return back(res, "/crm/equipo", "Acceso quitado");
+  }
+  if (String(req.body.accion) === "comision") {
+    const comision = String(req.body.comision ?? "").trim();
+    const n = Number(comision);
+    u.commission_pct = comision === "" ? null : Number.isFinite(n) && n >= 0 ? n : u.commission_pct;
+    saveUsers(users);
+    return back(res, "/crm/equipo", "Comisión guardada");
   }
   const clave = String(req.body.clave ?? "");
   if (clave.length < 8) return back(res, "/crm/equipo", "La contraseña tiene que tener al menos 8 caracteres");
