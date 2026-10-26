@@ -3972,6 +3972,18 @@ ${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : `<div
   res.type("html").send(page("Entrada de leads", me(res), body, msgOf(req)));
 });
 
+// Exportar clientes (26/10/2026, petición real: "vamos a exportar solo
+// todos los clientes") -- antes la única forma de sacar los clientes
+// reales era llamar a /debug/leads con el ADMIN_TOKEN del servidor (un
+// secreto real que no debería andar circulando). Con esto, cualquier
+// admin ya logueado en el CRM (Ramón/José) lo descarga él mismo, con su
+// sesión normal -- nunca hace falta compartir ningún token.
+crm.get("/clientes/exportar.json", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede exportar clientes");
+  const all = list<Lead>("leads");
+  res.setHeader("Content-Disposition", `attachment; filename="clientes-lucero-${todayMadrid()}.json"`);
+  res.type("application/json").send(JSON.stringify(all, null, 2));
+});
 crm.get("/clientes", (req, res) => {
   autoArchiveColdLeads();
   const t = typeof req.query.t === "string" && (TEMP[req.query.t] || req.query.t === "archivados") ? req.query.t : "todos";
@@ -4023,7 +4035,10 @@ ${tempPill("WARM", "Tibio", "#f97316", countByTemp("WARM"))}
 ${tempPill("COLD", "Frío", "#2563eb", countByTemp("COLD"))}
 ${tempPill("archivados", "Archivados", "#9aa1ad", archivedCount)}
 </div>
+<div style="display:flex;align-items:center;gap:10px">
 ${dateDropdown}
+${isAdmin ? `<a class="btn light noprint" href="/crm/clientes/exportar.json" download style="white-space:nowrap;margin:0">⬇️ Exportar (JSON)</a>` : ""}
+</div>
 </div>
 <details class="box" style="padding:0">
 <summary style="padding:14px 18px;cursor:pointer;font-weight:700;list-style:none;color:var(--accent)">+ Añadir un cliente a mano</summary>
