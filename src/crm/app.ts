@@ -1042,6 +1042,7 @@ h2{font-size:20px;margin:20px 0 10px}
 .row-menu{position:relative;margin-left:auto;flex-shrink:0}
 .row-menu summary{list-style:none;cursor:pointer;width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--ink-dim);font-size:16px}
 .row-menu summary::-webkit-details-marker{display:none}
+.box>summary::-webkit-details-marker{display:none}
 .row-menu[open] summary{background:var(--panel);color:var(--ink)}
 .row-menu .menu-pop{position:absolute;right:0;top:32px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 4px 16px rgba(0,0,0,.14);padding:6px;display:flex;flex-direction:column;gap:2px;z-index:20;min-width:150px}
 .row-menu .menu-pop form{margin:0}
@@ -3471,14 +3472,18 @@ crm.get("/clientes", (req, res) => {
     // Petición real (23/10/2026, "organizalos de primeros a ultimos segun las
     // fechas"): de más antiguo a más reciente (antes era al revés).
     .sort((a, b) => (a.updated_at ?? a.created_at).localeCompare(b.updated_at ?? b.created_at));
-  // Tarjetas grandes en vez de pestañas de texto (21/10/2026, "misma
-  // organizacion que influencers en klikar"): mismo filtro de siempre
-  // (?t=), solo con icono + contador real por grupo.
+  // Barra de pastillas finas en vez de 5 tarjetas grandes + desplegable
+  // de fecha en vez de 7 píldoras sueltas (26/10/2026, "E" de las ideas
+  // de diseño: "esto también lo quiero diferente" -- mucho espacio para
+  // algo que se usa poco a diario). Mismo filtro real de siempre (?t=/
+  // ?d=), solo más compacto.
   const activeLeadsForCount = all.filter((l) => !l.archived && !l.marketing_list);
   const countByTemp = (temp: string) => activeLeadsForCount.filter((l) => l.temperature === temp).length;
-  const tempCard = (k: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string, count: number) =>
-    toggleCard(`/crm/clientes?t=${k}&d=${dateFilter}`, icon, iconBg, iconColor, label, sub, count, t === k);
-  const datePill = (k: DateFilterKey) => `<a href="/crm/clientes?t=${t}&d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:var(--accent);color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
+  const tempPill = (k: string, label: string, dotColor: string | null, count: number) => {
+    const active = t === k;
+    return `<a href="/crm/clientes?t=${k}&d=${dateFilter}" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:${active ? "700" : "600"};color:${active ? "#1a1d23" : "var(--ink-dim)"};background:${active ? "#fff" : "transparent"};box-shadow:${active ? "0 1px 2px rgba(0,0,0,.08)" : "none"}">${dotColor ? `<span style="width:7px;height:7px;border-radius:999px;background:${dotColor};display:inline-block"></span>` : ""}${esc(label)} · ${count}</a>`;
+  };
+  const dateDropdown = `<select onchange="location.href=this.value" style="width:auto;min-width:160px;margin:0">${(["hoy", "ayer", "7dias", "30dias", "mes", "mes_anterior", "todo"] as DateFilterKey[]).map((k) => `<option value="/crm/clientes?t=${t}&d=${k}" ${dateFilter === k ? "selected" : ""}>${DATE_FILTER_LABEL[k]}</option>`).join("")}</select>`;
   const isAdmin = me(res).role === "admin";
   const bulk = isAdmin && leads.length > 0
     ? `<form id="clientes-bulk" method="post" action="/crm/clientes-masivo"><input type="hidden" name="t" value="${esc(t)}"></form>
@@ -3492,20 +3497,24 @@ ${t === "archivados"
     : "";
   const body = `<h1>Clientes</h1>
 <p class="sub">Miguel, Carolina y Daniel anotan solos lo que quiere cada cliente, sea cual sea el canal. Tú solo lo lees y llamas si hace falta. Los clientes fríos sin contacto en ${LEAD_ARCHIVE_INACTIVE_DAYS} días se archivan solos -- nunca se borran, solo dejan de aparecer aquí.</p>
-<div class="box"><h3 style="margin-top:0">Añadir un cliente a mano</h3>
-<form method="post" action="/crm/clientes">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+<div style="display:flex;gap:4px;background:var(--panel);border-radius:999px;padding:4px;flex-wrap:wrap">
+${tempPill("todos", "Todos", null, activeLeadsForCount.length)}
+${tempPill("HOT", "Caliente", "var(--accent)", countByTemp("HOT"))}
+${tempPill("WARM", "Tibio", "#f97316", countByTemp("WARM"))}
+${tempPill("COLD", "Frío", "#2563eb", countByTemp("COLD"))}
+${tempPill("archivados", "Archivados", "#9aa1ad", archivedCount)}
+</div>
+${dateDropdown}
+</div>
+<details class="box" style="padding:0">
+<summary style="padding:14px 18px;cursor:pointer;font-weight:700;list-style:none;color:var(--accent)">+ Añadir un cliente a mano</summary>
+<form method="post" action="/crm/clientes" style="padding:0 18px 18px">
 <div class="row"><div><label>Nombre</label><input name="nombre"></div>
 <div><label>Teléfono</label><input name="telefono" required></div></div>
 <label>Coche de interés</label><input name="vehicle_interest">
-<button class="btn ok" type="submit">Añadir cliente</button></form></div>
-<div class="toggle-cards">
-${tempCard("todos", "👥", "#e8ebf1", "#1a1d23", "Todos", "Clientes activos", activeLeadsForCount.length)}
-${tempCard("HOT", "🔥", "#fee2e2", "#dc2626", "Caliente", "Intención de compra clara", countByTemp("HOT"))}
-${tempCard("WARM", "🙂", "#ffedd5", "#ea580c", "Tibio", "Interés real, sin prisa", countByTemp("WARM"))}
-${tempCard("COLD", "❄️", "#e0f2fe", "#0369a1", "Frío", "Consulta exploratoria", countByTemp("COLD"))}
-${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin contacto hace tiempo", archivedCount)}
-</div>
-<div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
+<button class="btn ok" type="submit">Añadir cliente</button></form>
+</details>
 ${bulk}
 ${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
