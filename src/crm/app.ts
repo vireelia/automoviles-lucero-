@@ -1017,6 +1017,15 @@ h2{font-size:20px;margin:20px 0 10px}
 .record-row .edits{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;border-top:1px solid #f0f1f3;padding-top:10px;margin-top:2px}
 .record-row .edits label{font-size:11.5px;margin:0 0 3px}
 .record-row .edits input{width:auto;margin:0;padding:7px 9px;font-size:13px}
+.agenda-day{margin-bottom:18px}
+.agenda-day.today .agenda-day-head b{color:var(--accent)}
+.agenda-day-head{display:flex;align-items:center;gap:10px;padding:6px 2px;font-size:15px}
+.agenda-row{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;text-decoration:none;color:inherit}
+.agenda-row:hover{border-color:#d4d7dd;background:var(--panel)}
+.agenda-time{width:46px;flex-shrink:0;font-size:13px;font-weight:700;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+.agenda-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.agenda-main b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agenda-main span{font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Tarjeta alta de Clientes con menú "⋯" (26/10/2026, "pasame un diseño
    diferente" -- opción A elegida tras ver mockups reales). Vuelve a un
    grid de tarjetas (como .cards-grid) en vez de la fila de una línea,
@@ -3255,11 +3264,89 @@ crm.get("/anuncios", (req, res) => {
   ]);
   res.type("html").send(page("Anuncios", me(res), body, msgOf(req)));
 });
+// ---------- Agenda ----------
+// Petición real (26/10/2026): "un calendario propio con todas las visitas,
+// llamadas y tareas en una sola vista todavía no está construido" -- no es
+// una colección nueva ni un dato inventado: cruza 3 colecciones ya reales
+// (appointments/call_analyses/tasks) agrupadas por día, cada fila enlaza a
+// su sección de siempre (Visitas/Contactos·Llamadas/Tareas) para gestionarla.
+const AGENDA_KIND_COLOR: Record<"visita" | "llamada" | "tarea", [string, string]> = {
+  visita: ["#ccfbf1", "#0f766e"],
+  llamada: ["#ede9fe", "#6d28d9"],
+  tarea: ["#e0e7ff", "#4338ca"],
+};
+const AGENDA_KIND_LABEL: Record<"visita" | "llamada" | "tarea", string> = { visita: "Visita", llamada: "Llamada", tarea: "Tarea" };
+type AgendaRow = { time: string; html: string };
+function agendaRow(kind: "visita" | "llamada" | "tarea", time: string | null, title: string, subtitle: string, href: string, extraTag?: string): AgendaRow {
+  const [bg, fg] = AGENDA_KIND_COLOR[kind];
+  return {
+    time: time ?? "99:99",
+    html: `<a class="agenda-row" href="${esc(href)}">
+<div class="agenda-time">${time ? esc(time) : "--:--"}</div>
+<span class="tag" style="background:${bg};color:${fg};font-weight:700">${AGENDA_KIND_LABEL[kind]}</span>
+<div class="agenda-main"><b>${esc(title)}</b><span>${esc(subtitle)}</span></div>
+${extraTag ?? ""}
+</a>`,
+  };
+}
+type AgendaEntry = { dateKey: string | null; overdue: boolean; row: AgendaRow };
+function buildAgendaEntries(today: string): AgendaEntry[] {
+  const allLeads = list<Lead>("leads");
+  const entries: AgendaEntry[] = [];
+  for (const a of list<Appointment>("appointments").filter((x) => x.status !== "cancelled")) {
+    const lead = a.lead_phone ? findLeadByContact(a.lead_phone) : undefined;
+    const title = lead?.name ? lead.name : contactLabel(a.lead_phone, null);
+    const tag = a.status === "requested" ? `<span class="tag" style="background:var(--warn-bg);color:var(--warn)">Por confirmar</span>` : "";
+    const row = agendaRow("visita", a.requested_time ?? null, title, appointmentVehicleLabel(a, lead), `/crm/citas#c-${esc(a.id)}`, tag);
+    entries.push({ dateKey: a.requested_date ?? null, overdue: !!(a.requested_date && a.requested_date < today && a.status === "requested"), row });
+  }
+  for (const c of list<CallAnalysis>("call_analyses").filter((x) => !x.archived)) {
+    const lead = findLeadForContact(allLeads, c.from_number, null);
+    const title = lead?.name || c.from_number || "Número desconocido";
+    const time = fmtDate(c.created_at).split(", ")[1] ?? null;
+    const row = agendaRow("llamada", time, title, c.summary || "Sin resumen", `/crm/contactos/llamadas?id=${encodeURIComponent(c.id)}`);
+    entries.push({ dateKey: madridDateOnly(c.created_at), overdue: false, row });
+  }
+  for (const t of listTasks().filter((x) => x.status === "pendiente")) {
+    const tag = t.priority === "alta" ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Prioridad alta</span>` : "";
+    const row = agendaRow("tarea", null, TASK_TYPE_LABEL[t.type], t.reason || contactLabel(t.lead_phone, null), `/crm/seguimiento#task-${esc(t.id)}`, tag);
+    const dk = t.due_at ? madridDateOnly(t.due_at) : null;
+    entries.push({ dateKey: dk, overdue: !!(dk && dk < today), row });
+  }
+  return entries;
+}
+function agendaDaySection(dateStr: string, rows: AgendaRow[], today: string): string {
+  const d = dayLabel(dateStr);
+  return `<div class="agenda-day${dateStr === today ? " today" : ""}">
+<div class="agenda-day-head"><b>${esc(d.weekday)} ${esc(d.day)} ${esc(d.month)}</b>${dateStr === today ? `<span class="tag" style="background:var(--accent);color:#fff">Hoy</span>` : ""}</div>
+${rows.length ? rows.map((r) => r.html).join("") : `<div class="empty" style="margin:6px 0 0;padding:10px">Nada programado este día.</div>`}
+</div>`;
+}
 crm.get("/agenda", (req, res) => {
-  const body = placeholderPage("Agenda", "Un calendario propio con todas las visitas, llamadas y tareas en una sola vista todavía no está construido.", [
-    { href: "/crm/citas", text: "Ver las visitas programadas" },
-    { href: "/crm/seguimiento", text: "Ver las tareas pendientes" },
-  ]);
+  const today = todayMadrid();
+  const rango = req.query.r === "pasados" ? "pasados" : req.query.r === "hoy" ? "hoy" : "proximos";
+  const entries = buildAgendaEntries(today);
+  const overdue = entries.filter((e) => e.overdue);
+  const sinFecha = entries.filter((e) => e.dateKey === null && !e.overdue);
+  const rangeStart = rango === "pasados" ? addDaysToDateStr(today, -29) : today;
+  const rangeEnd = rango === "pasados" ? addDaysToDateStr(today, -1) : rango === "hoy" ? today : addDaysToDateStr(today, 13);
+  const byDay = new Map<string, AgendaRow[]>();
+  for (const e of entries) {
+    if (e.overdue || e.dateKey === null) continue;
+    if (e.dateKey < rangeStart || e.dateKey > rangeEnd) continue;
+    if (!byDay.has(e.dateKey)) byDay.set(e.dateKey, []);
+    byDay.get(e.dateKey)!.push(e.row);
+  }
+  for (const rows of byDay.values()) rows.sort((x, y) => x.time.localeCompare(y.time));
+  const dayKeys: string[] = [];
+  for (let d = rangeStart; d <= rangeEnd; d = addDaysToDateStr(d, 1)) dayKeys.push(d);
+  const pill = (k: string, label: string) => `<a href="/crm/agenda?r=${k}" class="tag" style="text-decoration:none;${rango === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
+  const body = `<h1>Agenda</h1>
+<p class="sub">Visitas, llamadas y tareas de todos los canales, cruzadas en una sola vista -- cada fila enlaza a su sección real.</p>
+${overdue.length ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:16px"><b>⚠️ Atrasado -- necesita acción</b>${overdue.map((e) => e.row.html).join("")}</div>` : ""}
+<p>${pill("proximos", "Próximos 14 días")} ${pill("hoy", "Hoy")} ${pill("pasados", "Últimos 30 días")}</p>
+${dayKeys.map((d) => agendaDaySection(d, byDay.get(d) ?? [], today)).join("")}
+${sinFecha.length ? `<div class="agenda-day"><div class="agenda-day-head"><b>Sin fecha</b></div>${sinFecha.map((e) => e.row.html).join("")}</div>` : ""}`;
   res.type("html").send(page("Agenda", me(res), body, msgOf(req)));
 });
 crm.get("/ventas", (req, res) => {
