@@ -727,6 +727,13 @@ const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean
   { key: "home", href: "/crm", label: "Inicio" },
   { key: "car", href: "/crm/coches", label: "Vehículos" },
   { key: "megaphone", href: "/crm/anuncios", label: "Anuncios" },
+  // Studio IA tenía ruta propia (/crm/studio) desde el 16/10/2026 pero
+  // solo era alcanzable como enlace suelto dentro de "Anuncios" -- a
+  // petición real (26/10/2026, "esto ponlo como una seccion aparte") pasa
+  // a tener su propia entrada en el menú, igual que el resto. Sigue
+  // reservada a admin (gasta dinero real en cada generación, misma
+  // decisión del 16-17/10/2026 documentada en page()).
+  { key: "studio", href: "/crm/studio", label: "Studio IA", adminOnly: true },
   // A petición real (25/10/2026, "las secciones de fuera de llamada,
   // mensajes, whatsapp y correos, déjalas en contacto, fuera no hace
   // falta que estén"): Mensajes/WhatsApp/Llamadas/Correo ya no están
@@ -769,6 +776,7 @@ const NAV_ICON_PATHS: Record<string, string> = {
   users: "M15.5 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.9M16.5 3.1a4 4 0 0 1 0 7.8",
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-2.1a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V19a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V4a2 2 0 0 1 4 0v.1c0 .7.4 1.3 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1c.3.6.9 1 1.6 1H20a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z",
   trash: "M4 7h16M9.5 7V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7m-8 0 1 12.2a1 1 0 0 0 1 .8h5.6a1 1 0 0 0 1-.8L18 7",
+  studio: "m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm9 2-5.2-5.2",
   bell: "M12 3a5 5 0 0 0-5 5v3.3c0 .6-.2 1.2-.6 1.7L5 15h14l-1.4-2c-.4-.5-.6-1.1-.6-1.7V8a5 5 0 0 0-5-5Zm-2.5 15a2.5 2.5 0 0 0 5 0",
   plus: "M12 5v14M5 12h14",
@@ -2843,7 +2851,6 @@ ${mientrasTanto.length ? `<h2>Mientras tanto</h2>${mientrasTanto.map((m) => `<p>
 crm.get("/anuncios", (req, res) => {
   const body = placeholderPage("Anuncios", "Publicar y gestionar anuncios en portales (Coches.net, Milanuncios...) desde aquí todavía no está construido.", [
     { href: "/crm/coches", text: "Ver y editar el catálogo de vehículos" },
-    { href: "/crm/studio", text: "Generar contenido con el Studio IA" },
   ]);
   res.type("html").send(page("Anuncios", me(res), body, msgOf(req)));
 });
