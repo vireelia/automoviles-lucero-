@@ -940,6 +940,16 @@ h2{font-size:20px;margin:20px 0 10px}
    según el ancho, en vez de una lista apilada de una sola columna). */
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:14px}
 .cards-grid .card{margin:0}
+/* Tarjeta de vehículo (26/10/2026, "B1" -- cuadrícula en vez de lista
+   plana). Sin foto real en el catálogo -- el bloque "Sin foto" es
+   honesto, nunca una imagen inventada. */
+.vehicle-card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:7px}
+.vehicle-card .photo{height:60px;border-radius:8px;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#b6bac2;font-size:11px}
+.vehicle-card h3{margin:0;font-size:15px}
+.vehicle-card .specs{font-size:12.5px;color:var(--ink-dim)}
+.vehicle-card .pricerow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+.vehicle-card .pricerow b{font-size:19px;white-space:nowrap}
+.vehicle-card .btn{margin:2px 0 0;text-align:center}
 /* Fila compacta (26/10/2026, "mandame ideas de tarjetas" -> "vamos a
    probar esta" -- opción B de tres ideas, elegida por Eliud para
    Clientes, y luego "A2" para Visitas/Reservas en la ronda de "diseño de
@@ -3529,16 +3539,27 @@ const STATUS_TAG: Record<OfficialVehicleStatus, string> = {
   SOLD: "background:#e5e7eb;color:#374151",
 };
 
+// Cuadrícula de tarjetas (26/10/2026, "B1" de las ideas de diseño: antes
+// era una lista plana de texto, ninguna de las 34 fichas se distinguía
+// de otra salvo por el nombre). Sin foto real en el catálogo (nunca se
+// inventa una) -- la mejora está en la estructura: precio como
+// protagonista, estado como pastilla de color, para ojear el stock de
+// un vistazo en vez de leer fila por fila.
 crm.get("/coches", (req, res) => {
   const body = `<h1>Vehículos</h1>
 <p class="sub">Toca un coche para cambiar si está disponible, reservado o vendido, y su precio.</p>
+<div class="cards-grid">
 ${currentVehicles().map((v) => {
   const st = getOfficialStatus(v.id);
-  return `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3>
-<p>${esc(v.km.toLocaleString("es-ES"))} km · ${esc(v.fuel)} · ${esc(v.power_cv)} CV</p>
-<p><span class="tag" style="${STATUS_TAG[st]}">${esc(VEHICLE_TEXT[st])}</span><b>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</b></p>
-<a class="btn" href="/crm/coches/${esc(v.id)}">Cambiar</a></div></div>`;
-}).join("")}`;
+  return `<div class="vehicle-card">
+<div class="photo">Sin foto</div>
+<h3>${esc(vehicleName(v.id))}</h3>
+<span class="specs">${v.year ? `${esc(v.year)} · ` : ""}${esc(v.km.toLocaleString("es-ES"))} km · ${esc(v.fuel)}</span>
+<div class="pricerow"><b>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</b><span class="tag" style="${STATUS_TAG[st]}">${esc(VEHICLE_TEXT[st])}</span></div>
+<a class="btn light" href="/crm/coches/${esc(v.id)}">Cambiar</a>
+</div>`;
+}).join("")}
+</div>`;
   res.type("html").send(page("Vehículos", me(res), body, msgOf(req)));
 });
 
