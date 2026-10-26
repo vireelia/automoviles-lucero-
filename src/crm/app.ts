@@ -199,6 +199,15 @@ const TEMP: Record<string, { label: string; cls: string; help: string; letter: s
   WARM: { label: "Tibio · interesado, sin prisa", cls: "t-warm", help: "tibio", letter: "T" },
   COLD: { label: "Frío · solo está mirando", cls: "t-cold", help: "frío", letter: "F" },
 };
+// Mismos tonos ya reales de temperatura (.t-hot/.t-warm/.t-cold, más abajo
+// en el CSS) pero en versión clara, para el avatar y el punto de color de
+// la fila compacta de Clientes (26/10/2026, opción "B" de las ideas de
+// diseño mandadas -- "vamos a probar esta").
+const TEMP_AVATAR: Record<string, [string, string]> = {
+  HOT: ["#fee2e2", "#dc2626"],
+  WARM: ["#ffedd5", "#f97316"],
+  COLD: ["#dbeafe", "#2563eb"],
+};
 // Fase comercial (20/10/2026, mejora integral del CRM, sección 6.3): "no
 // utilizar una única etiqueta para representar conceptos distintos" -- la
 // temperatura (TEMP, interés) y la fase (dónde está la operación) son dos
@@ -663,6 +672,28 @@ function waButton(contact: string | null | undefined, message: string): string {
   if (!num) return "";
   return `<a class="btn ok" target="_blank" rel="noopener" href="https://wa.me/${num}?text=${encodeURIComponent(message)}">Escribir por WhatsApp</a>`;
 }
+// Versión compacta en icono de phoneLink/waButton/mailLink (26/10/2026,
+// fila de Clientes -- opción "B" de las ideas de diseño, "vamos a probar
+// esta"): mismo enlace real y mismo criterio de cuándo se muestra, solo
+// con icono en vez de texto para que quepan varias acciones en una fila
+// de una sola línea. phoneLink/waButton/mailLink se quedan igual, los
+// sigue usando el resto del CRM (Visitas, Reservas, etc.).
+const ICON_PHONE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 10.8a15.3 15.3 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.2 2.5.6 3.6a1 1 0 0 1-.25 1l-2.25 2.2Z"/></svg>`;
+const ICON_WHATSAPP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3Zm0 16.2c-1.5 0-3-.4-4.2-1.2l-.3-.2-2.7.7.7-2.6-.2-.3A7.2 7.2 0 1 1 12 19.2Zm3.9-5.4c-.2-.1-1.3-.6-1.5-.7-.2-.1-.3-.1-.5.1-.1.2-.5.7-.6.8-.1.1-.2.1-.4 0-.2-.1-.9-.3-1.7-1-.6-.6-1-1.3-1.2-1.5-.1-.2 0-.3.1-.4l.3-.4.2-.3v-.3c0-.1-.5-1.2-.7-1.6-.2-.4-.4-.4-.5-.4h-.4c-.1 0-.4 0-.6.3-.2.2-.8.8-.8 1.9s.8 2.2.9 2.4c.1.1 1.6 2.5 3.9 3.4.5.2 1 .4 1.3.5.5.2 1 .1 1.4.1.4-.1 1.3-.5 1.5-1 .2-.5.2-.9.1-1l-.3-.1Z"/></svg>`;
+const ICON_MAIL = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Zm-.6 1.1 8.6 6.3 8.6-6.3"/></svg>`;
+function phoneIconLink(contact: string | null | undefined): string {
+  if (!contact || contact.includes("@") || !/\d{6,}/.test(contact)) return "";
+  return `<a class="ibtn" href="tel:${esc(contact)}" aria-label="Llamar" title="Llamar">${ICON_PHONE}</a>`;
+}
+function waIconButton(contact: string | null | undefined, message: string): string {
+  const num = waNumber(contact);
+  if (!num) return "";
+  return `<a class="ibtn" target="_blank" rel="noopener" href="https://wa.me/${num}?text=${encodeURIComponent(message)}" aria-label="Escribir por WhatsApp" title="Escribir por WhatsApp" style="border-color:#bfe7cc;color:#2e9e55">${ICON_WHATSAPP}</a>`;
+}
+function mailIconLink(email: string | null | undefined): string {
+  if (!email) return "";
+  return `<a class="ibtn" href="mailto:${esc(email)}" aria-label="Correo" title="Correo" style="border-color:#c7d4e8;color:#2d5fa8">${ICON_MAIL}</a>`;
+}
 // El borrador de "pendiente_whatsapp_manual" ya trae el enlace wa.me real
 // incrustado en el texto (email/agent.ts) -- se extrae solo para mostrarlo
 // como botón real, en vez de obligar a leer/copiar el enlace a mano.
@@ -741,6 +772,13 @@ function toggleCard(href: string, icon: string, iconBg: string, iconColor: strin
 const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean }[] = [
   { key: "home", href: "/crm", label: "Inicio" },
   { key: "car", href: "/crm/coches", label: "Vehículos" },
+  // Clientes (/crm/clientes) tenía ruta y funcionalidad reales desde
+  // siempre (filtros por temperatura, alta manual...) pero se quitó del
+  // menú el 25/10/2026 al ajustar el menú al mockup de referencia, que no
+  // la incluía -- a petición real (26/10/2026, "ni siquiera existe una
+  // seccion de clientes que es lo mas importante") vuelve, y arriba del
+  // todo porque es, literalmente, la sección más importante.
+  { key: "briefcase", href: "/crm/clientes", label: "Clientes" },
   { key: "megaphone", href: "/crm/anuncios", label: "Anuncios" },
   // Studio IA tenía ruta propia (/crm/studio) desde el 16/10/2026 pero
   // solo era alcanzable como enlace suelto dentro de "Anuncios" -- a
@@ -792,6 +830,7 @@ const NAV_ICON_PATHS: Record<string, string> = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-2.1a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V19a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V4a2 2 0 0 1 4 0v.1c0 .7.4 1.3 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1c.3.6.9 1 1.6 1H20a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z",
   trash: "M4 7h16M9.5 7V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7m-8 0 1 12.2a1 1 0 0 0 1 .8h5.6a1 1 0 0 0 1-.8L18 7",
   studio: "m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z",
+  briefcase: "M4 7.5h16a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5a1 1 0 0 1 1-1ZM8.5 7.5v-2a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v2M3 12.5h18",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm9 2-5.2-5.2",
   bell: "M12 3a5 5 0 0 0-5 5v3.3c0 .6-.2 1.2-.6 1.7L5 15h14l-1.4-2c-.4-.5-.6-1.1-.6-1.7V8a5 5 0 0 0-5-5Zm-2.5 15a2.5 2.5 0 0 0 5 0",
   plus: "M12 5v14M5 12h14",
@@ -901,6 +940,27 @@ h2{font-size:20px;margin:20px 0 10px}
    según el ancho, en vez de una lista apilada de una sola columna). */
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:14px}
 .cards-grid .card{margin:0}
+/* Fila compacta de Clientes (26/10/2026, "mandame ideas de tarjetas" ->
+   "vamos a probar esta" -- opción B de tres ideas, elegida por Eliud):
+   en vez de una tarjeta alta por cliente, una fila de una sola línea --
+   se ve mucho más de un vistazo con muchos clientes. flex-wrap en vez de
+   columnas fijas de grid para que no se rompa en pantallas estrechas
+   (p. ej. la mini-ficha dentro de Contactos, más estrecha que la página
+   de Clientes entera): lo que no cabe baja de línea solo. */
+.leads-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.lead-row{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--border);border-radius:11px;padding:11px 16px;flex-wrap:wrap}
+.lead-row .avatar{width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+.lead-row .who{min-width:120px;flex:1 1 150px;display:flex;flex-direction:column;gap:1px}
+.lead-row .who b{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.lead-row .who span{font-size:12.5px;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.lead-row .situation{min-width:160px;flex:2 1 220px;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lead-row .meta{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.lead-row .temp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;white-space:nowrap}
+.lead-row .temp i{width:7px;height:7px;border-radius:999px;display:inline-block}
+.lead-row .lastcontact{font-size:12.5px;color:var(--ink-dim);white-space:nowrap;flex-shrink:0}
+.lead-row .acts{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.lead-row .flags{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px}
+.lead-row .btn{font-size:13px;padding:6px 10px;margin:0}
 .card .info{flex:1;min-width:220px}
 .card h3{margin:0 0 6px;font-size:18px}
 .card p{margin:3px 0;font-size:15px}
@@ -948,6 +1008,11 @@ h2{font-size:20px;margin:20px 0 10px}
 .filterbar a{text-decoration:none}
 .btn{font:inherit;font-size:15px;padding:11px 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;margin:6px 8px 6px 0;text-decoration:none;display:inline-block}
 .btn.ok{background:var(--ok)}.btn.warn{background:var(--warn)}.btn.danger{background:var(--urgent)}.btn.light{background:var(--panel);color:var(--ink)}
+/* Botón de solo icono (26/10/2026, fila compacta de Clientes) -- mismo
+   tamaño que .tletra, para que quepan Llamar/WhatsApp/Correo sin que la
+   fila crezca de alto. */
+.ibtn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;border:1px solid var(--border);background:#fff;color:var(--ink);text-decoration:none;cursor:pointer;margin:0;flex-shrink:0}
+.ibtn:hover{border-color:var(--accent);color:var(--accent)}
 input,select,textarea{font:inherit;font-size:15px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;width:100%;margin:6px 0 14px;background:#fff}
 label{font-size:14px;font-weight:700;color:var(--ink)}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -1478,9 +1543,20 @@ function whatsappGreetingFor(l: Lead, appts: Appointment[]): string {
   }
   return `${greeting}, le escribe Automóviles Lucero${vehiclePart}.${visitPart} ¿En qué le podemos ayudar?`;
 }
+// Fila compacta (26/10/2026, "mandame ideas de tarjetas y diseño... vamos
+// a probar esta" -- opción B de 3 ideas, elegida por Eliud tras ver un
+// mockup real con datos de ejemplo). Mismos datos y mismas acciones de
+// siempre (nada nuevo, nada quitado) -- solo una fila de una línea en vez
+// de una tarjeta alta, para ver muchos clientes de un vistazo. El color
+// del avatar pasa a ser el de la temperatura (antes era un color fijo por
+// persona, pensado para distinguir personas en una conversación -- aquí
+// interesa más distinguir de un vistazo quién está caliente).
 function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | null, appts: Appointment[], volver?: string): string {
   const t = TEMP[l.temperature] ?? TEMP.COLD;
-  const whatsapp = waButton(l.phone, whatsappGreetingFor(l, appts));
+  const [avatarBg, avatarFg] = TEMP_AVATAR[l.temperature] ?? TEMP_AVATAR.COLD;
+  const displayName = leadDisplayName(l);
+  const whatsapp = waIconButton(l.phone, whatsappGreetingFor(l, appts));
+  const mail = mailIconLink(l.email ?? null);
   // A petición real (21/10/2026, "cada vez que borre un lead que no me
   // cambie de sección"): se lleva la lista filtrada actual (t/d, o la
   // búsqueda) para volver exactamente ahí, no a la lista sin filtrar.
@@ -1489,7 +1565,7 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
     ? `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}${confirmButton("Eliminar", "eliminar", "danger", `¿Eliminar a "${l.name || l.phone || "este cliente"}"? Se puede restaurar luego desde la Papelera.`)}</form>`
     : "";
   const archiveBtn = `<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:inline">${volverField}<button class="btn light" type="submit" name="accion" value="${l.archived ? "desarchivar" : "archivar"}">${l.archived ? "Desarchivar" : "Archivar"}</button></form>`;
-  const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk" style="position:absolute;top:18px;right:20px">` : "";
+  const sel = user.role === "admin" ? `<input class="msgsel" type="checkbox" name="ids" value="${esc(l.id)}" form="clientes-bulk">` : "";
   // Origen (primera captación) y canal (último contacto) son dos conceptos
   // distintos que ya se guardan por separado (20/10/2026, sección 7) --
   // antes solo se mostraba uno. Se muestran los dos, y solo el canal si
@@ -1500,17 +1576,34 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
     ? `<span class="origen">Captado: ${esc(originLabel)}</span> <span class="origen">Último contacto: ${esc(channelLabel)}</span>`
     : `<span class="origen">${esc(originLabel ?? channelLabel ?? "Origen sin registrar")}</span>`;
   const duplicateWarning = duplicate
-    ? `<p><a class="link" href="/crm/clientes/${esc(duplicate.id)}" style="color:#9a3412">⚠️ Posible duplicado: ${esc(leadDisplayName(duplicate))} -- mismo teléfono normalizado</a></p>`
+    ? `<a class="tag" href="/crm/clientes/${esc(duplicate.id)}" style="background:#fde2e1;color:#7a1c17;text-decoration:none">⚠️ Posible duplicado: mismo teléfono que ${esc(leadDisplayName(duplicate))}</a>`
     : "";
-  return `<div class="card" style="position:relative"><div class="info">
+  // Segunda línea de avisos (duplicado/sin nombre/no contactar/archivado +
+  // fase + origen): solo aparece cuando hay algo real que avisar, para que
+  // la fila normal se quede en una sola línea.
+  const flags = [
+    !l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
+    l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : "",
+    l.archived ? `<span class="tag">Archivado</span>` : "",
+    duplicateWarning,
+    `<span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span>`,
+    channelTags,
+  ].filter(Boolean).join(" ");
+  return `<div class="lead-row">
 ${sel}
-<h3>${esc(leadDisplayName(l))}</h3>
-<p><span class="tletra ${t.cls}">${t.letter}</span><span class="tag ${t.cls}">${esc(t.label)}</span> <span class="tag">${esc(LEAD_PHASE_LABEL[phase])}</span> ${channelTags}${!l.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : ""}${l.do_not_contact ? `<span class="tag">No volver a escribir</span>` : ""}${l.archived ? `<span class="tag">Archivado</span>` : ""}</p>
-${duplicateWarning}
-<p><b>${esc(situation(l))}</b></p>
-<p>Último contacto: ${esc(fmtDate(l.updated_at ?? l.created_at))}</p>
-<a class="btn" href="/crm/clientes/${esc(l.id)}">Editar / ver ficha</a>${phoneLink(l.phone)}${whatsapp}${archiveBtn}${del}
-</div></div>`;
+<div class="avatar" style="background:${avatarBg};color:${avatarFg}">${esc(avatarInitials(displayName))}</div>
+<div class="who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "")}</span></div>
+<div class="situation" title="${esc(situation(l))}">${esc(situation(l))}</div>
+<div class="meta">
+<span class="temp" style="color:${t.cls === "t-hot" ? "var(--accent)" : t.cls === "t-warm" ? "#f97316" : "#2563eb"}"><i style="background:currentColor"></i>${esc(t.help.charAt(0).toUpperCase() + t.help.slice(1))}</span>
+<span class="lastcontact">${esc(fmtDate(l.updated_at ?? l.created_at))}</span>
+</div>
+<div class="acts">
+<a class="btn light" href="/crm/clientes/${esc(l.id)}">Ficha</a>
+${phoneIconLink(l.phone)}${whatsapp}${mail}${archiveBtn}${del}
+</div>
+${flags ? `<div class="flags">${flags}</div>` : ""}
+</div>`;
 }
 
 // ---------- Hoy ----------
@@ -1641,7 +1734,7 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 </div>
 ${alertBlock}
 ${todoBlock}
-<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="cards-grid">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
+<h2>Clientes nuevos de hoy (${newLeadsToday.length})</h2>${newLeadsToday.length === 0 ? `<div class="empty">Hoy todavía no ha escrito ningún cliente nuevo.</div>` : `<div class="leads-list">${newLeadsToday.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financingToday), findPossibleDuplicate(l, allLeads), appts, "/crm")).join("")}</div>`}
 ${me(res).role === "admin" && todayAppts.length + upcoming.length > 0 ? simpleBulkBar("citas-bulk", "/crm/citas-masivo", todayAppts.length + upcoming.length, "¿Eliminar las visitas seleccionadas? Se pueden recuperar luego desde la Papelera.") : ""}
 <h2>Visitas de hoy</h2>${todayAppts.length === 0 ? `<div class="empty">Hoy no hay visitas.</div>` : `<div class="cards-grid">${todayAppts.map(apptCard).join("")}</div>`}
 <h2>Próximas visitas</h2>${upcoming.length === 0 ? `<div class="empty">No hay visitas próximas.</div>` : `<div class="cards-grid">${upcoming.map(apptCard).join("")}</div>`}
@@ -1665,8 +1758,8 @@ crm.get("/buscar", (req, res) => {
   const cars = q ? currentVehicles().filter((v) => match(vehicleName(v.id))) : [];
   const found = leads.length + appts.length + resv.length + cars.length;
   const body = `<h1>Buscar</h1><p class="sub">${q ? `Resultados para "${esc(q)}": ${found}` : "Escribe algo arriba."}</p>
+${leads.length > 0 ? `<div class="leads-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}</div>` : ""}
 <div class="cards-grid">
-${leads.map((l) => leadCard(l, me(res), leadPhase(l, allAppts, allResv, today, allFinancing), findPossibleDuplicate(l, allLeads), allAppts, `/crm/buscar?q=${encodeURIComponent(q)}`)).join("")}
 ${appts.map(apptCard).join("")}
 ${resv.map((r) => reservationCard(r, me(res))).join("")}
 ${cars.map((v) => `<div class="card"><div class="info"><h3>${esc(vehicleName(v.id))}</h3><p>${esc(priceOf(v.id).toLocaleString("es-ES"))} €</p><a class="btn" href="/crm/coches/${esc(v.id)}">Ver coche</a></div></div>`).join("")}
@@ -3190,7 +3283,7 @@ ${tempCard("archivados", "🗄️", "#f3f4f6", "#4b5563", "Archivados", "Sin con
 </div>
 <div class="legend">${datePill("hoy")} ${datePill("ayer")} ${datePill("7dias")} ${datePill("30dias")} ${datePill("mes")} ${datePill("mes_anterior")} ${datePill("todo")}</div>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
+${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="leads-list">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
