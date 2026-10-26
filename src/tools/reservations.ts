@@ -4,6 +4,34 @@ import { businessInfo } from "../data/business-info.js";
 import { getOfficialStatus, setOfficialStatus } from "./vehicle-state.js";
 import { notifyReservation } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
+import { currentVehicles } from "../data/vehicles-current.js";
+import { sendWhatsapp } from "./delivery.js";
+import { isGoogleConnected, sendGmail } from "../integrations/google.js";
+import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
+
+function vehicleLabel(vehicleId: string): string {
+  const v = currentVehicles().find((x) => x.id === vehicleId);
+  return v ? `${v.make} ${v.model} ${v.version}` : vehicleId;
+}
+
+// Aviso real al cliente cuando se confirma su reserva (27/10/2026, "avisos
+// automaticos desde el crm a cada cliente") -- antes confirmReservation
+// solo cambiaba el estado interno, nadie avisaba al cliente salvo que el
+// equipo le escribiera a mano. Mismo patrón honesto que el resto de envíos:
+// si falla, se registra el error, nunca se finge entregado.
+async function sendReservationConfirmedMessage(contact: string | null, vehicleId: string): Promise<void> {
+  if (!contact) return;
+  const message = renderTemplate(getMessageTemplate("reserva_confirmada"), { vehiculo: vehicleLabel(vehicleId) });
+  try {
+    if (contact.includes("@")) {
+      if (isGoogleConnected()) await sendGmail(contact, "Reserva confirmada -- Automóviles Lucero", message);
+    } else {
+      await sendWhatsapp({ lead_phone: contact, message });
+    }
+  } catch (err) {
+    console.error("[reservations] no se pudo enviar la confirmación de reserva al cliente:", err instanceof Error ? err.message : err);
+  }
+}
 
 // Flujo de reserva (Secciones 25-28 del encargo). SIEMPRE requiere
 // validación humana antes de RESERVED -- ninguna herramienta de este
@@ -117,7 +145,7 @@ export function submitPaymentReceipt(args: { reservation_id: string; note?: stri
 // validación"). Se exponen por una ruta administrativa separada, protegida
 // por un token simple, para que Ramón/José/el equipo las use manualmente --
 // no están en la lista de tools que se declaran a Retell.
-export function confirmReservation(args: { reservation_id: string; verified_by: string }) {
+export async function confirmReservation(args: { reservation_id: string; verified_by: string }) {
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
@@ -139,6 +167,7 @@ export function confirmReservation(args: { reservation_id: string; verified_by: 
 
   writeCollection("reservations", reservations);
   setOfficialStatus(reservation.vehicle_id, "RESERVED", reservation.id);
+  await sendReservationConfirmedMessage(reservation.lead_phone, reservation.vehicle_id);
 
   return envelope({
     status: "ok",

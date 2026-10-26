@@ -2240,7 +2240,7 @@ crm.post("/reservas", async (req, res) => {
   back(res, "/crm/reservas", "Reserva creada. Espera el pago de 500 €");
 });
 
-crm.post("/reservas/:id", (req, res) => {
+crm.post("/reservas/:id", async (req, res) => {
   const accion = String(req.body.accion ?? "");
   const reservations = list<Reservation>("reservations");
   const r = reservations.find((x) => x.id === req.params.id);
@@ -2262,7 +2262,7 @@ crm.post("/reservas/:id", (req, res) => {
     return back(res, "/crm/reservas", "Solo el comercial puede confirmar pagos y ventas");
   }
   if (accion === "confirmar") {
-    confirmReservation({ reservation_id: r.id, verified_by: me(res).name });
+    await confirmReservation({ reservation_id: r.id, verified_by: me(res).name });
     return back(res, "/crm/reservas", "Reserva confirmada: el coche queda reservado");
   }
   if (accion === "cancelar") {
@@ -3688,9 +3688,10 @@ ${ajustesEditRow("Antigüedad máxima (años)", "financing_max_age_years", cfg.f
 <p class="sub" style="margin-top:10px">El plazo (36-72 meses) no es editable aquí -- está escrito tal cual dentro del prompt del agente, ver abajo.</p>
 </div>
 <div class="box"><h3 style="margin-top:0">Plantillas de WhatsApp</h3>
-<p class="sub">Los 2 mensajes rápidos que salen al pulsar el icono de WhatsApp en Visitas/Reservas -- edítalos aquí, toman efecto al momento. El saludo general de un cliente (en Clientes) no está aquí: cambia solo según si de verdad tiene una visita o un coche de interés registrado, no es un texto fijo que se pueda aplanar en una plantilla sin perder esa lógica.</p>
-${ajustesTemplateRow("visita_confirmacion", "Confirmar visita")}
-${ajustesTemplateRow("reserva_pago", "Pedir el pago de la reserva")}
+<p class="sub">Mensajes automáticos que el sistema envía solo, sin que nadie pulse nada -- edítalos aquí, toman efecto al momento. El saludo general de un cliente (en Clientes) no está aquí: cambia solo según si de verdad tiene una visita o un coche de interés registrado, no es un texto fijo que se pueda aplanar en una plantilla sin perder esa lógica.</p>
+${ajustesTemplateRow("visita_confirmacion", "Confirmar visita (automático al agendar dentro de horario)")}
+${ajustesTemplateRow("reserva_pago", "Pedir el pago de la reserva (botón manual, en Reservas)")}
+${ajustesTemplateRow("reserva_confirmada", "Reserva confirmada (automático al verificar el pago)")}
 </div>
 <button class="btn ok" type="submit">Guardar cambios</button>
 </form>

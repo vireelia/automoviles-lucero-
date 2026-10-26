@@ -9,16 +9,22 @@ import { readCollection, writeCollection } from "../store.js";
 // real (solo menciona la próxima visita SI existe una real, solo menciona
 // el vehículo SI hay interés registrado), no es un simple "rellenar
 // huecos" y aplanarlo a una plantilla única perdería esa lógica.
-export type MessageTemplateKey = "visita_confirmacion" | "reserva_pago";
+export type MessageTemplateKey = "visita_confirmacion" | "reserva_pago" | "reserva_confirmada";
 
 export const MESSAGE_TEMPLATE_DEFAULTS: Record<MessageTemplateKey, string> = {
   visita_confirmacion: "Hola, le escribe Automóviles Lucero. Le esperamos el {{dia_semana}} {{dia}} de {{mes}} a las {{hora}} para ver el {{vehiculo}}. ¿Le viene bien?",
   reserva_pago: "Hola, le escribe Automóviles Lucero. Para apartar el {{vehiculo}} necesitamos {{importe}} €. Cuando haga el pago, envíenos el justificante por aquí. Gracias.",
+  // Aviso real al cliente cuando el equipo confirma que el justificante es
+  // válido (27/10/2026, "avisos automaticos desde el crm a cada cliente") --
+  // hasta ahora confirmReservation solo cambiaba el estado interno, el
+  // cliente nunca se enteraba salvo que alguien le escribiera a mano.
+  reserva_confirmada: "Hola, le escribe Automóviles Lucero. Su reserva del {{vehiculo}} queda confirmada. Le esperamos para completar la operación. Gracias por su confianza.",
 };
 
 export const MESSAGE_TEMPLATE_VARS: Record<MessageTemplateKey, string[]> = {
   visita_confirmacion: ["dia_semana", "dia", "mes", "hora", "vehiculo"],
   reserva_pago: ["vehiculo", "importe"],
+  reserva_confirmada: ["vehiculo"],
 };
 
 type TemplateRow = { id: MessageTemplateKey; text: string; updated_at?: string; updated_by?: string | null };
