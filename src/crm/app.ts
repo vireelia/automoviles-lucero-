@@ -231,6 +231,26 @@ const LEAD_PHASE_LABEL: Record<LeadPhase, string> = {
   archivado: "Archivado",
   no_contactar: "No contactar",
 };
+// Color por fase (26/10/2026, "E1" del embudo comercial -- antes columnas
+// sin ningún color que las distinguiera). Progresión real del proceso:
+// gris (sin empezar) -> ámbar (hay que actuar) -> azul (en marcha) ->
+// violeta (negociando) -> verde (ganado) -- venta_perdida/archivado en
+// gris apagado, nunca rojo de "error" (perder una venta no es un fallo
+// del sistema).
+const EMBUDO_PHASE_COLOR: Record<LeadPhase, [string, string]> = {
+  nuevo: ["#eef1f5", "#5b6472"],
+  pendiente_contactar: ["#fff4e0", "#8a5a00"],
+  contactado: ["#dbeafe", "#1d4ed8"],
+  visita_concertada: ["#e0f2fe", "#0369a1"],
+  visita_realizada: ["#e0f2fe", "#0369a1"],
+  negociacion_financiacion: ["#ede9fe", "#6d28d9"],
+  reserva_pendiente: ["#fff4e0", "#8a5a00"],
+  reservado: ["#dcfce7", "#15803d"],
+  venta_cerrada: ["#e3f6e8", "#1f7a42"],
+  venta_perdida: ["#f3f4f6", "#6b7280"],
+  archivado: ["#f3f4f6", "#6b7280"],
+  no_contactar: ["#f3f4f6", "#6b7280"],
+};
 function leadPhase(
   lead: Lead,
   appts: Appointment[],
@@ -2206,22 +2226,26 @@ const EMBUDO_COLUMNS: LeadPhase[] = [
   "venta_cerrada",
   "venta_perdida",
 ];
+// Tarjeta compacta con borde de color por fase (26/10/2026, "E1" --
+// mismo dato y mismas acciones de siempre, solo más corta y con el color
+// de EMBUDO_PHASE_COLOR como borde izquierdo para que se note a qué
+// columna pertenece incluso si se saca de ahí (vista en lista).
 function embudoCard(l: Lead, phase: LeadPhase, resv: Reservation[]): string {
   const myReserva = resv.find((r) => r.lead_phone === l.phone && (r.status === "pending_payment" || r.status === "pending_verification" || r.status === "confirmed"));
   const daysInPhase = Math.floor((Date.now() - new Date(l.updated_at ?? l.created_at).getTime()) / 86400000);
-  return `<div class="card" style="margin-bottom:10px"><div class="info">
-<h3 style="font-size:19px">${esc(leadDisplayName(l))}</h3>
-<p class="sub">${esc(l.vehicle_interest ?? "sin coche de interés")}</p>
-<p><span class="origen">${esc(ORIGIN[l.origin ?? ""] ?? "origen sin registrar")}</span></p>
-${myReserva ? `<p><b>${myReserva.amount_eur} €</b></p>` : ""}
-<form method="post" action="/crm/clientes/${esc(l.id)}">
+  const [, accent] = EMBUDO_PHASE_COLOR[phase] ?? EMBUDO_PHASE_COLOR.nuevo;
+  return `<div style="background:#fff;border:1px solid var(--border);border-left:3px solid ${accent};border-radius:9px;padding:11px 13px;margin-bottom:8px;display:flex;flex-direction:column;gap:5px">
+<b style="font-size:14.5px">${esc(leadDisplayName(l))}</b>
+<span style="font-size:12.5px;color:var(--ink-dim)">${esc(l.vehicle_interest ?? "sin coche de interés")}${myReserva ? ` · ${myReserva.amount_eur} €` : ""}</span>
+<span class="origen" style="align-self:flex-start">${esc(ORIGIN[l.origin ?? ""] ?? "origen sin registrar")}</span>
+<form method="post" action="/crm/clientes/${esc(l.id)}" style="display:flex;flex-direction:column;gap:5px;margin-top:2px">
 <input type="hidden" name="accion" value="actualizar_embudo"><input type="hidden" name="volver" value="/crm/embudo">
-<label class="sub">Responsable</label><select name="assigned_to" onchange="this.form.submit()"><option value="">Sin asignar</option>${listUsers().map((u) => `<option value="${esc(u.email)}" ${l.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select>
-<label class="sub">Próxima acción</label><input name="next_action" value="${esc(l.next_action ?? "")}" placeholder="ej. llamar el jueves">
-<button class="btn light" type="submit" style="font-size:15px;padding:8px 12px">Guardar</button>
+<select name="assigned_to" onchange="this.form.submit()" style="font-size:12.5px;padding:6px 8px;margin:0"><option value="">Sin asignar</option>${listUsers().map((u) => `<option value="${esc(u.email)}" ${l.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select>
+<input name="next_action" value="${esc(l.next_action ?? "")}" placeholder="Próxima acción, ej. llamar el jueves" style="font-size:12.5px;padding:6px 8px;margin:0">
+<button class="btn light" type="submit" style="font-size:12.5px;padding:6px 10px;margin:0;align-self:flex-start">Guardar</button>
 </form>
-<p class="sub">${daysInPhase === 0 ? "Hoy" : `Hace ${daysInPhase} día(s)`} en esta fase -- <a class="link" href="/crm/clientes/${esc(l.id)}">Ver ficha</a></p>
-</div></div>`;
+<span style="font-size:11.5px;color:var(--ink-dim)">${daysInPhase === 0 ? "Hoy" : `Hace ${daysInPhase} día(s)`} en esta fase · <a class="link" href="/crm/clientes/${esc(l.id)}">Ver ficha</a></span>
+</div>`;
 }
 crm.get("/embudo", (req, res) => {
   const vista = req.query.v === "lista" ? "lista" : "columnas";
@@ -2233,19 +2257,25 @@ crm.get("/embudo", (req, res) => {
   const withPhase = leads
     .map((l) => ({ lead: l, phase: leadPhase(l, appts, resv, today, financing) }))
     .filter((x) => EMBUDO_COLUMNS.includes(x.phase));
+  // Cabecera de columna con color de fase (26/10/2026, "E1" -- antes
+  // columnas sin ningún color que las distinguiera).
+  const columnHeader = (phase: LeadPhase, count: number) => {
+    const [bg, fg] = EMBUDO_PHASE_COLOR[phase] ?? EMBUDO_PHASE_COLOR.nuevo;
+    return `<div style="background:${bg};color:${fg};border-radius:9px;padding:8px 12px;font-size:13.5px;font-weight:700;margin-bottom:8px">${esc(LEAD_PHASE_LABEL[phase])} (${count})</div>`;
+  };
   const body = vista === "lista"
     ? `<h1>Embudo comercial</h1>
 <p class="sub">${withPhase.length} oportunidad(es) activa(s). <a class="link" href="/crm/embudo">Ver en columnas</a></p>
 ${EMBUDO_COLUMNS.map((phase) => {
   const items = withPhase.filter((x) => x.phase === phase);
-  return items.length === 0 ? "" : `<h2>${esc(LEAD_PHASE_LABEL[phase])} (${items.length})</h2>${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("")}`;
+  return items.length === 0 ? "" : `${columnHeader(phase, items.length)}${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("")}`;
 }).join("")}`
     : `<h1>Embudo comercial</h1>
 <p class="sub">${withPhase.length} oportunidad(es) activa(s). <a class="link" href="/crm/embudo?v=lista">Ver en lista</a></p>
 <div style="display:flex;gap:14px;overflow-x:auto;padding-bottom:10px">
 ${EMBUDO_COLUMNS.map((phase) => {
   const items = withPhase.filter((x) => x.phase === phase);
-  return `<div style="min-width:280px;flex-shrink:0"><h3 style="font-size:17px">${esc(LEAD_PHASE_LABEL[phase])} (${items.length})</h3>${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("") || `<div class="empty">Vacío</div>`}</div>`;
+  return `<div style="min-width:280px;flex-shrink:0">${columnHeader(phase, items.length)}${items.map((x) => embudoCard(x.lead, x.phase, resv)).join("") || `<div class="empty">Vacío</div>`}</div>`;
 }).join("")}
 </div>`;
   res.type("html").send(page("Embudo comercial", me(res), body, msgOf(req)));
