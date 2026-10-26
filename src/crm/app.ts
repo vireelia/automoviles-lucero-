@@ -4964,9 +4964,24 @@ crm.get("/studio", async (req, res) => {
   const budget = budgetInfo();
 
   if (!isHiggsfieldConnected()) {
+    // "I2" de las ideas de diseño enviadas (26/10/2026) -- caja de estado
+    // (mismo lenguaje visual que Integraciones) + vistazo bloqueado a las
+    // 10 plantillas reales (STUDIO_TEMPLATES, las mismas que usa la página
+    // ya conectada, nunca una lista inventada aparte) para que se vea qué
+    // está esperando antes de poner la clave de Higgsfield.
+    const lockedGrid = STUDIO_TEMPLATES.map(
+      (t) => `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center"><span style="font-size:22px">${t.icon}</span><p style="margin:6px 0 0;font-size:12px;font-weight:700">${esc(t.label)}</p></div>`,
+    ).join("");
     const body = `<h1>Studio IA</h1>
 <p class="sub">Genera vídeos e imágenes publicitarias de los coches con IA.</p>
-<div class="todo"><h2 style="margin-top:0">Falta conectar Higgsfield</h2><p>Todavía no hay una clave de API de Higgsfield puesta en el servidor. Avisa al administrador para que la añada antes de poder generar nada.</p></div>`;
+<div class="box" style="max-width:560px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">${statusBadge("H", "urgent")}<div><h3 style="margin:0">Higgsfield</h3>${statusPill("No conectado", "urgent")}</div></div>
+<p style="margin:0 0 10px">Todavía no hay una clave de API de Higgsfield puesta en el servidor -- sin ella no se puede generar ningún vídeo ni imagen.</p>
+<div style="background:var(--panel);border-radius:9px;padding:10px 12px;font-size:12.5px;color:var(--ink-dim)">Avisa al administrador para que añada <code style="background:#fff;padding:1px 5px;border-radius:4px;border:1px solid var(--border)">HIGGSFIELD_API_KEY_ID</code> y <code style="background:#fff;padding:1px 5px;border-radius:4px;border:1px solid var(--border)">HIGGSFIELD_API_KEY_SECRET</code> en EasyPanel y vuelva a implementar.</div>
+</div>
+<div style="position:relative;margin-top:18px">
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;filter:grayscale(1);opacity:.45">${lockedGrid}</div>
+<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="background:var(--ink);color:#fff;font-size:12.5px;font-weight:700;padding:8px 16px;border-radius:999px;display:flex;align-items:center;gap:6px">🔒 Se desbloquea al conectar Higgsfield</span></div>
+</div>`;
     return res.type("html").send(page("Studio IA", me(res), body, msgOf(req)));
   }
 
