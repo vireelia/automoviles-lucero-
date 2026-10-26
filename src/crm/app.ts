@@ -730,7 +730,7 @@ const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean
   { key: "trending", href: "/crm/ventas", label: "Ventas" },
   { key: "check", href: "/crm/seguimiento", label: "Tareas" },
   { key: "chart", href: "/crm/informes", label: "Informes" },
-  { key: "cpu", href: "/crm/integraciones#agentes-ia", label: "Asistentes", adminOnly: true },
+  { key: "cpu", href: "/crm/asistentes", label: "Asistentes", adminOnly: true },
   { key: "plug", href: "/crm/integraciones", label: "Integraciones", adminOnly: true },
   { key: "users", href: "/crm/equipo", label: "Usuarios", adminOnly: true },
   { key: "settings", href: "/crm/ajustes", label: "Ajustes", adminOnly: true },
@@ -1135,7 +1135,7 @@ window.toggleAllMsgs = function (master, name) {
 
 // Campo de contraseña con un botón para ver u ocultar el texto.
 function pwInput(attrs: string, id: string): string {
-  return `<div style="position:relative"><input id="${id}" type="password" ${attrs} style="padding-right:72px"><button type="button" onclick="var i=document.getElementById('${id}');var s=i.type==='password';i.type=s?'text':'password';this.textContent=s?'Ocultar':'Ver'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 10px;font-size:15px;background:none;color:#1d2b44;font-weight:600;cursor:pointer;border:0">Ver</button></div>`;
+  return `<div style="position:relative"><input id="${id}" type="password" ${attrs} style="padding-right:72px"><button type="button" onclick="var i=document.getElementById('${id}');var s=i.type==='password';i.type=s?'text':'password';this.textContent=s?'Ocultar':'Ver'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 10px;font-size:15px;background:none;color:#dc2626;font-weight:600;cursor:pointer;border:0">Ver</button></div>`;
 }
 
 function loginPage(error?: string): string {
@@ -1602,9 +1602,9 @@ crm.get("/citas", (req, res) => {
   else if (d === "sin_fecha") items = items.filter((a) => !a.requested_date);
   else if (d === "otros_dias") items = items.filter((a) => a.requested_date && a.requested_date !== today && a.requested_date !== addDaysToDateStr(today, -1));
   items.sort((x, y) => `${x.requested_date ?? ""}${x.requested_time ?? ""}`.localeCompare(`${y.requested_date ?? ""}${y.requested_time ?? ""}`));
-  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}&d=${d}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
-  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}&d=${d}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
-  const diaPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${c}&d=${k}" class="tag" style="text-decoration:none;${d === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const pill = (k: string, label: string) => `<a href="/crm/citas?f=${k}&c=${c}&d=${d}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
+  const canalPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${k}&d=${d}" class="tag" style="text-decoration:none;${c === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
+  const diaPill = (k: string, label: string) => `<a href="/crm/citas?f=${f}&c=${c}&d=${k}" class="tag" style="text-decoration:none;${d === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Visitas</h1>
 <p class="sub">Aquí ves los días y las horas en que vendrán los clientes a ver un coche.</p>
 <p>${diaPill("todas", "Todos los días")} ${diaPill("hoy", "Hoy")} ${diaPill("ayer", "Ayer")} ${diaPill("otros_dias", "Otros días")} ${diaPill("sin_fecha", "Sin fecha")}</p>
@@ -1717,7 +1717,7 @@ crm.get("/reservas", async (req, res) => {
   // único de vehículo -- la función nunca adivina, ver tools/requests.ts).
   const allReservationsForCheck = list<Reservation>("reservations");
   const interesados = interesHandoffs.filter((h) => !allReservationsForCheck.some((r) => r.lead_phone === h.lead_phone));
-  const canalPill = (k: string, label: string) => `<a href="/crm/reservas?c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const canalPill = (k: string, label: string) => `<a href="/crm/reservas?c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Reservas</h1>
 <p class="sub">Una reserva aparta un coche con 500 €. Cuando el cliente paga, compruébalo y pulsa "Confirmar la reserva".</p>
 ${interesados.length > 0 ? `<h2>Interesados en reservar, sin confirmar (${interesados.length})</h2>
@@ -1899,7 +1899,7 @@ crm.get("/seguimiento", (req, res) => {
   if (f === "vencidas") items = items.filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
   if (f === "completadas") items = items.filter((t) => t.status === "completada");
   items = items.sort((a, b) => (b.priority === "alta" ? 1 : 0) - (a.priority === "alta" ? 1 : 0) || (a.due_at ?? "9999").localeCompare(b.due_at ?? "9999"));
-  const pill = (k: string, label: string) => `<a href="/crm/seguimiento?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const pill = (k: string, label: string) => `<a href="/crm/seguimiento?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Tareas</h1>
 <p class="sub">Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar, cliente que no se presentó, handoff urgente), otras se añaden a mano.</p>
 ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;border-color:#c62828">🔥 ${hotWithoutAction.length} cliente(s) caliente(s) sin próxima acción definida: ${hotWithoutAction.map((l) => `<a class="link" href="/crm/clientes?q=${esc(l.phone ?? "")}">${esc(leadDisplayName(l))}</a>`).join(", ")}</div>` : ""}
@@ -2334,7 +2334,7 @@ crm.get("/correos", (req, res) => {
   const f = msgFilterFromQuery(req);
   const q = String(req.query.q ?? "").trim();
   const body = `<h1>Correos</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Daniel</span></p>
+<p><span class="tag" style="background:var(--panel);color:var(--ink)">Agente encargado: Daniel</span></p>
 <p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
 ${correoPanel(f, q, me(res), "/crm/correos")}`;
   res.type("html").send(page("Correos", me(res), body, msgOf(req)));
@@ -2394,7 +2394,7 @@ crm.get("/whatsapp", (req, res) => {
   const f = msgFilterFromQuery(req);
   const q = String(req.query.q ?? "").trim();
   const body = `<h1>WhatsApp</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Carolina</span></p>
+<p><span class="tag" style="background:var(--panel);color:var(--ink)">Agente encargado: Carolina</span></p>
 <p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
 ${whatsappPanel(f, q, me(res), "/crm/whatsapp")}`;
   res.type("html").send(page("WhatsApp", me(res), body, msgOf(req)));
@@ -2472,7 +2472,7 @@ crm.get("/llamadas", (req, res) => {
   const f = msgFilterFromQuery(req);
   const q = String(req.query.q ?? "").trim();
   const body = `<h1>Llamadas</h1>
-<p><span class="tag" style="background:#1d2b44;color:#fff">Agente encargado: Miguel</span></p>
+<p><span class="tag" style="background:var(--panel);color:var(--ink)">Agente encargado: Miguel</span></p>
 <p class="sub">Llamadas atendidas por Miguel, con el resultado del análisis automático.</p>
 ${llamadasPanel(f, q, me(res), "/crm/llamadas")}`;
   res.type("html").send(page("Llamadas", me(res), body, msgOf(req)));
@@ -2807,6 +2807,14 @@ crm.post("/contactos/nuevo", (req, res) => {
   const canal = String(req.body.canal ?? "MANUAL").trim();
   if (!nombre || !contacto) return back(res, "/crm/contactos/nuevo", "Falta el nombre o el teléfono/correo");
   const isEmail = contacto.includes("@");
+  // Comprobación real de duplicados antes de guardar (25/10/2026, encargo:
+  // "antes de guardar, el sistema debe comprobar posibles duplicados por
+  // teléfono y correo... ofrecerá abrir su ficha... en lugar de crear otro
+  // duplicado") -- upsertLead ya fusiona por teléfono/correo normalizado
+  // (tools/leads.ts), así que nunca se duplica el registro; esto solo
+  // decide el mensaje honesto: si ya existía, se dice así en vez de fingir
+  // que se creó uno nuevo.
+  const existing = findLeadForContact(list<Lead>("leads"), isEmail ? null : contacto, isEmail ? contacto : null);
   const result = upsertLead({
     name: nombre,
     phone: isEmail ? undefined : contacto,
@@ -2815,7 +2823,7 @@ crm.post("/contactos/nuevo", (req, res) => {
     channel: canal,
   });
   if (result.status !== "ok" || !result.data) return back(res, "/crm/contactos/nuevo", "No se pudo crear el contacto");
-  back(res, `/crm/clientes/${result.data.id}`, "Contacto creado");
+  back(res, `/crm/clientes/${result.data.id}`, existing ? `Ya existía este contacto (${existing.name || existing.phone || existing.email || ""}) -- se actualizó su ficha, no se creó otro` : "Contacto creado");
 });
 
 crm.get("/contactos/:canal", (req, res) => {
@@ -2945,11 +2953,11 @@ crm.get("/entrada", (req, res) => {
     .sort((a, b) => a.priority.localeCompare(b.priority) || (b.lead.updated_at ?? b.lead.created_at).localeCompare(a.lead.updated_at ?? a.lead.created_at));
   const prioCard = (k: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string) =>
     toggleCard(`/crm/entrada?p=${k}&cal=${cal}`, icon, iconBg, iconColor, label, sub, k === "todas" ? calFiltered.length : countByPrio(k), p === k);
-  const calPill = (k: string, label: string) => `<a href="/crm/entrada?p=${p}&cal=${k}" class="tag" style="text-decoration:none;${cal === k ? "background:#1d2b44;color:#fff" : ""}">${label}</a>`;
+  const calPill = (k: string, label: string) => `<a href="/crm/entrada?p=${p}&cal=${k}" class="tag" style="text-decoration:none;${cal === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Entrada de leads</h1>
 <p class="sub">Qué atiende ahora mismo, en orden de prioridad. Para el historial completo o buscar a alguien concreto, usa Clientes.</p>
 <div class="toggle-cards">
-${prioCard("todas", "📋", "#e8ebf1", "#1d2b44", "Todas", "Toda la bandeja")}
+${prioCard("todas", "📋", "#e8ebf1", "#1a1d23", "Todas", "Toda la bandeja")}
 ${prioCard("P1", "🔴", "#fee2e2", "#dc2626", "P1 -- Urgente", "Atender ya")}
 ${prioCard("P2", "🟠", "#ffedd5", "#ea580c", "P2 -- Alta", "Pronto")}
 ${prioCard("P3", "🟡", "#fef9c3", "#a16207", "P3 -- Normal", "Sin prisa")}
@@ -2985,7 +2993,7 @@ crm.get("/clientes", (req, res) => {
   const countByTemp = (temp: string) => activeLeadsForCount.filter((l) => l.temperature === temp).length;
   const tempCard = (k: string, icon: string, iconBg: string, iconColor: string, label: string, sub: string, count: number) =>
     toggleCard(`/crm/clientes?t=${k}&d=${dateFilter}`, icon, iconBg, iconColor, label, sub, count, t === k);
-  const datePill = (k: DateFilterKey) => `<a href="/crm/clientes?t=${t}&d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
+  const datePill = (k: DateFilterKey) => `<a href="/crm/clientes?t=${t}&d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:var(--accent);color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const isAdmin = me(res).role === "admin";
   const bulk = isAdmin && leads.length > 0
     ? `<form id="clientes-bulk" method="post" action="/crm/clientes-masivo"><input type="hidden" name="t" value="${esc(t)}"></form>
@@ -3006,7 +3014,7 @@ ${t === "archivados"
 <label>Coche de interés</label><input name="vehicle_interest">
 <button class="btn ok" type="submit">Añadir cliente</button></form></div>
 <div class="toggle-cards">
-${tempCard("todos", "👥", "#e8ebf1", "#1d2b44", "Todos", "Clientes activos", activeLeadsForCount.length)}
+${tempCard("todos", "👥", "#e8ebf1", "#1a1d23", "Todos", "Clientes activos", activeLeadsForCount.length)}
 ${tempCard("HOT", "🔥", "#fee2e2", "#dc2626", "Caliente", "Intención de compra clara", countByTemp("HOT"))}
 ${tempCard("WARM", "🙂", "#ffedd5", "#ea580c", "Tibio", "Interés real, sin prisa", countByTemp("WARM"))}
 ${tempCard("COLD", "❄️", "#e0f2fe", "#0369a1", "Frío", "Consulta exploratoria", countByTemp("COLD"))}
@@ -3386,7 +3394,7 @@ crm.get("/informes", (req, res) => {
   const sinTelefonoNiNombre = allLeadsEver.filter((l) => !l.phone && !l.name).length;
 
   const stat = (n: number | string, label: string) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
-  const datePill = (k: DateFilterKey) => `<a href="/crm/informes?d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:#1d2b44;color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
+  const datePill = (k: DateFilterKey) => `<a href="/crm/informes?d=${k}" class="tag" style="text-decoration:none;${dateFilter === k ? "background:var(--accent);color:#fff" : ""}">${DATE_FILTER_LABEL[k]}</a>`;
   const pct = (n: number | null) => (n === null ? "sin datos" : `${n.toFixed(0)}%`);
   const body = `<h1>Informes</h1>
 <p class="sub">Todo lo de abajo son conteos reales del periodo elegido -- nunca una cifra estimada. "Sin datos" significa que todavía no hay ningún caso real que medir, no un error.</p>
@@ -3500,6 +3508,33 @@ function onlyAdmin(res: express.Response): boolean {
   return me(res).role === "admin";
 }
 
+// Estadísticas reales de llamadas de voz (25/10/2026, factorizado al
+// separar Integraciones de Asistentes) -- las usan ambas páginas: aquí
+// solo para el estado de Miguel, en /crm/asistentes para el coste y la
+// cola de calidad. Una sola lectura real, nunca dos fuentes distintas.
+function voiceCallStats() {
+  const recentCalls = readCollection<{
+    channel: string;
+    call_id?: string | null;
+    from_number?: string | null;
+    created_at: string;
+    duration_ms: number | null;
+    cost_cents: number | null;
+    transfer_outcome?: string | null;
+    custom_analysis_data?: { outcome?: string; issues_detected?: string };
+    max_pause_sec?: number | null;
+    needs_review?: boolean;
+    summary?: string | null;
+  }>("call_analyses").filter((c) => c.channel === "VOICE");
+  const lastCall = recentCalls.length ? recentCalls[recentCalls.length - 1] : null;
+  const totalCostEur = recentCalls.reduce((sum, c) => sum + (c.cost_cents ?? 0), 0) / 100;
+  const escalatedCount = recentCalls.filter((c) => c.custom_analysis_data?.outcome === "escalado_a_persona").length;
+  const transferRamon = recentCalls.filter((c) => c.transfer_outcome === "transferido_ramon").length;
+  const transferJose = recentCalls.filter((c) => c.transfer_outcome === "transferido_jose").length;
+  const transferNadie = recentCalls.filter((c) => c.transfer_outcome === "ninguno_respondio_registrado").length;
+  return { recentCalls, lastCall, totalCostEur, escalatedCount, transferRamon, transferJose, transferNadie };
+}
+
 crm.get("/integraciones", (req, res) => {
   if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
   const st = googleStatus();
@@ -3535,53 +3570,64 @@ ${test ? `<p>Evento de prueba creado: <a href="${esc(test.link)}" target="_blank
 <p class="sub">En modo de prueba, cada correo se clasifica y se redacta igual que siempre -- solo cambia que la respuesta se queda como nota en Pendientes en vez de enviarse. Útil para probar cambios sin arriesgar un envío real.</p>
 </div>`;
   const voiceOn = isVoiceAgentEnabled();
-  const recentCalls = readCollection<{
-    channel: string;
-    call_id?: string | null;
-    from_number?: string | null;
-    created_at: string;
-    duration_ms: number | null;
-    cost_cents: number | null;
-    transfer_outcome?: string | null;
-    custom_analysis_data?: { outcome?: string; issues_detected?: string };
-    max_pause_sec?: number | null;
-    needs_review?: boolean;
-    summary?: string | null;
-  }>("call_analyses").filter((c) => c.channel === "VOICE");
-  const lastCall = recentCalls.length ? recentCalls[recentCalls.length - 1] : null;
-  const totalCostEur = recentCalls.reduce((sum, c) => sum + (c.cost_cents ?? 0), 0) / 100;
-  const escalatedCount = recentCalls.filter((c) => c.custom_analysis_data?.outcome === "escalado_a_persona").length;
-  const transferRamon = recentCalls.filter((c) => c.transfer_outcome === "transferido_ramon").length;
-  const transferJose = recentCalls.filter((c) => c.transfer_outcome === "transferido_jose").length;
-  const transferNadie = recentCalls.filter((c) => c.transfer_outcome === "ninguno_respondio_registrado").length;
+  const vs = voiceCallStats();
   const voiceBox = `<div class="box"><h3 style="margin-top:0">Teléfono -- agente de voz Miguel</h3>
 <p>Número: +34 919 58 88 87. Estado: <strong>${voiceOn ? "Miguel está respondiendo" : "Desactivado -- suenan Ramón y José directamente"}</strong></p>
 <form method="post" action="/crm/integraciones/telefono/${voiceOn ? "desactivar" : "activar"}" style="display:inline">
 <button class="btn ${voiceOn ? "danger" : "ok"}" type="submit" onclick="return confirm('${voiceOn ? "¿Desactivar a Miguel? Las llamadas nuevas sonarán directamente en los móviles de Ramón y José." : "¿Activar a Miguel? Volverá a responder él las llamadas nuevas."}')">${voiceOn ? "Desactivar a Miguel" : "Activar a Miguel"}</button>
 </form>
 <p class="sub">Esto NO toca el desvío de Yoigo -- solo decide si las llamadas que ya llegan al número de Twilio las contesta Miguel o van directas a Ramón/José.</p>
-<p>Llamadas registradas: <strong>${recentCalls.length}</strong> -- Última: <strong>${lastCall ? esc(fmtDate(lastCall.created_at)) : "ninguna todavía"}</strong></p>
-<p>Escaladas a persona: <strong>${escalatedCount}</strong> -- Coste estimado acumulado: <strong>${totalCostEur.toFixed(2)} $</strong></p>
-<p>Transferencias -- a Ramón: <strong>${transferRamon}</strong> · a José: <strong>${transferJose}</strong> · nadie respondió: <strong>${transferNadie}</strong></p>
+<p>Llamadas registradas: <strong>${vs.recentCalls.length}</strong> -- Última: <strong>${vs.lastCall ? esc(fmtDate(vs.lastCall.created_at)) : "ninguna todavía"}</strong></p>
+<p>Escaladas a persona: <strong>${vs.escalatedCount}</strong> -- Coste estimado acumulado: <strong>${vs.totalCostEur.toFixed(2)} $</strong></p>
+<p>Transferencias -- a Ramón: <strong>${vs.transferRamon}</strong> · a José: <strong>${vs.transferJose}</strong> · nadie respondió: <strong>${vs.transferNadie}</strong></p>
 <p class="sub">El coste y las transferencias son los reales que reporta Retell al terminar cada llamada (sumado desde el 13/10/2026) -- no incluye llamadas anteriores a esa fecha, y no hay un evento en vivo por cada intento, solo el resultado final de la llamada.</p>
 </div>`;
-  // Calidad de llamadas (15/10/2026, el "cerebro" pedido): cada llamada real
-  // queda marcada sola (ver tools/webhooks.ts) si tuvo una pausa larga, un
-  // fallo o un incidente de seguridad -- así se ve de un vistazo cuáles
-  // merece la pena escuchar, en vez de pedir la API de Retell cada vez.
-  const toReview = recentCalls.filter((c) => c.needs_review).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 10);
-  const qualityBox = `<div class="box"><h3 style="margin-top:0">Calidad de llamadas (automático)</h3>
-<p class="sub">Cada llamada real se revisa sola al terminar -- aquí aparecen las que tuvieron una pausa larga (más de 6s), no salieron bien, o tuvieron algún incidente. Útil para detectar fallos reales sin tener que escuchar todas.</p>
-${toReview.length === 0
-  ? `<p>Ninguna llamada marcada para revisar por ahora.</p>`
-  : toReview.map((c) => `<p>${esc(fmtDate(c.created_at))} -- ${esc(c.from_number ?? "número desconocido")}${c.max_pause_sec ? ` -- pausa de ${c.max_pause_sec.toFixed(1)}s` : ""}${c.custom_analysis_data?.issues_detected && c.custom_analysis_data.issues_detected !== "ninguno" ? ` -- ${esc(c.custom_analysis_data.issues_detected)}` : ""}${c.summary ? `<br><span class="sub">${esc(c.summary)}</span>` : ""}</p>`).join("")}
+  // Lista lateral (21/10/2026, a petición real: "ponlas en un lado como el
+  // crm de klikar") -- mismas cajas de siempre, reorganizadas en dos
+  // columnas en vez de una sola lista larga de arriba a abajo.
+  // "Agentes IA" y "Calidad de llamadas" se mudaron a /crm/asistentes
+  // (25/10/2026, "hay integraciones que sobran" -- el encargo separa
+  // "Asistentes: configuración y actividad de asistentes virtuales" de
+  // "Integraciones: WhatsApp, correo, telefonía y calendario"; esto solo
+  // reagrupa cajas ya reales que existían, no se pierde ni se inventa nada).
+  const sideNav = `<nav class="side-nav">
+<a href="#google">Google</a>
+<a href="#correo">Correo</a>
+<a href="#whatsapp">WhatsApp</a>
+<a href="#telefono">Teléfono -- voz</a>
+</nav>`;
+  const body = `<h1>Integraciones</h1>
+<p class="sub">Conexión con WhatsApp, correo, telefonía y calendario. La actividad de los asistentes vive en <a class="link" href="/crm/asistentes">Asistentes</a>.</p>
+${config}
+<div class="side-layout">
+${sideNav}
+<div class="side-content">
+<div class="box" id="google"><h3 style="margin-top:0">Google</h3>
+<p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
+<p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
+${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
+<p>Permisos concedidos:</p>${scopesHtml}
+<p>${connectButton} ${disconnectButton}</p>
+</div>
+${tests}
+<div id="correo">${emailModeBox}</div>
+<div id="whatsapp">${whatsappZernioBox(req)}</div>
+<div id="telefono">${voiceBox}</div>
+</div>
 </div>`;
+  res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
+});
+
+crm.get("/asistentes", (req, res) => {
+  if (!onlyAdmin(res)) return back(res, "/crm", "Esta sección es solo para el administrador");
+  const vs = voiceCallStats();
+  const emailSendOn = isEmailAutoSendEnabled();
   // Tarjetas de los 3 agentes (20/10/2026, mejora integral del CRM, sección
-  // 15): resumen por identidad, reutilizando datos reales que ya se
-  // registran (leads, handoffs, tasks, call_analyses) -- nunca una tarjeta
-  // visual sin datos detrás. El coste solo es real para voz (Retell lo
-  // reporta); en WhatsApp/chat/correo se dice honestamente que no hay
-  // seguimiento de coste por canal todavía, en vez de inventar un número.
+  // 15; separado de Integraciones el 25/10/2026): resumen por identidad,
+  // reutilizando datos reales que ya se registran (leads, handoffs, tasks,
+  // call_analyses) -- nunca una tarjeta visual sin datos detrás. El coste
+  // solo es real para voz (Retell lo reporta); en WhatsApp/chat/correo se
+  // dice honestamente que no hay seguimiento de coste por canal todavía.
   const allLeadsForAgents = list<Lead>("leads");
   const allHandoffsForAgents = list<Handoff>("handoffs");
   const allTasksForAgents = listTasks();
@@ -3600,46 +3646,29 @@ ${toReview.length === 0
 <p class="sub">Última actividad: ${ultima ? esc(fmtDate(ultima.updated_at ?? ultima.created_at)) : "ninguna todavía"}</p>
 </div>`;
   }
-  const agentCards = `<h2 id="agentes" style="margin-top:0">Agentes IA</h2>
+  const agentCards = `<h2 style="margin-top:0">Agentes IA</h2>
 <div class="row">
-${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", voiceOn ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"])}
+${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"])}
 ${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"])}
 ${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"])}
 </div>
-<p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
-  // Lista lateral (21/10/2026, a petición real: "ponlas en un lado como el
-  // crm de klikar") -- mismas cajas de siempre, reorganizadas en dos
-  // columnas en vez de una sola lista larga de arriba a abajo.
-  const sideNav = `<nav class="side-nav">
-<a href="#agentes">Agentes IA</a>
-<a href="#google">Google</a>
-<a href="#correo">Correo</a>
-<a href="#whatsapp">WhatsApp</a>
-<a href="#telefono">Teléfono -- voz</a>
-<a href="#calidad">Calidad de llamadas</a>
-</nav>`;
-  const body = `<h1>Integraciones</h1>
-<p class="sub">Conexión con la cuenta de Google del negocio: correo y calendario de citas.</p>
-${config}
-<div class="side-layout">
-${sideNav}
-<div class="side-content">
-${agentCards}
-<div class="box" id="google"><h3 style="margin-top:0">Google</h3>
-<p>Estado: <strong>${st.connected ? "Conectado" : "No conectado"}</strong></p>
-<p>Cuenta conectada: <strong>${esc(st.connected_email ?? (st.connected ? "(no leída)" : "ninguna"))}</strong></p>
-${st.connected_at ? `<p>Conectada desde: ${esc(fmtDate(st.connected_at))}</p>` : ""}
-<p>Permisos concedidos:</p>${scopesHtml}
-<p>${connectButton} ${disconnectButton}</p>
-</div>
-${tests}
-<div id="correo">${emailModeBox}</div>
-<div id="whatsapp">${whatsappZernioBox(req)}</div>
-<div id="telefono">${voiceBox}</div>
-<div id="calidad">${qualityBox}</div>
-</div>
+<p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${vs.totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
+  // Calidad de llamadas (15/10/2026, el "cerebro" pedido): cada llamada real
+  // queda marcada sola (ver tools/webhooks.ts) si tuvo una pausa larga, un
+  // fallo o un incidente de seguridad -- así se ve de un vistazo cuáles
+  // merece la pena escuchar, en vez de pedir la API de Retell cada vez.
+  const toReview = vs.recentCalls.filter((c) => c.needs_review).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 10);
+  const qualityBox = `<div class="box"><h3 style="margin-top:0">Calidad de llamadas (automático)</h3>
+<p class="sub">Cada llamada real se revisa sola al terminar -- aquí aparecen las que tuvieron una pausa larga (más de 6s), no salieron bien, o tuvieron algún incidente. Útil para detectar fallos reales sin tener que escuchar todas.</p>
+${toReview.length === 0
+  ? `<p>Ninguna llamada marcada para revisar por ahora.</p>`
+  : toReview.map((c) => `<p>${esc(fmtDate(c.created_at))} -- ${esc(c.from_number ?? "número desconocido")}${c.max_pause_sec ? ` -- pausa de ${c.max_pause_sec.toFixed(1)}s` : ""}${c.custom_analysis_data?.issues_detected && c.custom_analysis_data.issues_detected !== "ninguno" ? ` -- ${esc(c.custom_analysis_data.issues_detected)}` : ""}${c.summary ? `<br><span class="sub">${esc(c.summary)}</span>` : ""}</p>`).join("")}
 </div>`;
-  res.type("html").send(page("Integraciones", me(res), body, msgOf(req)));
+  const body = `<h1>Asistentes</h1>
+<p class="sub">Configuración y actividad real de los 3 asistentes de IA. La conexión técnica (WhatsApp/correo/teléfono) vive en <a class="link" href="/crm/integraciones">Integraciones</a>.</p>
+${agentCards}
+${qualityBox}`;
+  res.type("html").send(page("Asistentes", me(res), body, msgOf(req)));
 });
 
 // Inicia el consentimiento de Google desde el propio CRM (sin cabeceras ni curl).
