@@ -959,7 +959,7 @@ header.collapsed .sidebar-user{justify-content:center}
 .topbar-status .dot.ok{background:var(--ok)}
 .topbar-status .dot.down{background:var(--urgent)}
 .topbar-biz{display:flex;align-items:center;gap:4px;font-size:14px;font-weight:700;color:var(--ink);text-decoration:none;white-space:nowrap}
-main{flex:1;min-width:0;max-width:1440px;width:100%;margin:0 auto;padding:18px}
+main{flex:1;min-width:0;width:100%;padding:18px 28px}
 @media(max-width:900px){
 body{display:block}
 header{position:static;width:auto!important;flex:none!important;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
