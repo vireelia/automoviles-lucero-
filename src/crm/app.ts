@@ -1228,6 +1228,13 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .contactos-list-scroll{overflow-y:auto;max-height:70vh}
 .contact-row{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
 .contact-row:hover{background:var(--panel)}
+/* Petición real (27/10/2026, "cuando lea o se le responda a un mensaje
+que se ponga gris y cuando no, que se ponga blanco"): blanco (el fondo de
+siempre) mientras nadie lo ha leído ni respondido -- en cuanto se marca
+leído o se le contesta, pasa a gris para que destaque solo lo que de
+verdad sigue pendiente de mirar. */
+.contact-row.leido{background:#f3f4f6}
+.contact-row.leido .rbody b{color:var(--ink-dim)}
 .contact-row.active{background:var(--accent-dim)}
 .contact-row .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0}
 .contact-row .rbody{flex:1;min-width:0}
@@ -2743,6 +2750,16 @@ function bulkBar(base: string, f: MsgFilter, q: string, count: number, withAnswe
 function msgCheckbox(base: string, id: string): string {
   return `<input class="msgsel" type="checkbox" name="ids" value="${esc(id)}" form="${base}-bulk" style="position:absolute;top:18px;right:20px">`;
 }
+// Checkbox para una fila de Contactos (25/10/2026, "secciones de eliminar
+// para eliminar mensajes antiguos"): la fila es una conversación agrupada,
+// así que el checkbox manda TODOS los ids reales del hilo juntos (coma),
+// no solo el último mensaje visible -- igual que la X de Correos/WhatsApp
+// de siempre (bulkBar/runBulkAction), que ya sabe mover a la papelera
+// (recuperable). stopPropagation evita que marcar la casilla abra también
+// la conversación (la fila entera es un enlace <a>).
+function convoCheckbox(base: string, ids: string[]): string {
+  return `<input class="msgsel" type="checkbox" name="ids" value="${esc(ids.join(","))}" form="${base}-bulk" onclick="event.stopPropagation()" style="flex-shrink:0;width:16px;height:16px;margin:0">`;
+}
 // Versión simple del bulkbar para secciones sin estados de leído/archivado
 // (Visitas, Reservas, Avisos, Clientes) -- a petición real, 18/10/2026:
 // "el borrar masivo lo quiero en todas las secciones". Solo seleccionar
@@ -2846,7 +2863,9 @@ crm.post("/correos-masivo", (req, res) => {
   const f = msgFilterFromQuery(req);
   const q = String(req.body.q ?? "").trim();
   const accion = String(req.body.accion ?? "");
-  const ids = ([] as string[]).concat(req.body.ids ?? []);
+  // Mismo motivo que en /whatsapp-masivo: cada checkbox de Contactos manda
+  // los ids de toda la conversación agrupada, separados por coma.
+  const ids = ([] as string[]).concat(req.body.ids ?? []).flatMap((v) => v.split(","));
   const n = runBulkAction<InboxMail>(
     "email_inbox",
     accion,
@@ -2948,7 +2967,12 @@ crm.post("/whatsapp-masivo", (req, res) => {
   const f = msgFilterFromQuery(req);
   const q = String(req.body.q ?? "").trim();
   const accion = String(req.body.accion ?? "");
-  const ids = ([] as string[]).concat(req.body.ids ?? []);
+  // Petición real (27/10/2026, "secciones de eliminar... para eliminar
+  // mensajes antiguos"): en Contactos cada fila es una CONVERSACIÓN
+  // agrupada, no un mensaje -- su checkbox manda todos los ids reales de
+  // esa conversación juntos (separados por coma) para que "eliminar" borre
+  // el hilo entero, no solo el último mensaje visible.
+  const ids = ([] as string[]).concat(req.body.ids ?? []).flatMap((v) => v.split(","));
   const n = runBulkAction<WhatsappMessage>(
     "whatsapp_inbox",
     accion,
@@ -3278,7 +3302,15 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 // escribió cada envío: se usa el answered_by del mensaje entrante más
 // cercano en el tiempo, el único dato real que lo dice.
 function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string): { detail: string; activity: string } {
-  const lead = findLeadForContact(allLeads, null, selected.from);
+  // FALLO REAL detectado (27/10/2026, "que aquí salga el nombre real de
+  // cada cliente" -- caso real: un lead con el nombre real ya guardado
+  // ("محمد احمد") pero la ficha seguía mostrando "Sin ficha" + la
+  // dirección en bruto): en correo, el remitente (selected.from) se guarda
+  // como el campo "phone" del lead (es la clave de contacto real de este
+  // canal, no necesariamente su "email" -- con los relays de Coches.net
+  // casi nunca coincide). Buscarlo como email nunca encontraba el lead ya
+  // existente.
+  const lead = findLeadForContact(allLeads, selected.from, null);
   const inboundThread = (selected.thread_id ? list<InboxMail>("email_inbox").filter((m) => m.thread_id === selected.thread_id) : [selected])
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   // FALLO REAL detectado y corregido antes de confirmar (26/10/2026):
@@ -3401,15 +3433,22 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
     // lista para verlo sin tener que entrar en cada chat.
     const rowStatus = agentReplyStatus(m.created_at, m.answered, m.answered_by, isWhatsappZernioAgentEnabled() && !isWhatsappChatPaused(m.phone), "Carolina");
     const isSelected = selectedConvo === c;
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${isSelected ? " active" : ""}">
+    const rowClass = isSelected ? " active" : c.read || c.answered ? " leido" : "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${rowClass}">
+${convoCheckbox("/crm/whatsapp", c.all.map((x) => x.id))}
 ${avatarBadge(m.phone, name)}
 <div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span>${rowStatus.kind === "typing" ? `<span class="rsub" style="color:var(--ok);font-weight:600">${esc(rowStatus.label)}</span>` : ""}</div>
 <div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
+  // Petición real (27/10/2026, "secciones de eliminar... para eliminar
+  // mensajes antiguos"): mismo endpoint real de siempre (/crm/whatsapp-
+  // masivo), ya movía a la papelera (recuperable) -- solo faltaba volver a
+  // engancharlo aquí, dentro de Contactos, con un checkbox por conversación.
+  const rowsWithBulk = pageItems.length === 0 ? rows : bulkBar("/crm/whatsapp", f, q, pageItems.length, true) + rows;
+  if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = whatsappDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
-  return { rows, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
+  return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
 function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
@@ -3428,19 +3467,28 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   const selected = selectedIdRaw ? (selectedConvo?.all.find((m) => m.id === selectedIdRaw) ?? selectedConvo?.latest ?? null) : selectedConvo?.latest ?? null;
   const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((c) => {
     const m = c.latest;
-    const lead = findLeadForContact(allLeads, null, m.from);
+    // Mismo fallo que en correoDetailFor: buscar por "phone" (la clave
+    // real de contacto en email), no por "email".
+    const lead = findLeadForContact(allLeads, m.from, null);
     const name = lead?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     const isSelected = selectedConvo === c;
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${isSelected ? " active" : ""}">
+    const rowClass = isSelected ? " active" : c.read || c.answered ? " leido" : "";
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${rowClass}">
+${convoCheckbox("/crm/correos", c.all.map((x) => x.id))}
 ${avatarBadge(m.from, name)}
 <div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
+  // Petición real (27/10/2026, "secciones de eliminar... para eliminar
+  // mensajes antiguos"): mismo endpoint real de siempre (/crm/correos-
+  // masivo), ya movía a la papelera (recuperable) -- solo faltaba volver a
+  // engancharlo aquí, dentro de Contactos, con un checkbox por conversación.
+  const rowsWithBulk = pageItems.length === 0 ? rows : bulkBar("/crm/correos", f, q, pageItems.length, true) + rows;
+  if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
-  return { rows, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
+  return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
 // Secciones del mockup todavía sin módulo real detrás (25/10/2026,
