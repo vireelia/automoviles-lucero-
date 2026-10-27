@@ -3323,7 +3323,7 @@ ${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="bac
 ${typingLine}
 ${selected.draft_note ? `<h3 style="margin-bottom:6px">Borrador</h3><div class="box" style="background:var(--ok-bg);white-space:pre-wrap">${esc(selected.draft_note)}</div>` : ""}
 <form method="post" action="/crm/correos/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
-${!selected.answered ? `<label>Tu respuesta (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button><button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
+<label>${selected.answered ? "Responder (seguimiento)" : "Tu respuesta"} (si no escribes nada, no se envía nada)</label><textarea name="respuesta" rows="4"></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar mi respuesta</button>${!selected.answered ? `<button class="btn light" type="submit" name="accion" value="ya">No hace falta</button>` : ""}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
 </form>`;
@@ -3336,13 +3336,42 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
   return { detail, activity };
 }
 
+// Agrupar mensajes sueltos en conversaciones reales por contacto
+// (27/10/2026, "hay 6 chats como si fuesen 6 clientes de mi mismo numero
+// otro error grave: duplicados en whatsapp"): la lista mostraba un MENSAJE
+// por fila, así que la misma persona escribiendo varias veces en días
+// distintos parecía gente distinta -- nunca fueron duplicados reales (se
+// comprobó: 17 mensajes reales, todos con texto y hora distintos), era la
+// lista la que no agrupaba. Una fila real por contacto, como cualquier
+// app de mensajería -- el hilo completo se sigue viendo entero al abrir
+// (whatsappDetailFor ya construye el hilo por teléfono, no por mensaje).
+function groupMessagesByPhone<T extends { phone: string; created_at: string; answered?: boolean; read?: boolean; archived?: boolean; text: string }>(
+  all: T[],
+): { latest: T; answered: boolean; read: boolean; archived: boolean; all: T[] }[] {
+  const byPhone = new Map<string, T[]>();
+  for (const m of all) {
+    const arr = byPhone.get(m.phone) ?? [];
+    arr.push(m);
+    byPhone.set(m.phone, arr);
+  }
+  return [...byPhone.values()].map((msgs) => {
+    const sorted = [...msgs].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const latest = sorted[sorted.length - 1];
+    return { latest, answered: msgs.every((m) => m.answered), read: msgs.every((m) => m.read), archived: Boolean(latest.archived), all: msgs };
+  });
+}
 function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
   const all = list<WhatsappMessage>("whatsapp_inbox");
-  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.phone, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
-  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
-  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
-  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((m) => {
+  const conversations = groupMessagesByPhone(all).filter(
+    (c) => matchesMsgFilter(f, c) && (searchMatches(q, c.latest.phone, c.latest.text) || c.all.some((m) => searchMatches(q, "", m.text))),
+  );
+  conversations.sort((a, b) => b.latest.created_at.localeCompare(a.latest.created_at));
+  const totalPages = Math.max(1, Math.ceil(conversations.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = conversations.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selectedConvo = conversations.find((c) => c.all.some((m) => m.id === selectedIdRaw)) ?? pageItems[0] ?? null;
+  const selected = selectedIdRaw ? (selectedConvo?.all.find((m) => m.id === selectedIdRaw) ?? selectedConvo?.latest ?? null) : selectedConvo?.latest ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((c) => {
+    const m = c.latest;
     const lead = findLeadForContact(allLeads, m.phone, null);
     const name = lead?.name || m.phone;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
@@ -3352,15 +3381,16 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
     // ficha abierta (agentReplyStatus), aplicado aquí a cada mensaje de la
     // lista para verlo sin tener que entrar en cada chat.
     const rowStatus = agentReplyStatus(m.created_at, m.answered, m.answered_by, isWhatsappZernioAgentEnabled() && !isWhatsappChatPaused(m.phone), "Carolina");
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+    const isSelected = selectedConvo === c;
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${isSelected ? " active" : ""}">
 ${avatarBadge(m.phone, name)}
 <div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span>${rowStatus.kind === "typing" ? `<span class="rsub" style="color:var(--ok);font-weight:600">${esc(rowStatus.label)}</span>` : ""}</div>
-<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+<div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  if (!selected) return { rows, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = whatsappDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
-  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+  return { rows, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
 function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
