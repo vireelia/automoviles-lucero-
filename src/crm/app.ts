@@ -985,6 +985,29 @@ header{position:static;width:auto!important;flex:none!important;height:auto;flex
 nav{flex-direction:row;flex-wrap:wrap;overflow-y:visible;justify-content:flex-start}
 .sidebar-user{border-top:0}
 }
+.mobile-menu-btn{display:none}
+/* Fallo real (27/10/2026, "las secciones" -- confirmado con una captura
+real en 390px de ancho): a partir de 900px el menú pasaba a ser una fila
+horizontal que envuelve, pero ningún enlace ("Inicio", "Vehículos"...)
+cabe más de uno por fila en un móvil real -- se convertía en una lista
+de 17 enlaces apilada ENCIMA de la barra superior y de "Hoy", y encima el
+botón ☰ para abrirlo/cerrarlo vivía DENTRO del propio menú, así que
+tampoco había forma de ocultarlo a mano. En un teléfono real (<=700px) el
+menú pasa a ser un cajón deslizante oculto por defecto, con su propio
+botón ☰ en la barra superior (visible siempre, fuera del cajón). */
+@media(max-width:700px){
+header{position:fixed;top:0;left:0;height:100vh;width:260px;max-width:82vw;flex:none!important;flex-direction:column;flex-wrap:nowrap;align-items:stretch;justify-content:flex-start;background:#fff;overflow-y:auto;transform:translateX(-100%);transition:transform .2s ease;z-index:60;box-shadow:2px 0 16px rgba(0,0,0,.15)}
+header.mobile-open{transform:translateX(0)}
+header .brand .wordmark,header .brand .subbrand,header nav a .navlabel,header .sidebar-user .uname,header .sidebar-user .urole,header .sidebar-user form{display:revert!important}
+header .sidebar-toggle{display:none}
+nav{flex-direction:column;flex-wrap:nowrap;overflow-y:visible;justify-content:flex-start}
+nav a{justify-content:flex-start;padding:9px 10px}
+.mobile-menu-btn{display:inline-flex}
+.mobile-backdrop{display:none;position:fixed;inset:0;background:rgba(17,20,26,.4);z-index:55}
+.mobile-backdrop.show{display:block}
+main{padding:14px 16px}
+.topbar{padding:10px 14px}
+}
 h1{font-size:27px;margin:4px 0 4px;letter-spacing:-.01em}
 h2{font-size:20px;margin:20px 0 10px}
 .sub{color:var(--ink-dim);margin:0 0 16px;font-size:15px}
@@ -1304,8 +1327,10 @@ verdad sigue pendiente de mirar. */
 <nav>${navItems.map((it) => `<a href="${it.href}" class="${section === it.label ? "on" : ""}" title="${esc(it.label)}"><span class="navicon">${navIcon(it.key)}</span><span class="navlabel">${esc(it.label)}</span></a>`).join("")}</nav>
 <div class="sidebar-user"><div class="avatar">${esc(avatarInitials(user.name))}</div><div style="min-width:0"><div class="uname">${esc(user.name)}</div><div class="urole">${esc(roleLabel[user.role] ?? user.role)}</div></div><form method="post" action="/crm/salir"><button class="btn light" type="submit">Salir</button></form></div>
 </header>
+<div class="mobile-backdrop" id="lucero-backdrop" onclick="luceroCloseMobileMenu()"></div>
 <div class="appcol">
 <div class="topbar noprint">
+<button class="sidebar-toggle mobile-menu-btn" type="button" aria-label="Abrir menú" onclick="luceroToggleSidebar()">☰</button>
 <form class="topbar-search" method="get" action="/crm/buscar">${navIcon("search", 16)}<input id="lucero-search" name="q" placeholder="Buscar contactos, vehículos, matrículas..." required><kbd>⌘K</kbd></form>
 <a class="topbar-icon" href="/crm/seguimiento" title="Crear una tarea">${navIcon("plus", 18)}</a>
 <a class="topbar-icon" href="${msgHref}" title="${esc(msgTitle)}">${navIcon("message", 18)}${msgTotal > 0 ? `<span class="badge">${msgTotal > 99 ? "99+" : msgTotal}</span>` : ""}</a>
@@ -1317,7 +1342,20 @@ verdad sigue pendiente de mirar. */
 <main>${msg ? `<div class="msg">${esc(msg)}</div>` : ""}${body}</main>
 </div>
 <script>
-function luceroToggleSidebar(){try{var h=document.getElementById('sidebar');var on=h.classList.toggle('collapsed');localStorage.setItem('lucero_sidebar_collapsed',on?'1':'0')}catch(e){}}
+function luceroToggleSidebar(){try{
+  var h=document.getElementById('sidebar');
+  if(window.matchMedia('(max-width:700px)').matches){
+    var open=h.classList.toggle('mobile-open');
+    var bd=document.getElementById('lucero-backdrop');
+    if(bd)bd.classList.toggle('show',open);
+    return;
+  }
+  var on=h.classList.toggle('collapsed');localStorage.setItem('lucero_sidebar_collapsed',on?'1':'0')
+}catch(e){}}
+function luceroCloseMobileMenu(){try{
+  var h=document.getElementById('sidebar');if(h)h.classList.remove('mobile-open');
+  var bd=document.getElementById('lucero-backdrop');if(bd)bd.classList.remove('show');
+}catch(e){}}
 (function(){try{if(localStorage.getItem('lucero_sidebar_collapsed')==='1'){var h=document.getElementById('sidebar');if(h)h.classList.add('collapsed')}}catch(e){}})();
 document.addEventListener("keydown", function (e) {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); var s = document.getElementById("lucero-search"); if (s) s.focus(); }
