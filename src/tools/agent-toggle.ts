@@ -74,3 +74,20 @@ export function setWhatsappChatPaused(phone: string, paused: boolean, updatedBy:
   if (paused) rows.push({ phone, paused: true, updated_at: new Date().toISOString(), updated_by: updatedBy });
   writeCollection("whatsapp_chat_pauses", rows);
 }
+
+// Mismo patrón para Daniel (correo), por contacto individual (27/10/2026,
+// "en correos, pon la misma sección que se pueda escribir" -- mismo botón
+// que ya existe en WhatsApp, aplicado al mismo criterio: pausar SOLO a
+// este remitente, nunca el canal entero).
+type EmailContactPauseRecord = { email: string; paused: true; updated_at: string; updated_by: string | null };
+
+export function isEmailContactPaused(email: string): boolean {
+  return readCollection<EmailContactPauseRecord>("email_contact_pauses").some((r) => r.email === email.toLowerCase());
+}
+
+export function setEmailContactPaused(email: string, paused: boolean, updatedBy: string | null = null): void {
+  const key = email.toLowerCase();
+  const rows = readCollection<EmailContactPauseRecord>("email_contact_pauses").filter((r) => r.email !== key);
+  if (paused) rows.push({ email: key, paused: true, updated_at: new Date().toISOString(), updated_by: updatedBy });
+  writeCollection("email_contact_pauses", rows);
+}

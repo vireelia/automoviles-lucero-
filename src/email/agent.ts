@@ -5,7 +5,7 @@ import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
 import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
-import { isEmailAutoSendEnabled } from "../tools/agent-toggle.js";
+import { isEmailAutoSendEnabled, isEmailContactPaused } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
 import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
 import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
@@ -341,6 +341,18 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     recordInbox(email, "modo_prueba_sin_envio", { portal: portalInfo.portal, draftNote: body });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "modo_prueba_sin_envio", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
     return { outcome: "modo_prueba_sin_envio", reply: body };
+  }
+
+  // Pausa por contacto individual (27/10/2026, "en correos, pon la misma
+  // sección que se pueda escribir" -- mismo botón que ya existe en
+  // WhatsApp): el canal sigue encendido para todos los demás remitentes,
+  // solo este en concreto lo lleva el equipo a mano hasta que lo
+  // reactiven desde su ficha en Contactos.
+  if (isEmailContactPaused(email.from)) {
+    recordInbox(email, "pausado_por_chat", { portal: portalInfo.portal, draftNote: body });
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pausado_por_chat", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    raiseAlert({ kind: "gestion_portal", reason: `Correo: Daniel está pausado para este remitente en concreto -- "${email.subject}" no se respondió. Reactívalo desde su ficha en Contactos cuando quieras.`, draft_note: body });
+    return { outcome: "pausado_por_chat", reply: body };
   }
 
   if (sentTodayCount() >= DAILY_SEND_CAP) {

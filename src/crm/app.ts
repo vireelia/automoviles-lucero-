@@ -15,7 +15,7 @@ import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "../tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
@@ -2594,6 +2594,10 @@ crm.post("/correos/:id", async (req, res) => {
     save("email_inbox", inbox);
     return back(res, volver, "Nota guardada");
   }
+  if (accion === "pausar_chat" || accion === "reanudar_chat") {
+    setEmailContactPaused(m.from, accion === "pausar_chat", me(res).email);
+    return back(res, volver, accion === "pausar_chat" ? "Daniel pausado para este remitente" : "Daniel reactivado para este remitente");
+  }
   // Acciones nuevas del módulo mensajes/clientes (18/10/2026), solo
   // alcanzables desde /crm/correos -- Pendientes no tiene botones para
   // ellas, así que no cambia nada de lo que ya funcionaba ahí.
@@ -3280,11 +3284,20 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // WhatsApp): se mira el correo entrante más reciente del hilo, no el
   // seleccionado.
   const lastInbound = inboundThread[inboundThread.length - 1] ?? selected;
-  const mailStatus = agentReplyStatus(lastInbound.created_at, lastInbound.answered, lastInbound.answered_by, isEmailAutoSendEnabled(), "Daniel");
+  // Pausa por remitente individual (27/10/2026, "en correos, pon la misma
+  // sección que se pueda escribir" -- mismo botón que ya existe en
+  // WhatsApp): distinto del interruptor global de Integraciones.
+  const contactPaused = isEmailContactPaused(selected.from);
+  const mailStatus = agentReplyStatus(lastInbound.created_at, lastInbound.answered, lastInbound.answered_by, isEmailAutoSendEnabled() && !contactPaused, "Daniel");
   const typingLine = mailStatus.kind === "typing" ? `<p class="mail-typing">Daniel está redactando…</p>` : "";
+  const agentToggleBox = `<div class="box" style="background:${contactPaused ? "var(--warn-bg)" : "var(--panel)"};display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0">
+<span>${contactPaused ? "🔇 Daniel está pausado para este remitente -- responde el equipo" : "Daniel responde aquí con normalidad"}</span>
+<form method="post" action="/crm/correos/${esc(selected.id)}" style="display:inline"><input type="hidden" name="volver" value="${esc(volver)}"><button class="btn ${contactPaused ? "ok" : "light"}" type="submit" name="accion" value="${contactPaused ? "reanudar_chat" : "pausar_chat"}">${contactPaused ? "Reactivar Daniel aquí" : "Pausar Daniel para este remitente"}</button></form>
+</div>`;
   const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Correos<b>${items.length}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${statusPill(mailStatus.label, mailStatus.tone)}</b></div></div>
+${agentToggleBox}
 ${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px">Hay que responder desde ${esc(platformLabel(selected.portal))}, no por correo.</div>` : ""}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
 <h3 style="margin-bottom:6px">Conversación</h3><div class="mail-thread">${threadHtml}</div>
@@ -3337,7 +3350,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
 ${avatarBadge(m.from, name)}
-<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
+<div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
