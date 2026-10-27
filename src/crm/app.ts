@@ -1300,6 +1300,7 @@ verdad sigue pendiente de mirar. */
 .wa-row .wa-bubble.in{background:#fff;border-top-left-radius:2px}
 .wa-row .wa-bubble.out{background:#d9fdd3;border-top-right-radius:2px}
 .wa-bubble time{display:block;font-size:10.5px;color:#8696a0;text-align:right;margin-top:3px}
+.wa-no-entregado{font-size:11.5px;font-weight:700;color:var(--urgent);margin-top:4px}
 .wa-typing-row{display:flex;justify-content:flex-start}
 .wa-typing{display:inline-flex;align-items:center;gap:5px;background:#fff;border-radius:8px;border-top-left-radius:2px;padding:9px 12px;box-shadow:0 1px 1px rgba(0,0,0,.08)}
 .wa-typing span{width:6px;height:6px;border-radius:999px;background:#8696a0;display:inline-block;animation:wa-bounce 1.2s infinite ease-in-out}
@@ -3005,11 +3006,26 @@ crm.post("/whatsapp/:id", async (req, res) => {
     const text = String(req.body.respuesta ?? "").trim();
     if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
     const result = await sendWhatsappText(m.phone, text);
-    if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
+    // FALLO REAL detectado (27/10/2026, "algunos mensajes no se pueden
+    // enviar a whatsapp... no aparecen en el chat real ni en el CRM"):
+    // cuando el envío fallaba, antes no se guardaba nada -- el único
+    // rastro era el aviso de "No se pudo enviar" que se ve una vez al
+    // volver y luego desaparece para siempre. Un intento fallido real sigue
+    // siendo un dato real: se guarda igual que ya hace el envío automático
+    // de Carolina cuando falla (reply_text + delivered:false), para que
+    // quede visible en la propia conversación -- nunca se finge un envío.
+    // Mismo criterio que ya usa el envío automático de Carolina (ver
+    // server.ts, webhook de WhatsApp): "answered" dice que YA se generó y
+    // se intentó mandar una respuesta real; "delivered" dice si de verdad
+    // llegó. Mantenerlo igual aquí, en vez de inventar un criterio nuevo,
+    // es lo que hace que el aviso de "No entregado" (ya construido para la
+    // IA) también se vea aquí sin tocar nada más.
     m.answered = true;
     m.answered_by = "equipo";
     m.reply_text = text;
+    m.delivered = result.ok;
     save("whatsapp_inbox", items);
+    if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
     return back(res, volver, "Respuesta enviada");
   }
   if (accion === "eliminar") {
@@ -3313,7 +3329,7 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
   // Nota de voz real (27/10/2026, "que se escuche el audio que envió"):
   // si el mensaje trae audio descargado de verdad, se reproduce con
   // <audio> real en vez de (o además de) el texto de respaldo.
-  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${m.media_type === "audio" && m.media_path ? `<audio controls preload="none" style="max-width:240px"><source src="/crm/whatsapp/audio/${esc(m.media_path)}"></audio>` : esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
+  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${m.media_type === "audio" && m.media_path ? `<audio controls preload="none" style="max-width:240px"><source src="/crm/whatsapp/audio/${esc(m.media_path)}"></audio>` : esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}${m.delivered === false ? `<div class="wa-no-entregado">⚠️ No se pudo entregar</div>` : ""}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
   // Estado real de la conversación (26/10/2026, "que se vea cuando
   // carolina este escribiendo... y cuando tenemos nosotros que
   // responder") -- se mira el ÚLTIMO mensaje del hilo, no el que esté

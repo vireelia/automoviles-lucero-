@@ -255,6 +255,17 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
   const existing = findWhatsappConversation(phone);
   const withinWindow = Boolean(existing) && Date.now() - new Date(existing!.updated_at).getTime() < WHATSAPP_WINDOW_HOURS * 60 * 60 * 1000;
 
+  // FALLO REAL detectado (27/10/2026, "algunos mensajes no se pueden
+  // enviar... revisar errores"): cuando el envío normal (dentro de la
+  // ventana) fallaba por CUALQUIER motivo -- una excepción real de la API,
+  // o una respuesta sin messageId -- el motivo real se descartaba en
+  // silencio y se caía al intento de Direct Send, que para esta cuenta
+  // (no elegible, confirmado real) SIEMPRE falla. El error final que veía
+  // el equipo era "Direct Send rechazado", que no tiene nada que ver con
+  // el motivo real del fallo normal -- confuso y, sobre todo, inútil para
+  // diagnosticar el problema real. Se guarda el motivo real de este primer
+  // intento para incluirlo en el error final si Direct Send también falla.
+  let normalAttemptError: string | null = null;
   if (existing && withinWindow) {
     try {
       // FALLO REAL detectado (21/10/2026, prueba real contra la API):
@@ -270,9 +281,12 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
       });
       const messageId = data.data?.messageId ?? data.data?.messageIds?.[0];
       if (messageId) return { ok: true, messageId };
-    } catch {
+      normalAttemptError = "zernio_sin_message_id";
+    } catch (err) {
       // Sigue al intento de Direct Send en vez de rendirse aquí -- puede ser
-      // que la ventana ya se hubiera cerrado justo en el lado de Meta.
+      // que la ventana ya se hubiera cerrado justo en el lado de Meta --
+      // pero el motivo real de ESTE intento ya no se descarta, se guarda.
+      normalAttemptError = err instanceof ZernioApiError ? `${err.code ?? "zernio_api_error"}: ${err.message}` : err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -282,8 +296,17 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
   // rendirse, se intenta iniciar la conversación de verdad con Meta Direct
   // Send (categoría "utility", sin plantilla aprobada). Si la cuenta no es
   // elegible, Meta/Zernio lo rechaza con un error real (nunca se finge un
-  // envío) y aquí se devuelve tal cual.
-  return sendZernioWhatsappNewConversation(zernio, accountId, phone, body);
+  // envío) y aquí se devuelve tal cual -- pero si YA había una conversación
+  // abierta de verdad (existing) y el intento normal falló por un motivo
+  // real que no sea simplemente "no hay conversación", ese motivo real se
+  // antepone: es casi seguro la causa real, el rechazo de Direct Send que
+  // viene detrás es solo ruido de un intento que nunca debería haber hecho
+  // falta.
+  const directSendResult = await sendZernioWhatsappNewConversation(zernio, accountId, phone, body);
+  if (!directSendResult.ok && normalAttemptError) {
+    return { ok: false, error: `${normalAttemptError} (intento normal) -- ${directSendResult.error} (direct send)` };
+  }
+  return directSendResult;
 }
 
 // Inicia una conversación de WhatsApp nueva con un número que nunca escribió
