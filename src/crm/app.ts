@@ -3425,7 +3425,19 @@ function groupMessagesByKey<T extends { created_at: string; answered?: boolean; 
   return [...byKey.values()].map((msgs) => {
     const sorted = [...msgs].sort((a, b) => a.created_at.localeCompare(b.created_at));
     const latest = sorted[sorted.length - 1];
-    return { latest, answered: msgs.every((m) => m.answered), read: msgs.every((m) => m.read), archived: Boolean(latest.archived), all: msgs };
+    // FALLO REAL detectado (27/10/2026, "este número no se pone en gris ni
+    // el que está arriba" -- caso real: conversación de 19 mensajes, el
+    // cliente ya tiene todo resuelto, pero 2 mensajes sueltos de hace días
+    // ("Hey que tal?", nunca contestados) seguían sin marcar): exigir que
+    // TODOS los mensajes del historial estuvieran respondidos/leídos
+    // significaba que un solo mensaje olvidado, por antiguo que fuera,
+    // dejaba la fila "Pendiente" y blanca para siempre, aunque lo último
+    // que escribió el cliente ya tuviera respuesta real. Lo que importa
+    // para la fila (el aviso de "Pendiente" y el gris/blanco) es si el
+    // ÚLTIMO mensaje está resuelto -- mismo criterio que ya usa la propia
+    // ficha abierta (agentReplyStatus mira el entrante más reciente, no
+    // todo el hilo).
+    return { latest, answered: Boolean(latest.answered), read: Boolean(latest.read), archived: Boolean(latest.archived), all: msgs };
   });
 }
 function groupMessagesByPhone<T extends { phone: string; created_at: string; answered?: boolean; read?: boolean; archived?: boolean; text: string }>(
