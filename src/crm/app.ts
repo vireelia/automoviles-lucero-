@@ -936,6 +936,15 @@ nav a .navlabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 nav a:hover{background:var(--panel)}
 nav a.on{background:var(--accent-dim);color:var(--accent);font-weight:700}
 nav a.on .navicon{color:var(--accent)}
+/* Base real de .avatar (27/10/2026, "al abrir la ficha que salga circular,
+no cuadrado"): avatarBadge() solo pone ancho/alto/color en línea -- el
+redondeo y el centrado dependían SOLO de reglas con prefijo (.contact-row
+.avatar, .lead-card .avatar...), así que cualquier sitio donde se usa
+fuera de esos contenedores (la cabecera de ficha de Contactos,
+contactDetailHeader; las burbujas de hilo de correo) se quedaba cuadrado
+de verdad, sin redondear ni centrar el texto. Base por defecto aquí,
+las reglas con prefijo de abajo ya no cambian nada pero se dejan igual. */
+.avatar{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
 .sidebar-user{display:flex;align-items:center;gap:10px;padding:10px 6px 2px;border-top:1px solid var(--border);margin-top:4px}
 .sidebar-user .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
 .sidebar-user .uname{font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
