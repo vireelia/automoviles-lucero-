@@ -15,7 +15,7 @@ import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled } from "../tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "../tools/agent-toggle.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
@@ -2881,6 +2881,10 @@ crm.post("/whatsapp/:id", async (req, res) => {
     save("whatsapp_inbox", items);
     return back(res, volver, "Nota guardada");
   }
+  if (accion === "pausar_chat" || accion === "reanudar_chat") {
+    setWhatsappChatPaused(m.phone, accion === "pausar_chat", me(res).email);
+    return back(res, volver, accion === "pausar_chat" ? "Carolina pausada en este chat" : "Carolina reactivada en este chat");
+  }
   // Responder de verdad desde el CRM (25/10/2026, petición real: "que se
   // pueda hablar con el cliente desde whatsapp y correos") -- mismo envío
   // real que ya usa Carolina (sendWhatsappText/Zernio), nunca se finge un
@@ -3198,11 +3202,20 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
   // seleccionado: es la conversación la que está "escribiendo" o
   // "pendiente", no un mensaje suelto antiguo.
   const lastMsg = thread[thread.length - 1] ?? selected;
-  const waStatus = agentReplyStatus(lastMsg.created_at, lastMsg.answered, lastMsg.answered_by, isWhatsappZernioAgentEnabled(), "Carolina");
+  // Pausa por chat individual (27/10/2026, "se pueda activar y desactivar
+  // a carolina en chats individuales") -- distinto del interruptor global
+  // de Integraciones: este solo afecta a este número, nunca al resto.
+  const chatPaused = isWhatsappChatPaused(selected.phone);
+  const waStatus = agentReplyStatus(lastMsg.created_at, lastMsg.answered, lastMsg.answered_by, isWhatsappZernioAgentEnabled() && !chatPaused, "Carolina");
   const typingRow = waStatus.kind === "typing" ? `<div class="wa-typing-row"><div class="wa-typing"><span></span><span></span><span></span></div></div>` : "";
+  const agentToggleBox = `<div class="box" style="background:${chatPaused ? "var(--warn-bg)" : "var(--panel)"};display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0">
+<span>${chatPaused ? "🔇 Carolina está pausada en este chat -- responde el equipo" : "Carolina responde aquí con normalidad"}</span>
+<form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="display:inline"><input type="hidden" name="volver" value="${esc(volver)}"><button class="btn ${chatPaused ? "ok" : "light"}" type="submit" name="accion" value="${chatPaused ? "reanudar_chat" : "pausar_chat"}">${chatPaused ? "Reactivar Carolina aquí" : "Pausar Carolina en este chat"}</button></form>
+</div>`;
   const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${statusPill(waStatus.label, waStatus.tone)}</b></div></div>
+${agentToggleBox}
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
 <h3 style="margin-bottom:6px;margin-top:12px">Conversación</h3><div class="wa-thread">${threadHtml}${typingRow}</div>
 <form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
@@ -3303,7 +3316,7 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
 ${avatarBadge(m.phone, name)}
-<div class="rbody"><b>${esc(name)}</b><span class="rsub">${esc(m.text)}</span></div>
+<div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");

@@ -27,7 +27,7 @@ import {
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled } from "./tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused } from "./tools/agent-toggle.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { getBusinessConfig } from "./data/business-config.js";
@@ -771,6 +771,18 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
         kind: "handoff_urgente",
         lead_phone: phone,
         reason: `WhatsApp (vía Zernio): el agente todavía está pausado -- el cliente escribió "${text.trim().slice(0, 300)}" y no se le ha respondido. Actívalo desde Integraciones cuando quieras que Miguel conteste aquí.`,
+      });
+      return;
+    }
+    // Pausa por chat individual (27/10/2026, "se pueda activar y desactivar
+    // a carolina en chats individuales") -- el canal sigue encendido para
+    // todos los demás, solo este número concreto lo lleva el equipo a mano
+    // hasta que lo reactiven desde la propia ficha del chat.
+    if (isWhatsappChatPaused(phone)) {
+      raiseAlert({
+        kind: "handoff_urgente",
+        lead_phone: phone,
+        reason: `WhatsApp: Carolina está pausada en este chat en concreto -- el cliente escribió "${text.trim().slice(0, 300)}" y no se le ha respondido. Reactívala desde su ficha en Contactos cuando quieras.`,
       });
       return;
     }

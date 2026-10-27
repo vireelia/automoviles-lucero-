@@ -56,3 +56,21 @@ export function setWhatsappZernioAgentEnabled(enabled: boolean, updatedBy: strin
   rows.push({ id: "whatsapp_zernio_agent", enabled, updated_at: new Date().toISOString(), updated_by: updatedBy });
   writeCollection("agent_toggles", rows);
 }
+
+// Pausa de Carolina por conversación individual (27/10/2026, "se pueda
+// activar y desactivar a carolina en chats individuales") -- a diferencia
+// del interruptor de arriba (apaga el canal entero), esto deja SOLO ese
+// número concreto en manos del equipo, sin tocar el resto de chats. Solo
+// se guarda un registro cuando está pausado -- por defecto Carolina
+// responde, igual que el resto de interruptores de este archivo.
+type WhatsappChatPauseRecord = { phone: string; paused: true; updated_at: string; updated_by: string | null };
+
+export function isWhatsappChatPaused(phone: string): boolean {
+  return readCollection<WhatsappChatPauseRecord>("whatsapp_chat_pauses").some((r) => r.phone === phone);
+}
+
+export function setWhatsappChatPaused(phone: string, paused: boolean, updatedBy: string | null = null): void {
+  const rows = readCollection<WhatsappChatPauseRecord>("whatsapp_chat_pauses").filter((r) => r.phone !== phone);
+  if (paused) rows.push({ phone, paused: true, updated_at: new Date().toISOString(), updated_by: updatedBy });
+  writeCollection("whatsapp_chat_pauses", rows);
+}
