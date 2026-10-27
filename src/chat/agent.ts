@@ -34,7 +34,13 @@ const MAX_TURNS_KEPT = 20;
 // sí solo "algo importante" (a petición real, 19/10/2026 -- solo lo son
 // una visita o una reserva, y esas siguen avisando donde ya avisaban).
 const MAX_USER_TURNS_BEFORE_HANDOFF = Number(process.env.LUCERO_MAX_CONVO_TURNS ?? 24);
-const LIMIT_REACHED_REPLY = "Esta conversación ya lleva un buen rato -- para no darte más vueltas, lo mejor es que te pases por el concesionario o lo retomamos con calma en otro momento.";
+// FALLO REAL detectado (27/10/2026, "le dije a carolina que tenia una
+// consulta y me responde esta tonteria, deberia de ser mas amable"): el
+// texto original ("para no darte más vueltas") sonaba brusco, como si el
+// cliente molestara. El límite en sí es real y se queda (seguridad de
+// coste/baneos, ver arriba) -- solo se reescribe el tono: agradecer,
+// nunca sonar impaciente, y dejar un paso siguiente concreto.
+const LIMIT_REACHED_REPLY = "Llevamos ya un buen rato con esto -- para darte la mejor atención, prefiero que lo veas en persona en el concesionario o que lo retomemos con calma más adelante. ¡Gracias por tu paciencia!";
 // Estructura por canal (15/10/2026, a petición real: "mismo cerebro, pero
 // diferente para cada agente"): el correo es de un solo disparo -- nadie
 // espera en línea, así que puede permitirse más rondas de herramientas para
