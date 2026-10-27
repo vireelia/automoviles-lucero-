@@ -487,69 +487,44 @@ app.get("/email/inbox", requireAdminToken, (_req, res) => {
 // una recurrencia del fallback en producción): permite ver exactamente qué
 // llamó el agente y en qué conversación, sin tener que adivinar leyendo el
 // store a mano. Solo lectura, con token de admin.
-app.get("/debug/tool_call_logs", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("tool_call_logs").slice(-200));
-});
-
-app.get("/debug/chat_conversations", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("chat_conversations").slice(-50));
-});
-
-app.get("/debug/call_analyses", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("call_analyses").slice(-50));
-});
-
-app.get("/debug/studio_jobs", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("studio_jobs").slice(-50));
-});
-
-app.get("/debug/alerts", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("alerts").slice(-50));
-});
-
-app.get("/debug/reservations", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("reservations").slice(-50));
-});
-
-app.get("/debug/leads", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("leads").slice(-200));
-});
-
-app.get("/debug/appointments", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("appointments").slice(-100));
-});
+// ?limit=N (27/10/2026, "todos los mensajes, me tienen que aparecer
+// actualizados... todos"): por defecto se corta a los últimos N para no
+// devolver colecciones enormes sin pedirlo, pero un límite fijo sin forma
+// de pedir más escondía mensajes reales más antiguos que sí hacía falta
+// ver. limit=0 o "all" devuelve la colección completa.
+function debugLimit(req: express.Request, def: number, max = 2000): number {
+  const raw = String(req.query.limit ?? "").trim().toLowerCase();
+  if (raw === "all" || raw === "0") return Infinity;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, max) : def;
+}
+function debugSlice<T>(collection: string, def: number) {
+  return (req: express.Request, res: express.Response) => {
+    const limit = debugLimit(req, def);
+    const all = readCollection<T>(collection);
+    res.json(Number.isFinite(limit) ? all.slice(-limit) : all);
+  };
+}
+app.get("/debug/tool_call_logs", requireAdminToken, debugSlice("tool_call_logs", 200));
+app.get("/debug/chat_conversations", requireAdminToken, debugSlice("chat_conversations", 50));
+app.get("/debug/call_analyses", requireAdminToken, debugSlice("call_analyses", 50));
+app.get("/debug/studio_jobs", requireAdminToken, debugSlice("studio_jobs", 50));
+app.get("/debug/alerts", requireAdminToken, debugSlice("alerts", 50));
+app.get("/debug/reservations", requireAdminToken, debugSlice("reservations", 50));
+app.get("/debug/leads", requireAdminToken, debugSlice("leads", 200));
+app.get("/debug/appointments", requireAdminToken, debugSlice("appointments", 100));
 
 app.get("/debug/crm_users", requireAdminToken, (_req, res) => {
   res.json(listUsers().map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, created_at: u.created_at })));
 });
 
-app.get("/debug/facebook_processed", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("facebook_processed").slice(-100));
-});
-
-app.get("/debug/handoffs", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("handoffs").slice(-100));
-});
-
-app.get("/debug/zernio_whatsapp_conversations", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("zernio_whatsapp_conversations").slice(-200));
-});
-
-app.get("/debug/whatsapp_inbox", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("whatsapp_inbox").slice(-50));
-});
-
-app.get("/debug/email_inbox", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("email_inbox").slice(-50));
-});
-
-app.get("/debug/email_processed", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("email_processed").slice(-50));
-});
-
-app.get("/debug/zernio_whatsapp_processed", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("zernio_whatsapp_processed").slice(-50));
-});
+app.get("/debug/facebook_processed", requireAdminToken, debugSlice("facebook_processed", 100));
+app.get("/debug/handoffs", requireAdminToken, debugSlice("handoffs", 100));
+app.get("/debug/zernio_whatsapp_conversations", requireAdminToken, debugSlice("zernio_whatsapp_conversations", 200));
+app.get("/debug/whatsapp_inbox", requireAdminToken, debugSlice("whatsapp_inbox", 50));
+app.get("/debug/email_inbox", requireAdminToken, debugSlice("email_inbox", 50));
+app.get("/debug/email_processed", requireAdminToken, debugSlice("email_processed", 50));
+app.get("/debug/zernio_whatsapp_processed", requireAdminToken, debugSlice("zernio_whatsapp_processed", 50));
 
 // Puntual (24/10/2026, para reprobar un evento real tras poner OPENAI_API_KEY):
 // un reenvío de Zernio se descarta en silencio si el eventId ya está en esta
@@ -562,13 +537,10 @@ app.post("/admin/clear_zernio_processed", requireAdminToken, (req, res) => {
   res.json({ status: "ok", removed: rows.length - kept.length, remaining: kept.length });
 });
 
-app.get("/debug/team_notifications", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("team_notifications").slice(-200));
-});
-
-app.get("/debug/trash", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("trash").slice(-200));
-});
+app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
+app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
+app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
+app.get("/debug/email_contact_pauses", requireAdminToken, debugSlice("email_contact_pauses", 200));
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
 // o cualquier web que conecte el negocio. Solo con el token de admin.
