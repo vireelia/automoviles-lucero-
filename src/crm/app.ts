@@ -1226,6 +1226,10 @@ a.link{color:#1d4ed8;font-weight:700;font-size:20px}
 .contactos-shell{display:flex;background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden}
 .contactos-list{flex:0 0 330px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0}
 .contactos-list-scroll{overflow-y:auto;max-height:70vh}
+.cbulkbar{display:flex;flex-direction:column;gap:8px;background:#fff;border-bottom:1px solid var(--border);padding:10px 14px}
+.cbulkbar-all{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;color:var(--ink)}
+.cbulkbar-actions{display:flex;flex-wrap:wrap;gap:6px}
+.cbulkbar-actions .btn{font-size:12px;padding:6px 10px;margin:0;border-radius:7px}
 .contact-row{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
 .contact-row:hover{background:var(--panel)}
 /* Petición real (27/10/2026, "cuando lea o se le responda a un mensaje
@@ -2750,6 +2754,24 @@ function bulkBar(base: string, f: MsgFilter, q: string, count: number, withAnswe
 function msgCheckbox(base: string, id: string): string {
   return `<input class="msgsel" type="checkbox" name="ids" value="${esc(id)}" form="${base}-bulk" style="position:absolute;top:18px;right:20px">`;
 }
+// Versión compacta del bulkbar de arriba, solo para la columna estrecha de
+// Contactos (27/10/2026, "estas cosas ajústalas más" -- con los botones
+// de texto largo de siempre, cada uno ocupaba su propia fila entera en una
+// columna de ~320px, una pila enorme). Mismo formulario/endpoint real de
+// siempre (ninguna acción nueva), solo más compacto y en una sola fila de
+// botones pequeños que envuelven si hace falta.
+function contactosBulkBar(base: string, f: MsgFilter, q: string, count: number): string {
+  return `<form id="${base}-bulk" method="post" action="${base}-masivo"><input type="hidden" name="f" value="${esc(f)}"><input type="hidden" name="q" value="${esc(q)}"></form>
+<div class="cbulkbar">
+<label class="cbulkbar-all"><input class="msgsel" type="checkbox" onchange="toggleAllMsgs(this,'ids')"> Seleccionar todos (${count})</label>
+<div class="cbulkbar-actions">
+<button class="btn light" type="submit" form="${base}-bulk" name="accion" value="marcar_leido">Leído</button>
+<button class="btn light" type="submit" form="${base}-bulk" name="accion" value="archivar">Archivar</button>
+<button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_seleccionados" onclick="return confirm('¿Eliminar los seleccionados? Se pueden recuperar luego desde la Papelera.')">Eliminar</button>
+<button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_todos" onclick="return confirm('¿Eliminar todos los de esta vista (' + document.querySelectorAll(\`input[type=checkbox][name=ids]\`).length + ' en pantalla)? Se pueden recuperar luego desde la Papelera.')">Eliminar todo</button>
+</div>
+</div>`;
+}
 // Checkbox para una fila de Contactos (25/10/2026, "secciones de eliminar
 // para eliminar mensajes antiguos"): la fila es una conversación agrupada,
 // así que el checkbox manda TODOS los ids reales del hilo juntos (coma),
@@ -3445,7 +3467,7 @@ ${avatarBadge(m.phone, name)}
   // mensajes antiguos"): mismo endpoint real de siempre (/crm/whatsapp-
   // masivo), ya movía a la papelera (recuperable) -- solo faltaba volver a
   // engancharlo aquí, dentro de Contactos, con un checkbox por conversación.
-  const rowsWithBulk = pageItems.length === 0 ? rows : bulkBar("/crm/whatsapp", f, q, pageItems.length, true) + rows;
+  const rowsWithBulk = pageItems.length === 0 ? rows : contactosBulkBar("/crm/whatsapp", f, q, pageItems.length) + rows;
   if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">No hay mensajes en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = whatsappDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
   return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
@@ -3485,7 +3507,7 @@ ${avatarBadge(m.from, name)}
   // mensajes antiguos"): mismo endpoint real de siempre (/crm/correos-
   // masivo), ya movía a la papelera (recuperable) -- solo faltaba volver a
   // engancharlo aquí, dentro de Contactos, con un checkbox por conversación.
-  const rowsWithBulk = pageItems.length === 0 ? rows : bulkBar("/crm/correos", f, q, pageItems.length, true) + rows;
+  const rowsWithBulk = pageItems.length === 0 ? rows : contactosBulkBar("/crm/correos", f, q, pageItems.length) + rows;
   if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
   return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
