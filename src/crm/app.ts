@@ -1847,6 +1847,13 @@ crm.get("/", (req, res) => {
   const reservations = list<Reservation>("reservations");
   const handoffs = list<Handoff>("handoffs").filter((h) => h.status === "requested");
   const mails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered);
+  // Aviso real en Hoy de chats con el agente pausado (27/10/2026, "los
+  // agentes deben estar atentos siempre a responder... no puedo estar
+  // encima yo"): la pausa por chat/remitente individual ya queda visible
+  // en su propia ficha y en la lista (🔇), pero sin nada en Hoy era fácil
+  // que una pausa de una prueba quedara olvidada sin que nadie se
+  // enterase. Solo se muestra cuando hay al menos una -- nunca un 0 ruidoso.
+  const chatsPausadosCount = readCollection<unknown>("whatsapp_chat_pauses").length + readCollection<unknown>("email_contact_pauses").length;
   // Petición real (23/10/2026, "todos los leads nuevos de hoy"): clientes que
   // escribieron hoy por primera vez, aunque todavía no tengan cita ni
   // reserva -- antes Hoy solo mostraba lo que ya tenía una acción concreta
@@ -1894,7 +1901,7 @@ crm.get("/", (req, res) => {
       const href = waLink ? `${waLink}?text=${encodeURIComponent(waMessageFor(h.lead_phone, h.lead_name))}` : h.reason_type === "reserva" ? "/crm/reservas" : "/crm/incidencias";
       return { href, text: `Atender: ${text}` };
     }),
-    ...mails.map((m) => ({ href: "/crm/correos", text: `Contestar a ${m.from}` })),
+    ...mails.map((m) => ({ href: `/crm/contactos/correo?id=${encodeURIComponent(m.id)}`, text: `Contestar a ${m.from}` })),
     ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
   const d = dayLabel(today);
@@ -1948,9 +1955,10 @@ ${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Tod
 <a class="stat" href="/crm/citas"><b>${todayAppts.length}</b><span>visitas hoy</span></a>
 <a class="stat" href="/crm/reservas"><b>${toAttend.length}</b><span>reservas por atender</span></a>
 <a class="stat" href="/crm/incidencias"><b>${handoffs.filter((h) => h.reason_type !== "reserva").length}</b><span>incidencias</span></a>
-<a class="stat" href="/crm/correos"><b>${mails.length}</b><span>correos por contestar</span></a>
+<a class="stat" href="/crm/contactos/correo?f=pendientes"><b>${mails.length}</b><span>correos por contestar</span></a>
 <a class="stat" href="/crm/reservas"><b>${activeReservations.length}</b><span>reservas activas</span></a>
 <a class="stat" href="/crm/clientes"><b>${leadsSinResponsable.length}</b><span>leads sin responsable</span></a>
+${chatsPausadosCount > 0 ? `<a class="stat" href="/crm/contactos/whatsapp" style="background:var(--warn-bg)"><b>${chatsPausadosCount}</b><span>🔇 chats con el agente pausado</span></a>` : ""}
 </div>
 <div class="home-cols">
 <div class="home-main">
@@ -2812,14 +2820,18 @@ ${contactLeadBlock(allLeads, user, allAppts, allResv, today, allFinancing, null,
 </div></div>`).join("")}</div>`}`;
 }
 
+// FALLO REAL detectado (27/10/2026, "no veo los whassap ni correos en
+// tiempo real, no veo que hayas solucionado eso"): esta página vieja
+// (previa a Contactos, 20/10/2026) seguía viva y enlazada desde Hoy
+// ("correos por contestar") y desde "Contestar a X" -- sin el refresco
+// automático ni el indicador de Carolina/Daniel escribiendo, que solo se
+// construyeron dentro de /crm/contactos/:canal. Dos páginas reales para
+// lo mismo, una desactualizada. En vez de duplicar el refresco aquí
+// también, redirige a la única página real que lo tiene -- mismo filtro,
+// mismo criterio que ya usa /crm/contactos (ver más abajo).
 crm.get("/correos", (req, res) => {
-  const f = msgFilterFromQuery(req);
-  const q = String(req.query.q ?? "").trim();
-  const body = `<h1>Correos</h1>
-<p><span class="tag" style="background:var(--panel);color:var(--ink)">Agente encargado: Daniel</span></p>
-<p class="sub">Todo lo que ha llegado por correo: lo que ya contestó Daniel solo y lo que espera respuesta humana.</p>
-${correoPanel(f, q, me(res), "/crm/correos")}`;
-  res.type("html").send(page("Correos", me(res), body, msgOf(req)));
+  const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+  res.redirect(`/crm/contactos/correo${qs}`);
 });
 
 crm.post("/correos-masivo", (req, res) => {
@@ -2874,14 +2886,11 @@ ${contactLeadBlock(allLeads, user, allAppts, allResv, today, allFinancing, m.pho
 </div></div>`).join("")}</div>`}`;
 }
 
+// Mismo motivo que /crm/correos justo arriba -- redirige a la página real
+// con refresco automático y el indicador de Carolina escribiendo.
 crm.get("/whatsapp", (req, res) => {
-  const f = msgFilterFromQuery(req);
-  const q = String(req.query.q ?? "").trim();
-  const body = `<h1>WhatsApp</h1>
-<p><span class="tag" style="background:var(--panel);color:var(--ink)">Agente encargado: Carolina</span></p>
-<p class="sub">Mensajes entrantes por WhatsApp (vía Zernio) y la respuesta real de Carolina.</p>
-${whatsappPanel(f, q, me(res), "/crm/whatsapp")}`;
-  res.type("html").send(page("WhatsApp", me(res), body, msgOf(req)));
+  const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+  res.redirect(`/crm/contactos/whatsapp${qs}`);
 });
 
 crm.post("/whatsapp/:id", async (req, res) => {
