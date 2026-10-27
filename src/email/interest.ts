@@ -52,10 +52,23 @@ const B2B_INDUSTRY_SENDER = [/@mail\.autorola\.es$/i, /@([a-z0-9-]+\.)?auto1\.co
 // comercial de pasada -- siempre a revisión humana.
 const BANK_OR_ADS = [
   /\b(banco|bbva|santander|caixabank|la caixa|ing direct|openbank|bankinter|unicaja|sabadell|revolut|n26|wise)\b/i,
-  /\b(movimiento\s+bancario|extracto|saldo\s+de\s+tu\s+cuenta|cargo\s+en\s+tu\s+cuenta|transferencia\s+recibida|transferencia\s+enviada)\b/i,
+  // FALLO REAL detectado (27/10/2026, caso real: un correo de "Comprobante
+  // transferencia" de info@caixabank.es -- una transferencia REAL que Ramón
+  // había hecho él mismo -- se contestó como si fuera un cliente): el texto
+  // decía "transferencia realizada", no "recibida"/"enviada" como cubría
+  // esta regex, y el remitente nunca se comprobaba aquí, solo el cuerpo --
+  // el nombre del banco no aparece en el texto de un comprobante real, solo
+  // en el remitente. Añadido "realizada"/"procesada" y variantes de
+  // comprobante/justificante.
+  /\b(movimiento\s+bancario|extracto|saldo\s+de\s+tu\s+cuenta|cargo\s+en\s+tu\s+cuenta|transferencia\s+(recibida|enviada|realizada|procesada)|comprobante\s+(de\s+)?transferencia|justificante\s+de\s+la?\s*transferencia)\b/i,
   /\b(oferta\s+especial|black\s*friday|cyber\s*monday|c[oó]digo\s+promocional|rebajas|liquidaci[oó]n\s+total)\b/i,
   /\b(publicidad|marketing|campa[nñ]a\s+de\s+email)\b/i,
 ];
+// Mismas entidades de arriba, pero comprobando el REMITENTE real -- un
+// comprobante de transferencia real no suele repetir el nombre del banco
+// en el propio texto (solo en el remitente), así que depender solo del
+// cuerpo dejaba pasar justo ese caso real.
+const BANK_SENDER = /@(bbva|santander|caixabank|lacaixa|ingdirect|ing|openbank|bankinter|unicajabanco|unicaja|bancsabadell|sabadell|revolut|n26|wise)\.(es|com)$/i;
 
 // FALLO REAL detectado (15/10/2026): el propio Wallapop mandó un aviso de
 // seguridad ("inicio de sesión desde nuevo dispositivo") con el cuerpo
@@ -180,13 +193,34 @@ export function extractCochesNetContact(
 // FALLO REAL detectado (21/10/2026, caso real de un cliente llamado Ignacio
 // y otro ZAKARIA): el bloque JSON de Coches.net trae su nombre real y su
 // correo personal real (client.first_name/client.email), pero
+// FALLO REAL GRAVE detectado (27/10/2026, caso real: Sandra y Fran, dos
+// clientes reales distintos, ambos interesados en coches distintos, con
+// el nombre/correo real apareciendo mezclado en una sola ficha): no todos
+// los remitentes de Coches.net son un relay único por conversación
+// (xxxxx@contactos.coches.net) -- "vehiculosocasion@coches.net" es un
+// remitente COMPARTIDO, el mismo para cualquier cliente que escriba sobre
+// cualquier anuncio. Usarlo tal cual como clave de identidad del lead
+// (como si fuera el relay único) mezclaba a todos los clientes reales que
+// alguna vez escribieron por ahí en una sola ficha -- el primero se
+// quedaba con el nombre para siempre, el resto se perdían dentro de la
+// misma ficha. Un remitente de Coches.net es un relay único de verdad
+// solo si tiene forma de UUID -- cualquier otro (vehiculosocasion@,
+// no-reply@, correo@pro....) es compartido y nunca debe ser la clave de
+// identidad por sí solo.
+const COCHES_NET_UNIQUE_RELAY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@contactos\.coches\.net$/i;
+export function isCochesNetSharedSender(from: string): boolean {
+  return /@(pro\.)?coches\.net$/i.test(from) && !COCHES_NET_UNIQUE_RELAY.test(from);
+}
 // extractCochesNetContact exige que haya "phone" dentro del bloque -- las
 // notificaciones normales de "alguien está interesado en tu anuncio" casi
 // nunca lo traen, así que ese nombre/correo real se perdía sin usar en el
 // lead (quedaba con phone = el relay anónimo de coches.net y name = null).
 // Esta función no exige teléfono -- solo mira el bloque "client" y saca lo
 // que haya, para enriquecer el lead sin tocar su clave de identidad (el
-// relay sigue siendo el "phone" del lead, evitando duplicarlo).
+// relay sigue siendo el "phone" del lead, evitando duplicarlo) -- EXCEPTO
+// cuando el remitente es compartido (ver isCochesNetSharedSender arriba),
+// caso en el que el propio llamador debe usar el correo real como clave
+// en su lugar, nunca el remitente compartido.
 export function extractCochesNetClientIdentity(text: string): { name: string | null; email: string | null } | null {
   const clientBlockMatch = /"client":\s*\{([^}]*)\}/.exec(text);
   if (!clientBlockMatch) return null;
@@ -300,7 +334,7 @@ export function decideInterest(input: { from: string; subject: string; text: str
   if (AUTOMATED_ONLY.some((r) => r.test(body))) {
     return { interested: false, reason: "correo_masivo_o_baja" };
   }
-  if (BANK_OR_ADS.some((r) => r.test(body))) {
+  if (BANK_OR_ADS.some((r) => r.test(body)) || BANK_SENDER.test(input.from)) {
     return { interested: false, reason: "banco_o_publicidad_prohibido" };
   }
   if (SECURITY_OR_ACCOUNT.some((r) => r.test(body))) {

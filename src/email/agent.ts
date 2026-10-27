@@ -3,7 +3,7 @@ import dns from "dns";
 import { readCollection, writeCollection } from "../store.js";
 import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
-import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity } from "./interest.js";
+import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity, isCochesNetSharedSender } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled, isEmailContactPaused } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
@@ -152,7 +152,15 @@ function recordInbox(
     id: crypto.randomUUID(),
     from: email.from,
     subject: email.subject,
-    text: email.text.slice(0, 2000),
+    // FALLO REAL detectado (27/10/2026, "esto se ve así... no solo en una
+    // conversación, en todas"): 2000 caracteres parecía de sobra, pero las
+    // notificaciones reales de "nueva solicitud por WhatsApp" de Coches.net
+    // llevan un enlace wa.me larguísimo ANTES del bloque JSON real -- 17 de
+    // 19 correos reales de ese tipo ya llegaban exactos a 2000, cortando el
+    // bloque JSON a la mitad y rompiendo parseCochesNetJsonBlock, así que
+    // se mostraban en bruto en vez de limpios. Subido a un límite real que
+    // sí cubre esos correos completos.
+    text: email.text.slice(0, 8000),
     outcome,
     portal: extra?.portal ?? null,
     draft_note: extra?.draftNote,
@@ -313,15 +321,29 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   // su propio bloque "client", antes de que corra el agente -- nunca se
   // toca el "phone" del lead (sigue siendo el relay, la clave real), solo
   // se añaden name/email si faltaban. Ver extractCochesNetClientIdentity.
+  // FALLO REAL GRAVE detectado (27/10/2026, caso real: Sandra y Fran
+  // mezclados en la misma ficha): "email.from" solo es una clave de
+  // identidad válida cuando es un relay único por conversación -- cuando
+  // es un remitente compartido (isCochesNetSharedSender), usarlo mezcla a
+  // TODOS los clientes reales que hayan escrito alguna vez por ahí en una
+  // sola ficha y una sola memoria de conversación. En ese caso se usa el
+  // correo real del cliente (del propio bloque "client") como clave real
+  // -- nunca el remitente compartido. La respuesta real por correo sigue
+  // yendo siempre a "email.from" (eso no cambia, es la dirección real del
+  // hilo), esto solo afecta a qué lead/memoria de conversación se usa.
+  let identityKey = email.from;
   if (portalInfo.portal === "Coches.net") {
     const identity = extractCochesNetClientIdentity(email.text);
+    if (isCochesNetSharedSender(email.from) && identity?.email) {
+      identityKey = identity.email;
+    }
     if (identity?.name || identity?.email) {
-      upsertLead({ phone: email.from, name: identity.name ?? undefined, email: identity.email ?? undefined, channel: "EMAIL" });
+      upsertLead({ phone: identityKey, name: identity.name ?? undefined, email: identity.email ?? undefined, channel: "EMAIL" });
     }
   }
 
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
-  const { reply } = await handleChatMessage(`mail:${email.from}`, userText, "EMAIL", email.from);
+  const { reply } = await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey);
   const body = `${reply}\n\n${SIGNATURE}`;
   const subject = replySubject(email.subject);
 
