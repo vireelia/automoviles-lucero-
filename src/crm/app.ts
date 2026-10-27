@@ -3176,7 +3176,7 @@ ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehic
 ${selected.issues_detected && selected.issues_detected !== "ninguno" ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px"><b>Incidencia detectada:</b> ${esc(selected.issues_detected)}</div>` : ""}
 ${motivoText ? `<h3 style="margin-bottom:6px">Motivo de la llamada</h3><p>${esc(motivoText)}</p>` : ""}
 <h3 style="margin-bottom:6px">Resumen</h3><p>${selected.summary ? esc(selected.summary) : "Sin resumen disponible."}</p>
-<h3 style="margin-bottom:6px">Grabación</h3>${selected.recording_url ? `<audio controls preload="none" style="width:100%"><source src="${esc(selected.recording_url)}"></audio>` : `<p class="sub">Grabación no disponible para esta llamada.</p>`}
+<h3 style="margin-bottom:6px">Grabación</h3>${selected.recording_url ? `<audio controls preload="none" style="width:100%"><source src="${esc(selected.recording_url)}" type="audio/wav"></audio>` : `<p class="sub">Grabación no disponible para esta llamada.</p>`}
 ${selected.transcript ? `<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;color:var(--accent)">Ver transcripción completa</summary><div class="box" style="white-space:pre-wrap;font-size:13px;margin-top:8px">${esc(selected.transcript)}</div></details>` : `<p class="sub" style="margin-top:8px">Transcripción no disponible para esta llamada.</p>`}
 <form method="post" action="/crm/llamadas/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.from_number)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
@@ -3917,6 +3917,14 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
       var activo = document.activeElement;
       var tag = activo && activo.tagName;
       if(tag === "TEXTAREA" || tag === "INPUT") return;
+      // FALLO REAL detectado (27/10/2026, "el audio de llamadas no se
+      // reproduce"): el refresco automático reemplaza todo #contactos-panel,
+      // incluido el <audio> de la grabación -- si estaba sonando, lo mataba
+      // y lo reiniciaba pausado cada 4s, así que nunca llegaba a oírse nada
+      // seguido. Igual que con el textarea con foco, si hay un audio sonando
+      // de verdad, este ciclo se salta entero.
+      var audioSonando = document.querySelector(".contactos-detail audio");
+      if(audioSonando && !audioSonando.paused) return;
       var scrolls = SCROLL_SELECTORS.map(function(sel){ var el = document.querySelector(sel); return el ? el.scrollTop : null; });
       fetch(location.pathname + location.search).then(function(r){ return r.text(); }).then(function(html){
         var doc = new DOMParser().parseFromString(html, "text/html");
