@@ -147,12 +147,21 @@ export async function handleChatMessage(
     // con naturalidad. Los avisos reales siguen viviendo donde ya vivían --
     // create_handoff (visita/reserva) los sigue llamando el propio agente
     // cuando de verdad toca, no este tope.
+    // FALLO REAL detectado (27/10/2026, "esa protección es al cerrar, si el
+    // cliente vuelve a preguntar que le responda y sea amable"): user_turn_count
+    // nunca se reiniciaba -- una vez superado el tope, CUALQUIER mensaje
+    // futuro de ese mismo cliente (aunque fuera una pregunta nueva y real,
+    // minutos o días después) seguía devolviendo este mismo mensaje fijo
+    // para siempre, en vez de volver a ayudar con naturalidad. Esto es un
+    // corte puntual de ESTA tanda larga, no un veto permanente -- se
+    // reinicia a 0 para que el siguiente mensaje real vuelva a procesarse
+    // con el agente como cualquier otro.
     await dispatchTool("create_lead", { phone: contact, channel });
     saveConversation({
       id: sessionId,
       messages: trimToTurns([...conversation.messages, { role: "user", content: userText }, { role: "assistant", content: LIMIT_REACHED_REPLY }]),
       updated_at: new Date().toISOString(),
-      user_turn_count: userTurnCount,
+      user_turn_count: 0,
     });
     return { reply: LIMIT_REACHED_REPLY, tool_runs: 0 };
   }

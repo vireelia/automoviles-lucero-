@@ -223,8 +223,19 @@ export function parseCochesNetJsonBlock(text: string): CochesNetParsed | null {
   // asumir que llega limpio hasta el final del texto.
   const end = text.lastIndexOf("}");
   if (end === -1 || end <= start) return null;
+  // FALLO REAL detectado (27/10/2026, "se ven en códigos, no me gusta eso"):
+  // cuando el cliente escribe su pregunta en varias líneas (p. ej. "Hola,\n
+  // ¿Aún está a la venta?"), Coches.net mete ese salto de línea literal
+  // dentro del valor de "inquiry" sin escaparlo -- JSON.parse no admite un
+  // salto de línea real dentro de una cadena, así que fallaba con
+  // CUALQUIER mensaje multilínea y el correo entero se mostraba en bruto
+  // (el bloque JSON incluido) en vez de limpio. El resto del bloque es
+  // siempre compacto de verdad (una sola línea), así que cualquier salto
+  // de línea real que aparezca aquí dentro solo puede venir de dentro de
+  // un valor de texto -- se escapa antes de parsear, nunca se inventa nada.
+  const raw = text.slice(start, end + 1).replace(/\r\n|\r|\n/g, "\\n");
   try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
+    const parsed = JSON.parse(raw);
     const client = parsed?.client ?? {};
     const car = parsed?.sales_lead?.car ?? null;
     return {
