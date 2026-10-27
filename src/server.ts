@@ -537,6 +537,31 @@ app.post("/admin/clear_zernio_processed", requireAdminToken, (req, res) => {
   res.json({ status: "ok", removed: rows.length - kept.length, remaining: kept.length });
 });
 
+// Puntual (27/10/2026, para corregir leads reales con channel/origin
+// corrompidos por el fallo real de CHANNEL_LABEL filtrándose como valor
+// de "channel" -- ver chat/agent.ts): upsert_lead ya corrige "channel",
+// pero "origin" se fija una vez a propósito (no cambia solo porque el
+// cliente hable después por otro canal) -- aquí sí se puede forzar, solo
+// con token de admin, solo para corregir un dato ya roto, nunca para el
+// flujo normal.
+app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
+  const phone = typeof req.body?.phone === "string" ? req.body.phone : null;
+  const origin = typeof req.body?.origin === "string" ? req.body.origin : null;
+  if (!phone || !origin) {
+    res.status(400).json({ error: "bad_request", need: ["phone", "origin"] });
+    return;
+  }
+  const leads = readCollection<{ phone: string | null; origin?: string | null }>("leads");
+  const lead = leads.find((l) => l.phone === phone);
+  if (!lead) {
+    res.status(404).json({ error: "lead_not_found" });
+    return;
+  }
+  lead.origin = origin;
+  writeCollection("leads", leads);
+  res.json({ status: "ok", phone, origin });
+});
+
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));

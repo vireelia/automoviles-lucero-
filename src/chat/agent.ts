@@ -165,7 +165,15 @@ export async function handleChatMessage(
   // reenviando los datos de un cliente real) como "phone" en create_lead,
   // creando una ficha de cliente duplicada y fragmentada -- y gastando
   // turnos de herramienta de más intentando corregirlo. Regla reforzada.
-  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]}. Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}`;
+  // FALLO REAL detectado (27/10/2026, leads reales con channel:"correo
+  // electrónico" en vez de "EMAIL"): esta línea solo daba la etiqueta
+  // humana del canal ("correo electrónico") para que el modelo supiera
+  // cómo hablar de él -- pero el modelo, al rellenar el parámetro real
+  // "channel" de create_lead/upsert_lead, copiaba literalmente esa misma
+  // palabra en vez del código real ("EMAIL"), rompiendo cualquier filtro
+  // o agrupación que dependa de ese campo en el CRM. Ahora se dan los dos,
+  // dejando clarísimo cuál va en cada sitio.
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}`;
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() + context }, ...history, ...turn];
 
   let toolRuns = 0;
