@@ -21,7 +21,7 @@ import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
-import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, absoluteWhatsAppAudioPath, type ZernioAccount } from "../integrations/zernio.js";
+import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, absoluteWhatsAppAudioPath, absoluteOutboundWhatsappAttachmentPath, saveOutboundWhatsappAttachment, sendZernioWhatsappAttachment, OUTBOUND_ATTACHMENT_EXT_BY_MIME, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
 import { getBusinessConfig, saveBusinessOverrides } from "../data/business-config.js";
 import { getMessageTemplate, isMessageTemplateOverridden, saveMessageTemplate, resetMessageTemplate, renderTemplate, MESSAGE_TEMPLATE_DEFAULTS, MESSAGE_TEMPLATE_VARS, type MessageTemplateKey } from "../data/message-templates.js";
@@ -163,7 +163,9 @@ type WhatsappMessage = {
   internal_note?: string | null;
   created_at: string;
   media_path?: string | null;
-  media_type?: "audio" | null;
+  media_type?: "audio" | "image" | null;
+  reply_attachment_path?: string | null;
+  reply_attachment_type?: "image" | "audio" | null;
 };
 type CallAnalysis = {
   id: string;
@@ -1293,7 +1295,9 @@ verdad sigue pendiente de mirar. */
    saliente verde clara, entrante blanca, hora dentro de la propia
    burbuja (como WhatsApp de verdad), no como línea aparte. */
 .wa-thread{display:flex;flex-direction:column;gap:6px;max-height:380px;overflow-y:auto;padding:12px;background:#e5ddd5;border-radius:10px}
-.wa-bubble{max-width:78%;padding:7px 10px 8px;border-radius:8px;font-size:14px;white-space:pre-wrap;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.wa-bubble{position:relative;max-width:78%;padding:7px 24px 8px 10px;border-radius:8px;font-size:14px;white-space:pre-wrap;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.wa-copy-btn{position:absolute;top:3px;right:3px;width:18px;height:18px;border:0;border-radius:50%;background:rgba(0,0,0,.06);color:#54656f;font-size:10.5px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.wa-copy-btn:hover{background:rgba(0,0,0,.14)}
 .wa-row{display:flex;flex-direction:column}
 .wa-row.in{align-items:flex-start}
 .wa-row.out{align-items:flex-end}
@@ -1356,6 +1360,18 @@ function luceroToggleSidebar(){try{
 function luceroCloseMobileMenu(){try{
   var h=document.getElementById('sidebar');if(h)h.classList.remove('mobile-open');
   var bd=document.getElementById('lucero-backdrop');if(bd)bd.classList.remove('show');
+}catch(e){}}
+// Copiar un mensaje al portapapeles (27/10/2026, "copiar mensajes") -- el
+// texto real va en data-copy de la propia burbuja (WhatsApp y Correo), así
+// que funciona igual para un mensaje entrante o una respuesta ya enviada.
+function luceroCopyBubble(btn){try{
+  var bubble=btn.closest('.wa-bubble');
+  var text=bubble?bubble.getAttribute('data-copy'):null;
+  if(!text)return;
+  navigator.clipboard.writeText(text).then(function(){
+    var old=btn.textContent;btn.textContent='✓';
+    setTimeout(function(){btn.textContent=old},1200);
+  }).catch(function(){});
 }catch(e){}}
 (function(){try{if(localStorage.getItem('lucero_sidebar_collapsed')==='1'){var h=document.getElementById('sidebar');if(h)h.classList.add('collapsed')}}catch(e){}})();
 document.addEventListener("keydown", function (e) {
@@ -1574,7 +1590,9 @@ crm.use((req, res, next) => {
   // La propia API de Higgsfield necesita descargar la foto subida desde
   // fuera, sin cookie de sesión del CRM -- por eso esta única ruta queda
   // pública (sirve solo archivos de coches para anuncios, nada sensible).
-  if (req.path === "/entrar" || req.path.startsWith("/studio/archivo/")) return next();
+  // Mismo motivo real (27/10/2026, "enviar fotos y audios" por WhatsApp):
+  // Zernio/Meta descargan el adjunto saliente ellos mismos, sin cookie.
+  if (req.path === "/entrar" || req.path.startsWith("/studio/archivo/") || req.path.startsWith("/whatsapp/adjunto/")) return next();
   const user = userForSession(cookieValue(req, "crm_session"));
   if (!user) {
     res.redirect("/crm/entrar");
@@ -2981,7 +2999,20 @@ crm.get("/whatsapp", (req, res) => {
   res.redirect(`/crm/contactos/whatsapp${qs}`);
 });
 
-crm.post("/whatsapp/:id", async (req, res) => {
+// Adjuntos salientes de WhatsApp (27/10/2026, "que se pueda ver fotos...
+// enviar y recibir audios") -- misma lista blanca real por mimetype que ya
+// usa Studio (studioUpload, más abajo), solo que aquí también admite
+// audio. Definido aquí (no junto a studioUpload) porque esta ruta se
+// registra antes en el archivo -- una const no se puede usar antes de
+// declararse.
+const whatsappAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype in OUTBOUND_ATTACHMENT_EXT_BY_MIME);
+  },
+});
+crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req, res) => {
   const accion = String(req.body.accion ?? "");
   const volver = safeVolver(req.body.volver, "/crm/whatsapp");
   const items = list<WhatsappMessage>("whatsapp_inbox");
@@ -3027,6 +3058,29 @@ crm.post("/whatsapp/:id", async (req, res) => {
     save("whatsapp_inbox", items);
     if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
     return back(res, volver, "Respuesta enviada");
+  }
+  // Enviar foto o audio real (27/10/2026, "que se pueda ver fotos... enviar
+  // y recibir audios") -- un adjunto nunca puede pasar por Meta Direct Send
+  // (ver sendZernioWhatsappAttachment), así que solo funciona si ya hay una
+  // conversación real abierta -- igual de honesto que el texto: si falla,
+  // se guarda y se ve el motivo real, nunca se finge un envío.
+  if (accion === "responder_adjunto") {
+    const file = req.file;
+    if (!file) return back(res, volver, "Elige una foto o un audio antes de enviar");
+    const caption = String(req.body.respuesta ?? "").trim();
+    const attachmentType: "image" | "audio" = file.mimetype.startsWith("image/") ? "image" : "audio";
+    const saved = saveOutboundWhatsappAttachment(file.buffer, file.mimetype);
+    if (!saved) return back(res, volver, "Ese archivo no es una foto ni un audio permitido");
+    const result = await sendZernioWhatsappAttachment(m.phone, saved.publicUrl, attachmentType, caption || undefined);
+    m.answered = true;
+    m.answered_by = "equipo";
+    m.reply_text = caption || (attachmentType === "image" ? "📷 Foto" : "🎤 Audio");
+    m.reply_attachment_path = saved.fileName;
+    m.reply_attachment_type = attachmentType;
+    m.delivered = result.ok;
+    save("whatsapp_inbox", items);
+    if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
+    return back(res, volver, attachmentType === "image" ? "Foto enviada" : "Audio enviado");
   }
   if (accion === "eliminar") {
     moveToTrash("whatsapp_inbox", m, `WhatsApp: ${m.phone}`, me(res).email);
@@ -3326,10 +3380,21 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
   const thread = list<WhatsappMessage>("whatsapp_inbox")
     .filter((m) => m.phone === selected.phone)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  // Nota de voz real (27/10/2026, "que se escuche el audio que envió"):
-  // si el mensaje trae audio descargado de verdad, se reproduce con
-  // <audio> real en vez de (o además de) el texto de respaldo.
-  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${m.media_type === "audio" && m.media_path ? `<audio controls preload="none" style="max-width:240px"><source src="/crm/whatsapp/audio/${esc(m.media_path)}"></audio>` : esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}${m.delivered === false ? `<div class="wa-no-entregado">⚠️ No se pudo entregar</div>` : ""}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
+  // Nota de voz y foto real (27/10/2026, "que se escuche el audio que
+  // envió" / "que se pueda ver fotos"): si el mensaje trae un adjunto
+  // descargado de verdad, se reproduce/muestra en vez de (o además de) el
+  // texto de respaldo. "⧉" copia el texto real de la burbuja al
+  // portapapeles (27/10/2026, "copiar mensajes").
+  const copyBtn = (text: string) => text ? `<button type="button" class="wa-copy-btn" onclick="luceroCopyBubble(this)" title="Copiar mensaje">⧉</button>` : "";
+  const inboundBody = (m: WhatsappMessage) =>
+    m.media_type === "image" && m.media_path ? `<img src="/crm/whatsapp/audio/${esc(m.media_path)}" style="max-width:240px;border-radius:8px;display:block" alt="Foto enviada por el cliente">`
+    : m.media_type === "audio" && m.media_path ? `<audio controls preload="none" style="max-width:240px"><source src="/crm/whatsapp/audio/${esc(m.media_path)}"></audio>`
+    : esc(m.text);
+  const outboundBody = (m: WhatsappMessage) =>
+    m.reply_attachment_type === "image" && m.reply_attachment_path ? `<img src="/crm/whatsapp/adjunto/${esc(m.reply_attachment_path)}" style="max-width:220px;border-radius:8px;display:block" alt="Foto enviada">${m.reply_text && m.reply_text !== "📷 Foto" ? `<div style="margin-top:4px">${esc(m.reply_text)}</div>` : ""}`
+    : m.reply_attachment_type === "audio" && m.reply_attachment_path ? `<audio controls preload="none" style="max-width:220px"><source src="/crm/whatsapp/adjunto/${esc(m.reply_attachment_path)}"></audio>`
+    : esc(m.reply_text ?? "");
+  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in" data-copy="${esc(m.text)}">${inboundBody(m)}${copyBtn(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out" data-copy="${esc(m.reply_text)}">${outboundBody(m)}${copyBtn(m.reply_text)}${m.delivered === false ? `<div class="wa-no-entregado">⚠️ No se pudo entregar</div>` : ""}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
   // Estado real de la conversación (26/10/2026, "que se vea cuando
   // carolina este escribiendo... y cuando tenemos nosotros que
   // responder") -- se mira el ÚLTIMO mensaje del hilo, no el que esté
@@ -3355,6 +3420,11 @@ ${selected.answered && selected.delivered === false ? `<div class="box" style="b
 <form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
 <label>Responder por WhatsApp</label><textarea name="respuesta" rows="4" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
 <p class="sub" style="margin:4px 0 0;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
+</form>
+<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" enctype="multipart/form-data" style="margin-top:10px"><input type="hidden" name="volver" value="${esc(volver)}">
+<label>Enviar foto o audio</label><input type="file" name="adjunto" accept="image/jpeg,image/png,image/webp,audio/*" required>
+<input type="text" name="respuesta" placeholder="Pie de foto opcional" style="margin-top:6px">
+<button class="btn ok" type="submit" name="accion" value="responder_adjunto" style="margin-top:6px">Enviar adjunto</button>
 </form>
 <form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:10px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.phone)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
@@ -4171,6 +4241,11 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
     var action = form.getAttribute("action") || "";
     var esWhatsappOCorreo = action.indexOf("/crm/whatsapp/") === 0 || action.indexOf("/crm/correos/") === 0;
     if(!esWhatsappOCorreo) return;
+    // Enviar foto/audio (27/10/2026): este formulario SÍ lleva un archivo
+    // real -- un FormData convertido a texto (como hace el resto de abajo)
+    // perdería el binario. Se deja seguir como un envío normal del
+    // navegador (recarga la página, pero el archivo llega entero).
+    if(form.enctype === "multipart/form-data") return;
     e.preventDefault();
     // El router del CRM solo entiende application/x-www-form-urlencoded
     // (crm.use(express.urlencoded(...)), no multipart -- un FormData crudo
@@ -5649,17 +5724,32 @@ const STUDIO_FILE_CONTENT_TYPE: Record<string, string> = { ".jpg": "image/jpeg",
 // desde aquí la foto que se sube, y aquí mismo se ven/descargan los
 // resultados ya generados. Solo sirve archivos dentro de las dos carpetas
 // de Studio, nunca cualquier ruta del volumen de datos.
-// Notas de voz reales de WhatsApp (27/10/2026) -- a diferencia de
-// /studio/archivo (deliberadamente pública para que Higgsfield la
-// descargue), esto SÍ exige sesión real del CRM: es audio real de
-// clientes, no hay ningún servicio externo que necesite leerlo.
-const WHATSAPP_AUDIO_CONTENT_TYPE: Record<string, string> = { ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".amr": "audio/amr" };
+// Notas de voz y fotos reales de WhatsApp (27/10/2026, ampliado el mismo
+// día a fotos: "que se pueda ver fotos") -- a diferencia de /studio/archivo
+// (deliberadamente pública para que Higgsfield la descargue), esto SÍ
+// exige sesión real del CRM: es contenido real de clientes (audio o foto),
+// no hay ningún servicio externo que necesite leerlo.
+const WHATSAPP_MEDIA_CONTENT_TYPE: Record<string, string> = { ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".amr": "audio/amr", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
 crm.get("/whatsapp/audio/:archivo", (req, res) => {
   const archivo = String(req.params.archivo ?? "");
   if (!/^[a-f0-9-]+\.[a-z0-9]+$/i.test(archivo)) return res.status(404).end();
   const abs = absoluteWhatsAppAudioPath(archivo);
   if (!fileExists(abs)) return res.status(404).end();
-  const contentType = WHATSAPP_AUDIO_CONTENT_TYPE[path.extname(abs).toLowerCase()];
+  const contentType = WHATSAPP_MEDIA_CONTENT_TYPE[path.extname(abs).toLowerCase()];
+  res.type(contentType ?? "application/octet-stream");
+  res.sendFile(abs);
+});
+// Adjuntos SALIENTES (enviados de verdad al cliente desde el CRM) -- esta
+// SÍ es pública, sin sesión: Zernio/Meta descargan el archivo ellos mismos
+// desde esta URL antes de entregarlo, igual que /studio/archivo con
+// Higgsfield. Es contenido del propio negocio (lo que el equipo decide
+// enviar), nunca un dato privado del cliente.
+crm.get("/whatsapp/adjunto/:archivo", (req, res) => {
+  const archivo = String(req.params.archivo ?? "");
+  if (!/^[a-f0-9-]+\.[a-z0-9]+$/i.test(archivo)) return res.status(404).end();
+  const abs = absoluteOutboundWhatsappAttachmentPath(archivo);
+  if (!fileExists(abs)) return res.status(404).end();
+  const contentType = WHATSAPP_MEDIA_CONTENT_TYPE[path.extname(abs).toLowerCase()] ?? (path.extname(abs).toLowerCase() === ".wav" ? "audio/wav" : undefined);
   res.type(contentType ?? "application/octet-stream");
   res.sendFile(abs);
 });

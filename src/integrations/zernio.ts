@@ -20,15 +20,49 @@ import { readCollection, writeCollection } from "../store.js";
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 const WHATSAPP_MEDIA_DIR = path.join(DATA_DIR, "whatsapp_media");
 if (!existsSync(WHATSAPP_MEDIA_DIR)) mkdirSync(WHATSAPP_MEDIA_DIR, { recursive: true });
-const AUDIO_EXT_BY_MIME: Record<string, string> = { "audio/ogg": ".ogg", "audio/opus": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/amr": ".amr" };
-export function saveWhatsAppAudio(buffer: Buffer, mimeType: string): string {
-  const ext = AUDIO_EXT_BY_MIME[mimeType] ?? ".ogg";
+// Ampliado a fotos (27/10/2026, "que se pueda ver fotos") -- mismo archivo
+// y misma ruta que ya servía solo audio: el cliente también puede mandar
+// una foto real por WhatsApp, antes se guardaba el texto de respaldo
+// ("Unsupported message") y la foto en sí se perdía sin descargar.
+const INBOUND_MEDIA_EXT_BY_MIME: Record<string, string> = {
+  "audio/ogg": ".ogg", "audio/opus": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/amr": ".amr",
+  "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+};
+export function saveWhatsAppMedia(buffer: Buffer, mimeType: string): string {
+  const ext = INBOUND_MEDIA_EXT_BY_MIME[mimeType] ?? (mimeType.startsWith("image/") ? ".jpg" : ".ogg");
   const fileName = `${crypto.randomUUID()}${ext}`;
   writeFileSync(path.join(WHATSAPP_MEDIA_DIR, fileName), buffer);
   return fileName;
 }
 export function absoluteWhatsAppAudioPath(fileName: string): string {
   return path.join(WHATSAPP_MEDIA_DIR, fileName);
+}
+
+// Adjuntos SALIENTES, enviados de verdad al cliente desde el CRM (27/10/2026,
+// "que se pueda enviar audios", "ver fotos... enviar y recibir audios") --
+// carpeta distinta de whatsapp_media (esa es solo lo que el cliente nos
+// manda a nosotros). Zernio/Meta descargan este archivo ellos mismos desde
+// una URL pública -- no admiten subida directa de binario en este SDK --
+// así que, a diferencia de whatsapp_media, esta carpeta se sirve SIN sesión
+// (mismo criterio ya aceptado para las fotos públicas del Studio: contenido
+// del propio negocio, nombre de archivo aleatorio, nunca un dato sensible
+// del cliente).
+const WHATSAPP_OUTBOUND_DIR = path.join(DATA_DIR, "whatsapp_outbound");
+if (!existsSync(WHATSAPP_OUTBOUND_DIR)) mkdirSync(WHATSAPP_OUTBOUND_DIR, { recursive: true });
+export const OUTBOUND_ATTACHMENT_EXT_BY_MIME: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+  "audio/ogg": ".ogg", "audio/opus": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/amr": ".amr", "audio/wav": ".wav",
+};
+export function saveOutboundWhatsappAttachment(buffer: Buffer, mimeType: string): { fileName: string; publicUrl: string } | null {
+  const ext = OUTBOUND_ATTACHMENT_EXT_BY_MIME[mimeType];
+  if (!ext) return null;
+  const fileName = `${crypto.randomUUID()}${ext}`;
+  writeFileSync(path.join(WHATSAPP_OUTBOUND_DIR, fileName), buffer);
+  const publicUrl = `${process.env.PUBLIC_BASE_URL ?? "https://virelia-hub-lucero.lzc0bh.easypanel.host"}/crm/whatsapp/adjunto/${fileName}`;
+  return { fileName, publicUrl };
+}
+export function absoluteOutboundWhatsappAttachmentPath(fileName: string): string {
+  return path.join(WHATSAPP_OUTBOUND_DIR, fileName);
 }
 
 let client: Zernio | null = null;
@@ -307,6 +341,41 @@ export async function sendZernioWhatsappText(phone: string, body: string): Promi
     return { ok: false, error: `${normalAttemptError} (intento normal) -- ${directSendResult.error} (direct send)` };
   }
   return directSendResult;
+}
+
+// Enviar una foto o un audio real desde el CRM (27/10/2026, "ver fotos,
+// copiar mensajes, enviar y recibir audios"). A diferencia del texto, un
+// adjunto NUNCA puede pasar por Meta Direct Send ("Cannot be combined with
+// template, attachments, location, or contacts" -- documentado en el propio
+// SDK) -- solo existe la vía normal, dentro de una conversación ya abierta
+// de verdad. Si no hay conversación abierta, se devuelve un error real y
+// claro en vez de intentar algo que la propia API rechazaría.
+export async function sendZernioWhatsappAttachment(
+  phone: string,
+  attachmentUrl: string,
+  attachmentType: "image" | "audio",
+  caption?: string,
+): Promise<ZernioWhatsappSendResult> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+
+  const existing = findWhatsappConversation(phone);
+  const withinWindow = Boolean(existing) && Date.now() - new Date(existing!.updated_at).getTime() < WHATSAPP_WINDOW_HOURS * 60 * 60 * 1000;
+  if (!existing || !withinWindow) return { ok: false, error: "sin_conversacion_abierta" };
+
+  try {
+    const { data } = await zernio.messages.sendInboxMessage({
+      path: { conversationId: existing.conversation_id },
+      body: { accountId, attachmentUrl, attachmentType, ...(caption ? { message: caption } : {}) },
+    });
+    const messageId = data.data?.messageId ?? data.data?.messageIds?.[0];
+    if (messageId) return { ok: true, messageId };
+    return { ok: false, error: "zernio_sin_message_id" };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // Inicia una conversación de WhatsApp nueva con un número que nunca escribió
