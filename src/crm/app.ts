@@ -21,7 +21,7 @@ import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
-import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, type ZernioAccount } from "../integrations/zernio.js";
+import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, absoluteWhatsAppAudioPath, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
 import { getBusinessConfig, saveBusinessOverrides } from "../data/business-config.js";
 import { getMessageTemplate, isMessageTemplateOverridden, saveMessageTemplate, resetMessageTemplate, renderTemplate, MESSAGE_TEMPLATE_DEFAULTS, MESSAGE_TEMPLATE_VARS, type MessageTemplateKey } from "../data/message-templates.js";
@@ -162,6 +162,8 @@ type WhatsappMessage = {
   archived?: boolean;
   internal_note?: string | null;
   created_at: string;
+  media_path?: string | null;
+  media_type?: "audio" | null;
 };
 type CallAnalysis = {
   id: string;
@@ -3218,7 +3220,10 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
   const thread = list<WhatsappMessage>("whatsapp_inbox")
     .filter((m) => m.phone === selected.phone)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
+  // Nota de voz real (27/10/2026, "que se escuche el audio que envió"):
+  // si el mensaje trae audio descargado de verdad, se reproduce con
+  // <audio> real en vez de (o además de) el texto de respaldo.
+  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in">${m.media_type === "audio" && m.media_path ? `<audio controls preload="none" style="max-width:240px"><source src="/crm/whatsapp/audio/${esc(m.media_path)}"></audio>` : esc(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out">${esc(m.reply_text)}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
   // Estado real de la conversación (26/10/2026, "que se vea cuando
   // carolina este escribiendo... y cuando tenemos nosotros que
   // responder") -- se mira el ÚLTIMO mensaje del hilo, no el que esté
@@ -3318,6 +3323,7 @@ ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehic
 <div class="meta-grid"><div>Correos<b>${items.length}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${statusPill(mailStatus.label, mailStatus.tone)}</b></div></div>
 ${agentToggleBox}
 ${selected.outcome === "pendiente_gestion_portal" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px">Hay que responder desde ${esc(platformLabel(selected.portal))}, no por correo.</div>` : ""}
+${selected.outcome === "pendiente_whatsapp_manual" ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin-bottom:12px"><b>Este cliente pidió que le escriban solo por WhatsApp</b> -- este correo es solo el aviso, no hace falta (ni sirve) responderlo por aquí. El envío automático por WhatsApp falló, hace falta escribirle a mano.${extractWaLink(selected.draft_note ?? "") ? ` ${waButton(extractWaLink(selected.draft_note ?? "")!.replace("https://wa.me/", ""), "")}` : ""}</div>` : ""}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
 <h3 style="margin-bottom:6px">Conversación</h3><div class="mail-thread">${threadHtml}</div>
 ${typingLine}
@@ -3345,20 +3351,27 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 // lista la que no agrupaba. Una fila real por contacto, como cualquier
 // app de mensajería -- el hilo completo se sigue viendo entero al abrir
 // (whatsappDetailFor ya construye el hilo por teléfono, no por mensaje).
-function groupMessagesByPhone<T extends { phone: string; created_at: string; answered?: boolean; read?: boolean; archived?: boolean; text: string }>(
+function groupMessagesByKey<T extends { created_at: string; answered?: boolean; read?: boolean; archived?: boolean }>(
   all: T[],
+  keyOf: (m: T) => string,
 ): { latest: T; answered: boolean; read: boolean; archived: boolean; all: T[] }[] {
-  const byPhone = new Map<string, T[]>();
+  const byKey = new Map<string, T[]>();
   for (const m of all) {
-    const arr = byPhone.get(m.phone) ?? [];
+    const k = keyOf(m);
+    const arr = byKey.get(k) ?? [];
     arr.push(m);
-    byPhone.set(m.phone, arr);
+    byKey.set(k, arr);
   }
-  return [...byPhone.values()].map((msgs) => {
+  return [...byKey.values()].map((msgs) => {
     const sorted = [...msgs].sort((a, b) => a.created_at.localeCompare(b.created_at));
     const latest = sorted[sorted.length - 1];
     return { latest, answered: msgs.every((m) => m.answered), read: msgs.every((m) => m.read), archived: Boolean(latest.archived), all: msgs };
   });
+}
+function groupMessagesByPhone<T extends { phone: string; created_at: string; answered?: boolean; read?: boolean; archived?: boolean; text: string }>(
+  all: T[],
+): { latest: T; answered: boolean; read: boolean; archived: boolean; all: T[] }[] {
+  return groupMessagesByKey(all, (m) => m.phone);
 }
 function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
   const all = list<WhatsappMessage>("whatsapp_inbox");
@@ -3395,23 +3408,33 @@ ${avatarBadge(m.phone, name)}
 
 function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
   const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
-  const filtered = all.filter((m) => matchesMsgFilter(f, m) && searchMatches(q, m.from, m.subject, m.portal, m.text)).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / CONTACTOS_PAGE_SIZE));
-  const pageItems = filtered.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
-  const selected = filtered.find((m) => m.id === selectedIdRaw) ?? pageItems[0] ?? null;
-  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((m) => {
+  // Mismo arreglo real que WhatsApp (27/10/2026, "una conversación de 10
+  // mensajes son 10, es una locura"): agrupar por remitente real, no un
+  // mensaje por fila -- el hilo completo se sigue viendo entero al abrir
+  // (correoDetailFor ya agrupa por thread_id/remitente).
+  const conversations = groupMessagesByKey(all, (m) => m.from).filter(
+    (c) => matchesMsgFilter(f, c) && (searchMatches(q, c.latest.from, c.latest.subject, c.latest.portal, c.latest.text) || c.all.some((m) => searchMatches(q, "", "", "", m.text))),
+  );
+  conversations.sort((a, b) => b.latest.created_at.localeCompare(a.latest.created_at));
+  const totalPages = Math.max(1, Math.ceil(conversations.length / CONTACTOS_PAGE_SIZE));
+  const pageItems = conversations.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
+  const selectedConvo = conversations.find((c) => c.all.some((m) => m.id === selectedIdRaw)) ?? pageItems[0] ?? null;
+  const selected = selectedIdRaw ? (selectedConvo?.all.find((m) => m.id === selectedIdRaw) ?? selectedConvo?.latest ?? null) : selectedConvo?.latest ?? null;
+  const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((c) => {
+    const m = c.latest;
     const lead = findLeadForContact(allLeads, null, m.from);
     const name = lead?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
-    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
+    const isSelected = selectedConvo === c;
+    return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${isSelected ? " active" : ""}">
 ${avatarBadge(m.from, name)}
 <div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+<div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
-  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: filtered.length, totalPages, selectedId: null };
+  if (!selected) return { rows, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
   const { detail, activity } = correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
-  return { rows, detail, activity, total: filtered.length, totalPages, selectedId: selected.id };
+  return { rows, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
 // Secciones del mockup todavía sin módulo real detrás (25/10/2026,
@@ -5484,6 +5507,20 @@ const STUDIO_FILE_CONTENT_TYPE: Record<string, string> = { ".jpg": "image/jpeg",
 // desde aquí la foto que se sube, y aquí mismo se ven/descargan los
 // resultados ya generados. Solo sirve archivos dentro de las dos carpetas
 // de Studio, nunca cualquier ruta del volumen de datos.
+// Notas de voz reales de WhatsApp (27/10/2026) -- a diferencia de
+// /studio/archivo (deliberadamente pública para que Higgsfield la
+// descargue), esto SÍ exige sesión real del CRM: es audio real de
+// clientes, no hay ningún servicio externo que necesite leerlo.
+const WHATSAPP_AUDIO_CONTENT_TYPE: Record<string, string> = { ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".amr": "audio/amr" };
+crm.get("/whatsapp/audio/:archivo", (req, res) => {
+  const archivo = String(req.params.archivo ?? "");
+  if (!/^[a-f0-9-]+\.[a-z0-9]+$/i.test(archivo)) return res.status(404).end();
+  const abs = absoluteWhatsAppAudioPath(archivo);
+  if (!fileExists(abs)) return res.status(404).end();
+  const contentType = WHATSAPP_AUDIO_CONTENT_TYPE[path.extname(abs).toLowerCase()];
+  res.type(contentType ?? "application/octet-stream");
+  res.sendFile(abs);
+});
 crm.get("/studio/archivo/*", (req, res) => {
   const rel = String((req.params as Record<string, string>)[0] ?? "");
   const safe = path.normalize(rel);

@@ -10,7 +10,26 @@
 // se intenta nada, y un error de la API nunca se traduce en "enviado".
 import { Zernio, ZernioApiError, type SocialAccount } from "@zernio/node";
 import crypto from "crypto";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import path from "path";
 import { readCollection, writeCollection } from "../store.js";
+
+// Mismo patrón que src/studio/jobs.ts (saveUploadedPhoto): archivo real en
+// el volumen persistente, nombre aleatorio (nunca el nombre que mande
+// quien sube el archivo), servido después por una ruta del CRM con sesión.
+const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
+const WHATSAPP_MEDIA_DIR = path.join(DATA_DIR, "whatsapp_media");
+if (!existsSync(WHATSAPP_MEDIA_DIR)) mkdirSync(WHATSAPP_MEDIA_DIR, { recursive: true });
+const AUDIO_EXT_BY_MIME: Record<string, string> = { "audio/ogg": ".ogg", "audio/opus": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/amr": ".amr" };
+export function saveWhatsAppAudio(buffer: Buffer, mimeType: string): string {
+  const ext = AUDIO_EXT_BY_MIME[mimeType] ?? ".ogg";
+  const fileName = `${crypto.randomUUID()}${ext}`;
+  writeFileSync(path.join(WHATSAPP_MEDIA_DIR, fileName), buffer);
+  return fileName;
+}
+export function absoluteWhatsAppAudioPath(fileName: string): string {
+  return path.join(WHATSAPP_MEDIA_DIR, fileName);
+}
 
 let client: Zernio | null = null;
 
@@ -361,6 +380,31 @@ export async function sendZernioWhatsappVehicleContactTemplate(phone: string, ve
     if (err instanceof ZernioApiError) {
       return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
     }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Notas de voz reales de WhatsApp (27/10/2026, "que se escuche el audio
+// que envió"): el adjunto que llega en el webhook message.received apunta
+// a un endpoint de Zernio que caduca de verdad y pronto (Meta borra el
+// medio original) -- hay que descargarlo YA, en el momento del webhook,
+// nunca guardar solo la URL para "verla después". mediaId sale de la
+// propia URL del adjunto (.../whatsapp/media/{mediaId}), que es lo único
+// que pide esta llamada real.
+export async function downloadWhatsAppMedia(attachmentUrl: string, accountId: string): Promise<{ ok: true; buffer: Buffer; mimeType: string } | { ok: false; error: string }> {
+  const zernio = getClient();
+  if (!zernio) return { ok: false, error: "zernio_no_configurado" };
+  const mediaIdMatch = /\/whatsapp\/media\/([^/?]+)/.exec(attachmentUrl);
+  if (!mediaIdMatch) return { ok: false, error: "zernio_media_id_no_encontrado" };
+  try {
+    const { data, error } = await zernio.whatsapp.getWhatsAppMedia({ path: { mediaId: mediaIdMatch[1] }, query: { accountId } });
+    if (error || !data) return { ok: false, error: `zernio_media_error${error ? `: ${JSON.stringify(error).slice(0, 200)}` : ""}` };
+    const blob = data as unknown as Blob;
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    const mimeType = (blob as { type?: string }).type || "audio/ogg";
+    return { ok: true, buffer, mimeType };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

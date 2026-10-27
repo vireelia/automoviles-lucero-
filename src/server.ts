@@ -23,6 +23,8 @@ import {
   listRecentWhatsappConversations,
   getRecentWhatsappMessages,
   isRealCustomerConversation,
+  downloadWhatsAppMedia,
+  saveWhatsAppAudio,
 } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -608,6 +610,12 @@ type WhatsappInboxRecord = {
   answered_by?: "ia" | "equipo";
   archived?: boolean;
   created_at: string;
+  // Nota de voz real (27/10/2026): archivo ya descargado y guardado en el
+  // volumen persistente (Meta borra el original pronto, nunca se guarda
+  // solo la URL de Zernio) -- media_path es el nombre de archivo real
+  // dentro de whatsapp_media/, servido por /crm/whatsapp/audio/:archivo.
+  media_path?: string;
+  media_type?: "audio";
 };
 app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
   const b = req.body ?? {};
@@ -722,7 +730,16 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
 
     const conversationId: string | undefined = body.conversation?.id;
     const phone: string | undefined = body.message?.sender?.participantId ?? body.message?.sender?.id ?? body.message?.sender?.phone;
-    const text: string | undefined = body.message?.text;
+    // Notas de voz reales (27/10/2026, "que se escuche el audio que
+    // envió"): un mensaje de solo audio puede llegar con "text" vacío/null
+    // -- antes esto se descartaba en silencio (el "!text" de abajo exigía
+    // texto siempre), así que una nota de voz real nunca llegaba a
+    // guardarse. Si hay un adjunto de audio, se usa un texto honesto como
+    // respaldo (nunca se inventa una transcripción) para que el mensaje sí
+    // se procese.
+    const attachments: Array<{ type?: string; mimeType?: string; url?: string }> = Array.isArray(body.message?.attachments) ? body.message.attachments : [];
+    const audioAttachment = attachments.find((a) => a.type === "audio");
+    const text: string | undefined = body.message?.text || (audioAttachment ? "🎤 Nota de voz" : undefined);
     const accountId: string | undefined = body.account?.accountId;
     if (!conversationId || !phone || !text || !accountId) {
       console.warn("[zernio-whatsapp] evento message.received con campos inesperados, se ignora:", JSON.stringify(body).slice(0, 500));
@@ -758,9 +775,29 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     // respondiéndose. Mismo patrón que el webhook de n8n: registro aditivo
     // en su propio try/catch, nunca toca la respuesta real del agente.
     const whatsappInboxId = crypto.randomUUID();
+    // Nota de voz real: se descarga YA, antes de guardar nada -- Meta
+    // borra el audio original pronto, así que esperar a "verlo después"
+    // significa perderlo para siempre. Nunca bloquea el registro del
+    // mensaje si falla: mejor guardar el texto honesto de respaldo que no
+    // guardar nada.
+    let mediaPath: string | undefined;
+    if (audioAttachment?.url) {
+      const downloaded = await downloadWhatsAppMedia(audioAttachment.url, accountId);
+      if (downloaded.ok) mediaPath = saveWhatsAppAudio(downloaded.buffer, downloaded.mimeType);
+      else console.warn("[zernio-whatsapp] no se pudo descargar la nota de voz:", downloaded.error);
+    }
     try {
       const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
-      inbox.push({ id: whatsappInboxId, phone, text: text.trim().slice(0, 2000), read: false, answered: false, archived: false, created_at: new Date().toISOString() });
+      inbox.push({
+        id: whatsappInboxId,
+        phone,
+        text: text.trim().slice(0, 2000),
+        read: false,
+        answered: false,
+        archived: false,
+        created_at: new Date().toISOString(),
+        ...(mediaPath ? { media_path: mediaPath, media_type: "audio" as const } : {}),
+      });
       writeCollection("whatsapp_inbox", inbox.slice(-500));
     } catch (err) {
       console.error("[zernio-whatsapp] no se pudo registrar el mensaje entrante en el CRM:", err instanceof Error ? err.message : err);
