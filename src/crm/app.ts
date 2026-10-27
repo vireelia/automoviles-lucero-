@@ -3898,7 +3898,30 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
       }).catch(function(){});
     }catch(e){}
   }
-  setInterval(refrescar, 8000);
+  // Envío en tiempo real (27/10/2026, "que se pueda enviar mensajes en
+  // tiempo real, tambien en gmail"): antes cada botón de este panel
+  // (responder, marcar leído, archivar, nota...) era un <form> normal --
+  // al enviarlo el navegador recargaba la página entera y saltaba fuera
+  // del hilo. Ahora se manda por fetch al mismo backend de siempre (nada
+  // cambia del lado del servidor) y se repinta al momento con la misma
+  // función de refresco, sin esperar el siguiente ciclo de 4s.
+  document.addEventListener("submit", function(e){
+    var form = e.target;
+    if(!form || !form.closest || !form.closest("#contactos-panel")) return;
+    var action = form.getAttribute("action") || "";
+    var esWhatsappOCorreo = action.indexOf("/crm/whatsapp/") === 0 || action.indexOf("/crm/correos/") === 0;
+    if(!esWhatsappOCorreo) return;
+    e.preventDefault();
+    // El router del CRM solo entiende application/x-www-form-urlencoded
+    // (crm.use(express.urlencoded(...)), no multipart -- un FormData crudo
+    // por fetch llega vacío al servidor (content-type multipart, sin
+    // parsear) y cada acción caía en el "Hecho" genérico sin guardar nada.
+    var params = new URLSearchParams();
+    new FormData(form).forEach(function(value, key){ params.append(key, String(value)); });
+    if(e.submitter && e.submitter.name) params.append(e.submitter.name, e.submitter.value);
+    fetch(action, { method: "POST", body: params }).then(function(){ refrescar(); }).catch(function(){ form.submit(); });
+  });
+  setInterval(refrescar, 4000);
 })();
 </script>`;
   res.type("html").send(page("Contactos", user, body, msgOf(req)));
