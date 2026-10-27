@@ -3927,7 +3927,13 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
   // reemplazar su HTML entero las reiniciaba a arriba de todo cada 8s o
   // tras cualquier acción. Se guarda cada scrollTop antes y se restaura
   // justo después de pintar el HTML nuevo.
-  var SCROLL_SELECTORS = [".contactos-list-scroll", ".contactos-detail", ".contactos-activity"];
+  // FALLO REAL detectado (27/10/2026, "al bajar la conversacion siempre me
+  // manda al inicio"): .wa-thread y .mail-thread son su propio scroll
+  // interno (burbujas de WhatsApp/correo, altura fija), dentro de
+  // .contactos-detail -- que YA tenía su scroll guardado, pero el de
+  // dentro no, así que cada refresco de 4s lo reiniciaba al principio de
+  // la conversación. Mismo criterio que el resto: guardar y restaurar.
+  var SCROLL_SELECTORS = [".contactos-list-scroll", ".contactos-detail", ".contactos-activity", ".wa-thread", ".mail-thread"];
   function refrescar(){
     try{
       var activo = document.activeElement;
