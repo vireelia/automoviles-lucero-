@@ -16,6 +16,7 @@ import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
 import { parseCochesNetJsonBlock } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
+import { analyzeIncidents, lastIncidentAnalysis } from "../tools/incident-analyst.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
@@ -4604,8 +4605,32 @@ ${ventasPorCanalConversion.size > 0 ? `<div class="box"><h3 style="margin-top:0"
 <div class="box"><h3 style="margin-top:0">Calidad de datos y duplicados (histórico completo, no solo el periodo)</h3>
 <p>Grupos de teléfono duplicado: <b>${realDupGroups.length}</b> (${dupRowCount} fichas en total) · Sin teléfono ni nombre: <b>${sinTelefonoNiNombre}</b></p>
 ${dupGroupsSorted.length > 0 ? dupGroupsSorted.map(dupGroupRow).join("") : `<p class="sub">No hay duplicados de teléfono ahora mismo.</p>`}
-</div>`;
+</div>
+${me(res).role === "admin" ? incidentAnalystBox() : ""}`;
   res.type("html").send(page("Informes", me(res), body, msgOf(req)));
+});
+
+// Agente de calidad real (27/10/2026) -- caja + botón bajo demanda, solo
+// admin (cada análisis es una llamada real a la IA, con coste real).
+function incidentAnalystBox(): string {
+  const last = lastIncidentAnalysis();
+  return `<div class="box"><h3 style="margin-top:0">Agente de calidad -- incidencias reales del agente de IA</h3>
+<p class="sub">Revisa con IA todas las incidencias que el propio análisis de llamadas/chats ya detectó, las agrupa por causa real y te dice qué tocar. Cada análisis es una llamada real a la IA -- pídelo cuando quieras, no se genera solo.</p>
+<form method="post" action="/crm/informes/analizar-incidencias"><button class="btn ok" type="submit">Analizar incidencias ahora</button></form>
+${last ? `<div class="box" style="background:var(--panel);margin-top:12px"><p class="sub" style="margin:0 0 8px">Último análisis: ${esc(fmtDate(last.created_at))} -- ${last.incident_count} incidencia(s) revisada(s)</p><div style="white-space:pre-wrap">${esc(last.report)}</div></div>` : `<p class="sub" style="margin-top:10px">Todavía no se ha pedido ningún análisis.</p>`}
+</div>`;
+}
+crm.post("/informes/analizar-incidencias", async (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm/informes", "Solo el administrador puede pedir este análisis");
+  const result = await analyzeIncidents();
+  if (!result.ok) {
+    const msg =
+      result.error === "sin_incidencias" ? "No hay ninguna incidencia real registrada todavía"
+      : result.error === "llm_no_configurado" ? "Falta conectar la IA (OPENAI_API_KEY) para poder analizar"
+      : `No se pudo generar el análisis: ${result.error}`;
+    return back(res, "/crm/informes", msg);
+  }
+  return back(res, "/crm/informes", "Análisis generado");
 });
 
 // ---------- Equipo (solo administrador) ----------
