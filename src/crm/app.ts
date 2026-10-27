@@ -3337,9 +3337,15 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
     const lead = findLeadForContact(allLeads, m.phone, null);
     const name = lead?.name || m.phone;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
+    // "Carolina respondiendo" en la propia fila de la lista (27/10/2026,
+    // "que salga un pequeño texto... cada vez que carolina responda de
+    // verdad") -- mismo cálculo real que ya existía solo dentro de la
+    // ficha abierta (agentReplyStatus), aplicado aquí a cada mensaje de la
+    // lista para verlo sin tener que entrar en cada chat.
+    const rowStatus = agentReplyStatus(m.created_at, m.answered, m.answered_by, isWhatsappZernioAgentEnabled() && !isWhatsappChatPaused(m.phone), "Carolina");
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${selected?.id === m.id ? " active" : ""}">
 ${avatarBadge(m.phone, name)}
-<div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span></div>
+<div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span>${rowStatus.kind === "typing" ? `<span class="rsub" style="color:var(--ok);font-weight:600">${esc(rowStatus.label)}</span>` : ""}</div>
 <div class="rmeta"><time>${esc(time)}</time>${!m.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
