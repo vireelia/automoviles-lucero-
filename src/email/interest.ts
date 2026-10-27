@@ -249,6 +249,19 @@ export type CochesNetParsed = {
   inquiry: string | null;
   car: { make: string | null; model: string | null; version: string | null; price: number | string | null } | null;
 };
+// Saca un campo "clave":"valor" suelto, sin exigir que lo que lo rodea sea
+// JSON válido -- usado como red de seguridad cuando el bloque viene
+// incompleto (ver más abajo).
+function extractFieldLoose(block: string, key: string): string | null {
+  // El cierre de comillas es opcional a propósito: si el corte cayó a mitad
+  // del VALOR (p. ej. "first_name":"ANTO -- sin comilla de cierre porque el
+  // correo guardado se acababa justo ahí), sigue mereciendo la pena
+  // mostrar "ANTO" en vez de nada.
+  const m = new RegExp(`"${key}"\\s*:\\s*"([^"]*)"?`).exec(block);
+  const v = m?.[1]?.trim();
+  return v ? v : null;
+}
+
 export function parseCochesNetJsonBlock(text: string): CochesNetParsed | null {
   const start = text.indexOf('{"client"');
   if (start === -1) return null;
@@ -256,32 +269,62 @@ export function parseCochesNetJsonBlock(text: string): CochesNetParsed | null {
   // por el proveedor de correo) -- se recorta al último "}" real en vez de
   // asumir que llega limpio hasta el final del texto.
   const end = text.lastIndexOf("}");
-  if (end === -1 || end <= start) return null;
-  // FALLO REAL detectado (27/10/2026, "se ven en códigos, no me gusta eso"):
-  // cuando el cliente escribe su pregunta en varias líneas (p. ej. "Hola,\n
-  // ¿Aún está a la venta?"), Coches.net mete ese salto de línea literal
-  // dentro del valor de "inquiry" sin escaparlo -- JSON.parse no admite un
-  // salto de línea real dentro de una cadena, así que fallaba con
-  // CUALQUIER mensaje multilínea y el correo entero se mostraba en bruto
-  // (el bloque JSON incluido) en vez de limpio. El resto del bloque es
-  // siempre compacto de verdad (una sola línea), así que cualquier salto
-  // de línea real que aparezca aquí dentro solo puede venir de dentro de
-  // un valor de texto -- se escapa antes de parsear, nunca se inventa nada.
-  const raw = text.slice(start, end + 1).replace(/\r\n|\r|\n/g, "\\n");
-  try {
-    const parsed = JSON.parse(raw);
-    const client = parsed?.client ?? {};
-    const car = parsed?.sales_lead?.car ?? null;
-    return {
-      name: typeof client.first_name === "string" && client.first_name.trim() ? client.first_name.trim() : null,
-      phone: typeof client.phone === "string" && client.phone.trim() ? client.phone.trim() : null,
-      email: typeof client.email === "string" && client.email.trim() ? client.email.trim() : null,
-      inquiry: typeof parsed?.sales_lead?.inquiry === "string" && parsed.sales_lead.inquiry.trim() ? parsed.sales_lead.inquiry.trim() : null,
-      car: car ? { make: car.make ?? null, model: car.model ?? null, version: car.version ?? null, price: car.price ?? null } : null,
-    };
-  } catch {
-    return null;
+  if (end !== -1 && end > start) {
+    // FALLO REAL detectado (27/10/2026, "se ven en códigos, no me gusta eso"):
+    // cuando el cliente escribe su pregunta en varias líneas (p. ej. "Hola,\n
+    // ¿Aún está a la venta?"), Coches.net mete ese salto de línea literal
+    // dentro del valor de "inquiry" sin escaparlo -- JSON.parse no admite un
+    // salto de línea real dentro de una cadena, así que fallaba con
+    // CUALQUIER mensaje multilínea y el correo entero se mostraba en bruto
+    // (el bloque JSON incluido) en vez de limpio. El resto del bloque es
+    // siempre compacto de verdad (una sola línea), así que cualquier salto
+    // de línea real que aparezca aquí dentro solo puede venir de dentro de
+    // un valor de texto -- se escapa antes de parsear, nunca se inventa nada.
+    const raw = text.slice(start, end + 1).replace(/\r\n|\r|\n/g, "\\n");
+    try {
+      const parsed = JSON.parse(raw);
+      const client = parsed?.client ?? {};
+      const car = parsed?.sales_lead?.car ?? null;
+      return {
+        name: typeof client.first_name === "string" && client.first_name.trim() ? client.first_name.trim() : null,
+        phone: typeof client.phone === "string" && client.phone.trim() ? client.phone.trim() : null,
+        email: typeof client.email === "string" && client.email.trim() ? client.email.trim() : null,
+        inquiry: typeof parsed?.sales_lead?.inquiry === "string" && parsed.sales_lead.inquiry.trim() ? parsed.sales_lead.inquiry.trim() : null,
+        car: car ? { make: car.make ?? null, model: car.model ?? null, version: car.version ?? null, price: car.price ?? null } : null,
+      };
+    } catch {
+      // Cae al modo flexible de abajo (p. ej. un salto de línea real dentro
+      // de otro campo distinto de "inquiry" que tampoco esperábamos).
+    }
   }
+  // FALLO REAL detectado (27/10/2026, "esto sigue en algunos chats" -- un
+  // correo real guardado con el bloque JSON cortado a la mitad, de antes de
+  // subir el límite de guardado): sin cierre "}" real, o con JSON inválido,
+  // esto se rendía y mostraba el correo ENTERO en bruto (boilerplate +
+  // trozo de JSON incluido) en vez de limpio. En vez de exigir que el
+  // bloque entero sea JSON válido, se saca cada campo suelto por su cuenta
+  // -- un resumen parcial real (lo que haya alcanzado a llegar) es siempre
+  // mejor que código en bruto. Esto además "autocura" los correos viejos ya
+  // guardados truncados, sin tocar ningún dato: el nombre/teléfono del
+  // cliente van al principio del bloque, muy rara vez se pierden en el
+  // corte.
+  const block = text.slice(start);
+  const name = extractFieldLoose(block, "first_name");
+  const phone = extractFieldLoose(block, "phone");
+  const email = extractFieldLoose(block, "email");
+  const inquiry = extractFieldLoose(block, "inquiry");
+  const make = extractFieldLoose(block, "make");
+  const model = extractFieldLoose(block, "model");
+  const version = extractFieldLoose(block, "version");
+  const priceMatch = /"price"\s*:\s*"?(\d+(?:\.\d+)?)"?/.exec(block);
+  if (!name && !phone && !email && !inquiry && !make) return null;
+  return {
+    name,
+    phone,
+    email,
+    inquiry,
+    car: make || model || version ? { make, model, version, price: priceMatch?.[1] ?? null } : null,
+  };
 }
 
 export type PortalInfo = { portal: string | null; mustManageOnPortal: boolean };

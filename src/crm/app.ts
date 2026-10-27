@@ -759,8 +759,14 @@ function extractLeadingPortal(reason: string): { portal: string | null; rest: st
 // y solo cae al texto crudo (ya envuelto por CSS) si no hay nada que extraer.
 function emailPreviewBox(text: string): string {
   const parsed = parseCochesNetJsonBlock(text);
-  if (!parsed || (!parsed.name && !parsed.inquiry && !parsed.car)) {
-    return `<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(text)}</div>`;
+  if (!parsed || (!parsed.name && !parsed.phone && !parsed.email && !parsed.inquiry && !parsed.car)) {
+    // FALLO REAL (27/10/2026): cuando ni el parseo estricto ni el flexible
+    // sacan NADA (p. ej. el corte cayó a mitad del propio nombre de la
+    // clave JSON, antes de cualquier valor), el bloque sigue sin servir
+    // para nada -- se recorta del texto en bruto en vez de mostrarlo roto.
+    const jsonStart = text.indexOf('{"client"');
+    const clean = jsonStart === -1 ? text : text.slice(0, jsonStart).trimEnd();
+    return `<div class="box" style="background:#f7f8fa;white-space:pre-wrap;font-size:19px">${esc(clean)}</div>`;
   }
   const vehicle = parsed.car ? [parsed.car.make, parsed.car.model, parsed.car.version].filter(Boolean).join(" ") : null;
   const lines = [
