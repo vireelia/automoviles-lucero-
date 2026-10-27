@@ -539,6 +539,14 @@ app.get("/debug/whatsapp_inbox", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("whatsapp_inbox").slice(-50));
 });
 
+app.get("/debug/email_inbox", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("email_inbox").slice(-50));
+});
+
+app.get("/debug/email_processed", requireAdminToken, (_req, res) => {
+  res.json(readCollection<unknown>("email_processed").slice(-50));
+});
+
 app.get("/debug/zernio_whatsapp_processed", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("zernio_whatsapp_processed").slice(-50));
 });
