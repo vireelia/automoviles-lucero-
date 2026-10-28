@@ -340,6 +340,36 @@ export function parseCochesNetJsonBlock(text: string): CochesNetParsed | null {
   };
 }
 
+// FALLO REAL detectado (28/10/2026, caso real: Álvaro, "Hola! Podría ir a
+// verlos?" -- "sigue saliendo en bruto, no sé cuántas veces te lo tengo
+// que decir"): esta es una plantilla de Coches.net DISTINTA de la de
+// "nueva solicitud"/"alguien está interesado" -- la de "tienes un nuevo
+// mensaje", que reenvía la respuesta real del cliente. Esta plantilla
+// NUNCA trae el bloque JSON "{client}" (parseCochesNetJsonBlock no
+// encuentra nada), así que siempre caía al texto completo en bruto:
+// boilerplate del anuncio, la pregunta real del cliente Y SU PROPIA FIRMA
+// de correo (nombre, redes sociales, imágenes) todo mezclado. El mensaje
+// real vive siempre entre "nuevo De {nombre}" y el arranque del historial
+// anterior ("Mensajes anteriores", marcador fijo del propio portal) -- y,
+// cuando el cliente tiene firma con el formato típico de MySignature.io
+// ("*Nombre*" en su propia línea, muy común), se recorta ahí para no
+// arrastrar la firma entera.
+export function parseCochesNetReplyMessage(text: string): { name: string | null; inquiry: string } | null {
+  const nameMatch = /\bnuevo\s+De\s+([^\r\n]+?)\s*[\r\n]/i.exec(text);
+  if (!nameMatch) return null;
+  let segment = text.slice(nameMatch.index + nameMatch[0].length);
+  const stopAnterior = /\bMensajes\s+anteriores\b/i.exec(segment);
+  if (stopAnterior) segment = segment.slice(0, stopAnterior.index);
+  const sigMatch = /^\s*\*[^*\r\n]+\*\s*$/m.exec(segment);
+  if (sigMatch) segment = segment.slice(0, sigMatch.index);
+  const inquiry = segment
+    .replace(/\[image:[^\]]*\]/gi, "")
+    .replace(/‌/g, "")
+    .trim();
+  if (!inquiry) return null;
+  return { name: nameMatch[1].trim() || null, inquiry };
+}
+
 export type PortalInfo = { portal: string | null; mustManageOnPortal: boolean };
 
 export function detectPortal(input: { from: string; subject: string; text: string }): PortalInfo {

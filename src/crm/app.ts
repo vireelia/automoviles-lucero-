@@ -13,7 +13,7 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
-import { parseCochesNetJsonBlock } from "../email/interest.js";
+import { parseCochesNetJsonBlock, parseCochesNetReplyMessage } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
 import { analyzeIncidents, lastIncidentAnalysis } from "../tools/incident-analyst.js";
@@ -762,6 +762,19 @@ function extractLeadingPortal(reason: string): { portal: string | null; rest: st
 function emailPreviewBox(text: string): string {
   const parsed = parseCochesNetJsonBlock(text);
   if (!parsed || (!parsed.name && !parsed.phone && !parsed.email && !parsed.inquiry && !parsed.car)) {
+    // FALLO REAL (28/10/2026, caso real: Álvaro, "Hola! Podría ir a
+    // verlos?"): la plantilla de Coches.net "tienes un nuevo mensaje"
+    // nunca trae el bloque JSON de arriba -- antes de rendirse al texto
+    // en bruto (con la firma del cliente, redes sociales, imágenes y
+    // todo), se intenta esta otra extracción real. Ver
+    // parseCochesNetReplyMessage.
+    const reply = parseCochesNetReplyMessage(text);
+    if (reply) {
+      return `<div class="box" style="background:#f7f8fa;font-size:19px">
+${reply.name ? `<p style="margin:0 0 8px"><b>${esc(reply.name)}</b></p>` : ""}
+<p style="margin:0"><b>Dice:</b> "${esc(reply.inquiry)}"</p>
+</div>`;
+    }
     // FALLO REAL (27/10/2026): cuando ni el parseo estricto ni el flexible
     // sacan NADA (p. ej. el corte cayó a mitad del propio nombre de la
     // clave JSON, antes de cualquier valor), el bloque sigue sin servir
@@ -900,11 +913,16 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   // mismos conteos/condiciones ya usados en Hoy y en Correos/WhatsApp/
   // Incidencias, recalculados aquí porque la barra la comparten todas
   // las páginas, no solo Hoy.
-  const pendingMails = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
-  const pendingWhatsapp = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
+  // FALLO REAL detectado (28/10/2026, "veo que hay muchísimos mensajes sin
+  // contestar" / "que estos números se vayan quitando, al ver el chat"):
+  // mismo fallo que las pestañas de Contactos -- contaba cada MENSAJE
+  // suelto, no conversaciones reales, y encima no bajaba nunca con solo
+  // ver el chat. Mismo criterio ya aplicado ahí: conversaciones NO LEÍDAS.
+  const pendingMails = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
+  const pendingWhatsapp = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
   const msgTotal = pendingMails + pendingWhatsapp;
-  const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=pendientes" : "/crm/contactos/correo?f=pendientes";
-  const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin responder`;
+  const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=sin_leer" : "/crm/contactos/correo?f=sin_leer";
+  const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin leer`;
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
   const alertCount = pendingAlerts().length;
   const notifTotal = overdueTasks + alertCount;
@@ -3605,6 +3623,17 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
   const totalPages = Math.max(1, Math.ceil(conversations.length / CONTACTOS_PAGE_SIZE));
   const pageItems = conversations.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
   const selectedConvo = conversations.find((c) => c.all.some((m) => m.id === selectedIdRaw)) ?? pageItems[0] ?? null;
+  // Petición real (28/10/2026, "que se vayan quitando [los números], al
+  // ver el chat"): el número del badge ahora cuenta no-leídos, así que
+  // tiene que bajar de verdad al abrir la conversación -- antes solo el
+  // botón manual "Marcar leído" lo hacía, nunca ver el hilo abierto.
+  if (selectedConvo && !selectedConvo.read) {
+    const ids = new Set(selectedConvo.all.map((m) => m.id));
+    const items = list<WhatsappMessage>("whatsapp_inbox");
+    for (const m of items) if (ids.has(m.id)) m.read = true;
+    save("whatsapp_inbox", items);
+    for (const m of selectedConvo.all) m.read = true;
+  }
   const selected = selectedIdRaw ? (selectedConvo?.all.find((m) => m.id === selectedIdRaw) ?? selectedConvo?.latest ?? null) : selectedConvo?.latest ?? null;
   const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay mensajes en esta vista.</div>` : pageItems.map((c) => {
     const m = c.latest;
@@ -3649,6 +3678,15 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   const totalPages = Math.max(1, Math.ceil(conversations.length / CONTACTOS_PAGE_SIZE));
   const pageItems = conversations.slice((pageNum - 1) * CONTACTOS_PAGE_SIZE, pageNum * CONTACTOS_PAGE_SIZE);
   const selectedConvo = conversations.find((c) => c.all.some((m) => m.id === selectedIdRaw)) ?? pageItems[0] ?? null;
+  // Mismo motivo que en whatsappContactos (28/10/2026, "que se vayan
+  // quitando [los números], al ver el chat").
+  if (selectedConvo && !selectedConvo.read) {
+    const ids = new Set(selectedConvo.all.map((m) => m.id));
+    const items = list<InboxMail>("email_inbox");
+    for (const m of items) if (ids.has(m.id)) m.read = true;
+    save("email_inbox", items);
+    for (const m of selectedConvo.all) m.read = true;
+  }
   const selected = selectedIdRaw ? (selectedConvo?.all.find((m) => m.id === selectedIdRaw) ?? selectedConvo?.latest ?? null) : selectedConvo?.latest ?? null;
   const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((c) => {
     const m = c.latest;
@@ -4171,8 +4209,20 @@ crm.get("/contactos/:canal", (req, res) => {
   const resv = list<Reservation>("reservations");
   const today = todayMadrid();
   const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
-  const pendingWa = list<WhatsappMessage>("whatsapp_inbox").filter((m) => !m.answered).length;
-  const pendingCo = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply" && !m.answered).length;
+  // FALLO REAL detectado (28/10/2026, "veo que hay muchísimos mensajes sin
+  // contestar" -- el número real era 35, pero contaba cada MENSAJE suelto
+  // sin responder, no conversaciones reales: con el mismo criterio que ya
+  // usa el resto de Contactos (el último mensaje de cada conversación,
+  // no todo el historial), eran solo 11 -- y esos 11 son datos de pruebas
+  // del 23/10, no backlog real).
+  // Petición real (28/10/2026, "que estos números se vayan quitando, al
+  // ver el chat"): el badge de la pestaña cuenta ahora conversaciones NO
+  // LEÍDAS (baja de verdad al abrir el chat, ya que whatsappContactos/
+  // correoContactos marcan leído solas al seleccionar una conversación),
+  // no "sin responder" -- eso sigue viéndose por fila con la etiqueta
+  // "Pendiente", que no depende de si se ha leído.
+  const pendingWa = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
+  const pendingCo = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
   const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
   const tabLink = (key: ContactoCanal, label: string, count: number) =>
     `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag">${count > 99 ? "99+" : count}</span>` : ""}</a>`;
