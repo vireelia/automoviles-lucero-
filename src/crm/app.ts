@@ -4276,6 +4276,37 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
   // dentro no, así que cada refresco de 4s lo reiniciaba al principio de
   // la conversación. Mismo criterio que el resto: guardar y restaurar.
   var SCROLL_SELECTORS = [".contactos-list-scroll", ".contactos-detail", ".contactos-activity", ".wa-thread", ".mail-thread"];
+  // Factorizado de refrescar() (28/10/2026, "cada vez que cambio de chat se
+  // mueve la página completa, eso es un error"): cambiar de conversación
+  // era un <a href> normal -- el navegador hacía una recarga de página
+  // entera de verdad, así que la ventana saltaba arriba del todo cada vez
+  // (no solo las 3 columnas internas, que ya tenían su scroll guardado).
+  // Esta función hace exactamente lo mismo que ya hacía refrescar() --
+  // pedir la URL por fetch y sustituir #contactos-panel -- pero ahora la
+  // usan también los clics de la lista, así que nunca hay una recarga real
+  // de documento al cambiar de chat, y la ventana ni se entera.
+  function cargarPanel(url, actualizarUrl){
+    return new Promise(function(resolve){
+      try{
+        var scrolls = SCROLL_SELECTORS.map(function(sel){ var el = document.querySelector(sel); return el ? el.scrollTop : null; });
+        fetch(url).then(function(r){ return r.text(); }).then(function(html){
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var fresco = doc.getElementById("contactos-panel");
+          var mio = document.getElementById("contactos-panel");
+          if(fresco && mio){
+            mio.innerHTML = fresco.innerHTML;
+            if(actualizarUrl) history.pushState({ contactosUrl: url }, "", url);
+            SCROLL_SELECTORS.forEach(function(sel, i){
+              if(scrolls[i] == null) return;
+              var el = document.querySelector(sel);
+              if(el) el.scrollTop = scrolls[i];
+            });
+          }
+          resolve();
+        }).catch(function(){ resolve(); });
+      }catch(e){ resolve(); }
+    });
+  }
   function refrescar(){
     try{
       var activo = document.activeElement;
@@ -4289,22 +4320,24 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
       // de verdad, este ciclo se salta entero.
       var audioSonando = document.querySelector(".contactos-detail audio");
       if(audioSonando && !audioSonando.paused) return;
-      var scrolls = SCROLL_SELECTORS.map(function(sel){ var el = document.querySelector(sel); return el ? el.scrollTop : null; });
-      fetch(location.pathname + location.search).then(function(r){ return r.text(); }).then(function(html){
-        var doc = new DOMParser().parseFromString(html, "text/html");
-        var fresco = doc.getElementById("contactos-panel");
-        var mio = document.getElementById("contactos-panel");
-        if(fresco && mio){
-          mio.innerHTML = fresco.innerHTML;
-          SCROLL_SELECTORS.forEach(function(sel, i){
-            if(scrolls[i] == null) return;
-            var el = document.querySelector(sel);
-            if(el) el.scrollTop = scrolls[i];
-          });
-        }
-      }).catch(function(){});
+      cargarPanel(location.pathname + location.search, false);
     }catch(e){}
   }
+  // Cambiar de conversación sin recargar la página (28/10/2026, ver arriba):
+  // cualquier clic en una fila de la lista (.contact-row) dentro del panel
+  // se intercepta, se pide por fetch y se sustituye en sitio -- la ventana
+  // nunca se mueve, porque nunca hay una navegación real de documento.
+  document.addEventListener("click", function(e){
+    var link = e.target && e.target.closest ? e.target.closest("a.contact-row") : null;
+    if(!link || !link.closest("#contactos-panel")) return;
+    var href = link.getAttribute("href");
+    if(!href) return;
+    e.preventDefault();
+    cargarPanel(href, true);
+  });
+  window.addEventListener("popstate", function(e){
+    if(e.state && e.state.contactosUrl) cargarPanel(e.state.contactosUrl, false);
+  });
   // Envío en tiempo real (27/10/2026, "que se pueda enviar mensajes en
   // tiempo real, tambien en gmail"): antes cada botón de este panel
   // (responder, marcar leído, archivar, nota...) era un <form> normal --
