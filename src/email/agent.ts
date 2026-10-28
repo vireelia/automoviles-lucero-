@@ -243,8 +243,30 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
       if (vehicleLabel && (await isContactoInicialTemplateApproved())) {
         const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel);
         if (templateSent.ok) {
-          recordInbox(email, "sent_whatsapp_plantilla", { portal: "Coches.net" });
+          // FALLO REAL GRAVE detectado (28/10/2026, caso real: Carlos,
+          // HYUNDAI ix55 -- "ni siquiera veo la respuesta de Daniel"): la
+          // plantilla aprobada por Meta SOLO abre la ventana de 24h con un
+          // texto fijo genérico ("vimos su interés en el..."), su
+          // contenido no se puede cambiar -- nunca mandaba la respuesta
+          // real que Daniel ya había redactado para la pregunta real del
+          // cliente. Se quedaba redactada y nunca se enviaba, aunque el
+          // propio comentario de este código ya decía que debía pasar.
+          // Ahora, justo después de abrir la conversación con la
+          // plantilla, se manda también la respuesta real -- la ventana
+          // ya está abierta, así que el envío normal de texto libre
+          // funciona de verdad.
+          const replySent = await sendWhatsappText(waPhone, reply);
+          recordInbox(email, "sent_whatsapp_plantilla", { portal: "Coches.net", draftNote: replySent.ok ? undefined : reply });
           writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+          if (!replySent.ok) {
+            raiseAlert({
+              kind: "gestion_portal",
+              lead_phone: waPhone,
+              name: contact.name,
+              reason: `Coches.net: se abrió la conversación de WhatsApp con ${contact.name ?? "el cliente"} con la plantilla, pero la respuesta real a su pregunta no se pudo enviar después: ${explainWhatsappSendError(replySent.error)}. Escríbele a mano: https://wa.me/${contact.phone}`,
+              draft_note: reply,
+            });
+          }
           return { outcome: "sent_whatsapp_plantilla" };
         }
       }
