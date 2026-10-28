@@ -197,7 +197,16 @@ async function contactLeadViaWhatsapp(
   const userText = vehicleLabel
     ? `Hola, escribí en ${portal} preguntando por este vehículo: ${vehicleLabel}.${contact.inquiry ? ` ${contact.inquiry}` : ""}`
     : contact.inquiry || "Me interesa un vehículo, pero no se especificó cuál.";
-  const { reply } = await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone);
+  const { reply: aiReply } = await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone);
+  // Petición real (28/10/2026, "para que el cliente sepa" -- SOLO para
+  // Wallapop): a diferencia de Coches.net (donde la plantilla aprobada
+  // por Meta ya se identifica como Automóviles Lucero antes de que
+  // Carolina siga la conversación), un cliente de Wallapop nunca ha
+  // hablado con este número de WhatsApp -- sin contexto, un mensaje
+  // suelto respondiendo a su pregunta de Wallapop no dice de dónde
+  // viene. Se antepone siempre la misma frase real, nunca se deja a que
+  // el modelo la redacte distinto cada vez.
+  const reply = portal === "Wallapop" ? `Hola, te respondo al mensaje que dejaste en Wallapop. Soy del equipo de Automóviles Lucero.\n\n${aiReply}` : aiReply;
   const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
 
   if (sent.ok) {
