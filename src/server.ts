@@ -14,7 +14,7 @@ import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
-import { restoreFromTrash } from "./crm/trash.js";
+import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -623,6 +623,21 @@ app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 5
 app.get("/debug/plantilla_whatsapp_estado", requireAdminToken, async (_req, res) => {
   res.json({ contacto_inicial_vehiculo_aprobada: await isContactoInicialTemplateApproved() });
 });
+// Limpieza puntual real (28/10/2026, dato de prueba de la landing nueva
+// que acabó en el CRM real por error de pruebas, nunca un cliente real):
+// mismo patrón que ya usa el CRM para "eliminar cliente" -- se mueve a la
+// papelera (recuperable), nunca se borra para siempre. Solo por teléfono
+// exacto, para no arriesgar tocar el lead equivocado.
+app.post("/admin/delete_lead_by_phone", requireAdminToken, route((a: { phone: string }) => {
+  if (!a.phone) return { status: "error", error: "falta_phone" };
+  const target = normalizePhone(a.phone);
+  const leads = readCollection<{ id: string; phone?: string; name?: string | null }>("leads");
+  const lead = leads.find((l) => l.phone && normalizePhone(l.phone) === target);
+  if (!lead) return { status: "ok", encontrado: false };
+  moveToTrash("leads", lead, `Cliente: ${lead.name || lead.phone || "sin nombre"}`, "admin-token");
+  writeCollection("leads", leads.filter((l) => l.id !== lead.id));
+  return { status: "ok", encontrado: true, movido_a_papelera: true };
+}));
 app.get("/debug/email_contact_pauses", requireAdminToken, debugSlice("email_contact_pauses", 200));
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
