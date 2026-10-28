@@ -477,9 +477,10 @@ app.post("/email/inbound", requireAdminToken, async (req, res) => {
   }
 });
 
-app.get("/email/outbox", requireAdminToken, (_req, res) => {
-  res.json(readCollection<unknown>("email_outbox").slice(-50));
-});
+// Ampliado a ?limit=all (28/10/2026, mismo motivo que ya tuvieron el resto
+// de /debug/* -- este también estaba fijo en 50, escondiendo fallos reales
+// más antiguos al diagnosticar un problema real de envío de correos).
+app.get("/email/outbox", requireAdminToken, debugSlice("email_outbox", 50));
 
 app.get("/email/inbox", requireAdminToken, (_req, res) => {
   res.json(readCollection<unknown>("email_inbox").slice(-50));
@@ -567,6 +568,7 @@ app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
+app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
 app.get("/debug/email_contact_pauses", requireAdminToken, debugSlice("email_contact_pauses", 200));
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)

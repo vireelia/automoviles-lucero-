@@ -70,6 +70,19 @@ const BANK_OR_ADS = [
 // cuerpo dejaba pasar justo ese caso real.
 const BANK_SENDER = /@(bbva|santander|caixabank|lacaixa|ingdirect|ing|openbank|bankinter|unicajabanco|unicaja|bancsabadell|sabadell|revolut|n26|wise)\.(es|com)$/i;
 
+// FALLO REAL GRAVE detectado (28/10/2026, caso real confirmado: un correo
+// de la gestoría del propio negocio, "RECOGIDA NUEVOS DISTINTIVOS VTC",
+// se contestó como si fuera un cliente -- "eso está prohibido"): los
+// correos de la gestoría/asesoría del negocio solo se descartaban cuando
+// el asunto/cuerpo mencionaba un documento sensible (nómina, embargo...).
+// Un aviso administrativo mundano de la misma gestoría (recoger un
+// distintivo, un trámite, un aviso de horario) no lleva ninguna de esas
+// palabras, así que pasaba como si fuera una consulta real de un cliente.
+// No se puede enumerar cada gestoría real que exista, pero su dominio casi
+// siempre lo dice solo -- se descarta por el REMITENTE, igual que los
+// bancos, nunca por el contenido del mensaje.
+const PROFESSIONAL_SERVICES_SENDER = /@([a-z0-9-]*(gestoria|asesoria|consultoria|notaria|graduadosocial)[a-z0-9-]*)\.[a-z.]+$/i;
+
 // FALLO REAL detectado (15/10/2026): el propio Wallapop mandó un aviso de
 // seguridad ("inicio de sesión desde nuevo dispositivo") con el cuerpo
 // vacío, y el agente le contestó igualmente ("No entiendo bien tu
@@ -379,6 +392,9 @@ export function decideInterest(input: { from: string; subject: string; text: str
   }
   if (BANK_OR_ADS.some((r) => r.test(body)) || BANK_SENDER.test(input.from)) {
     return { interested: false, reason: "banco_o_publicidad_prohibido" };
+  }
+  if (PROFESSIONAL_SERVICES_SENDER.test(input.from)) {
+    return { interested: false, reason: "proveedor_privado_del_negocio_prohibido" };
   }
   if (SECURITY_OR_ACCOUNT.some((r) => r.test(body))) {
     return { interested: false, reason: "aviso_seguridad_o_cuenta_prohibido" };
