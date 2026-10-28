@@ -231,7 +231,13 @@ export function startScheduler() {
       try {
         checkAppointmentReminders();
         checkTeamUpcomingVisits();
-        checkStaleFollowups();
+        // Desactivado (28/10/2026, "elimínalos por ahora" -- fallo real:
+        // el aviso de "nos han entrado coches nuevos" se mandaba cada
+        // STALE_DAYS a CUALQUIER lead inactivo, sin comprobar si ya había
+        // comprado el coche. No se borra el código -- hace falta excluir
+        // a los clientes que ya compraron (y revisar el intervalo real)
+        // antes de volver a activarlo.
+        // checkStaleFollowups();
         await checkDailyTeamKeepalive();
         // FALLO REAL detectado (21/10/2026, "los chicos de Automóviles
         // Lucero no se van a poner a enviarles las cosas manuales"): el
