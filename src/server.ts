@@ -25,6 +25,7 @@ import {
   isRealCustomerConversation,
   downloadWhatsAppMedia,
   saveWhatsAppMedia,
+  isContactoInicialTemplateApproved,
 } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -569,6 +570,17 @@ app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notific
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
+// Comprobación real de solo lectura (28/10/2026, "para que carolina pueda
+// enviar mensajes a las personas que... no hayan escrito antes a
+// whatsapp"): la plantilla real ya está construida y conectada
+// (sendZernioWhatsappVehicleContactTemplate, en email/agent.ts) -- esto
+// solo consulta su estado real en Meta, nunca se asume aprobada. Vive
+// aquí (no en una variable local ni extrayendo la credencial a mano)
+// porque la propia credencial real de Zernio ya vive de forma segura en
+// este servidor, nunca hace falta sacarla fuera.
+app.get("/debug/plantilla_whatsapp_estado", requireAdminToken, async (_req, res) => {
+  res.json({ contacto_inicial_vehiculo_aprobada: await isContactoInicialTemplateApproved() });
+});
 app.get("/debug/email_contact_pauses", requireAdminToken, debugSlice("email_contact_pauses", 200));
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
