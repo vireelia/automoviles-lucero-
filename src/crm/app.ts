@@ -13,7 +13,7 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
-import { parseCochesNetJsonBlock, parseCochesNetReplyMessage } from "../email/interest.js";
+import { parseCochesNetJsonBlock, parseCochesNetReplyMessage, extractWallapopContact } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
 import { analyzeIncidents, lastIncidentAnalysis } from "../tools/incident-analyst.js";
@@ -3617,19 +3617,31 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 }
 
 // Sección propia de Wallapop (28/10/2026, "sección de contactos de
-// wallapop"): a diferencia de Correo, aquí nunca hay un hilo real que
-// mostrar ni una respuesta que enviar desde el CRM -- Wallapop no deja
-// contestar por correo (rebota siempre) y el aviso que manda nunca trae
-// el mensaje real del cliente (confirmado real, ver detectPortal en
-// interest.ts). Vista honesta: solo lo que de verdad se sabe (asunto,
-// fecha) más un enlace directo al perfil real de Wallapop para
-// gestionarlo allí, y un botón para marcarlo como ya atendido.
+// wallapop" + "que Daniel coja ese número... y Carolina le contacte por
+// WhatsApp directamente"): el remitente de Wallapop es siempre el mismo
+// (info@wallapop.com, compartido entre todos los clientes) -- buscar la
+// ficha por ahí nunca encontraría al cliente real, así que se extrae su
+// teléfono real del propio aviso guardado (mismo bloque JSON real que ya
+// usa agent.ts) y se busca por eso. Cuando ya se le contactó por
+// WhatsApp de verdad, se enlaza directo a esa conversación -- nunca se
+// repite el hilo aquí, vive en WhatsApp.
 function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string): { detail: string; activity: string } {
-  const lead = findLeadForContact(allLeads, selected.from, null);
-  const detail = `${contactDetailHeader(lead, "Contacto de Wallapop", null, null, null)}
+  const contact = extractWallapopContact(selected.text);
+  const phone = contact?.phone ? (contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`) : null;
+  const lead = findLeadForContact(allLeads, phone, null);
+  const vehicleLabel = contact ? [contact.make, contact.model, contact.version].filter(Boolean).join(" ") : null;
+  const yaContactado = selected.outcome === "sent_whatsapp_automatico" || selected.outcome === "sent_whatsapp_plantilla";
+  const statusBox = yaContactado
+    ? `<div class="box" style="background:var(--ok-bg);border:1px solid #2e9e55;margin:12px 0">✅ Ya se le contactó por WhatsApp directamente.${phone ? ` <a href="/crm/contactos/whatsapp?q=${encodeURIComponent(phone)}">Ver la conversación ↗</a>` : ""}</div>`
+    : selected.outcome === "pendiente_whatsapp_manual"
+      ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin:12px 0"><b>El envío automático por WhatsApp falló.</b> Hace falta escribirle a mano.${phone ? ` ${waButton(phone, "")}` : ""}${selected.draft_note ? `<div class="box" style="background:var(--ok-bg);white-space:pre-wrap;margin-top:8px">${esc(selected.draft_note)}</div>` : ""}</div>`
+      : `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí</b> y no se pudo extraer un teléfono real de este aviso -- hay que abrir Wallapop y contestarle desde ahí.<br><a class="btn" style="margin-top:8px;display:inline-block" target="_blank" rel="noopener" href="${esc(businessInfo.profiles.wallapop)}">Abrir Wallapop ↗</a></div>`;
+  const detail = `${contactDetailHeader(lead, contact?.name || "Contacto de Wallapop", phone, null, null)}
 <div class="meta-grid"><div>Portal<b>Wallapop</b></div><div>Recibido<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${statusPill(selected.answered ? "Gestionado" : "Pendiente", selected.answered ? "ok" : "warn")}</b></div></div>
-<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí.</b> No manda el mensaje real del cliente a este correo -- hay que abrir Wallapop y contestarle desde ahí.<br><a class="btn" style="margin-top:8px;display:inline-block" target="_blank" rel="noopener" href="${esc(businessInfo.profiles.wallapop)}">Abrir Wallapop ↗</a></div>
+${vehicleLabel ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(vehicleLabel)}</b></p>` : ""}
+${statusBox}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
+${contact?.inquiry ? `<h3 style="margin-bottom:6px">Mensaje real del cliente</h3><div class="box" style="white-space:pre-wrap">${esc(contact.inquiry)}</div>` : ""}
 <form method="post" action="/crm/correos/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
 ${!selected.answered ? `<button class="btn ok" type="submit" name="accion" value="ya">Ya lo gestioné en Wallapop</button>` : ""}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
@@ -3637,6 +3649,7 @@ ${!selected.archived ? `<button class="btn light" type="submit" name="accion" va
 </form>`;
   const activity = `<h3 style="margin-top:0">Actividad</h3>
 <div class="activity-item email">Aviso de Wallapop recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
+${yaContactado ? `<div class="activity-item ia">Contactado por WhatsApp (Carolina)</div>` : ""}
 ${selected.answered ? `<div class="activity-item ia">Gestionado por el equipo en Wallapop</div>` : ""}
 ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 <h3>Notas internas</h3>
@@ -3747,7 +3760,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   const emailInboxAll = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
   const all = emailInboxAll.filter((m) => (portalView === "wallapop" ? m.portal === "Wallapop" : m.portal !== "Wallapop"));
   const unreadCochesNet = groupMessagesByKey(emailInboxAll.filter((m) => m.portal !== "Wallapop"), (m) => m.from).filter((c) => !c.read).length;
-  const unreadWallapop = groupMessagesByKey(emailInboxAll.filter((m) => m.portal === "Wallapop"), (m) => m.from).filter((c) => !c.read).length;
+  const unreadWallapop = groupMessagesByKey(emailInboxAll.filter((m) => m.portal === "Wallapop"), (m) => extractWallapopContact(m.text)?.phone || m.id).filter((c) => !c.read).length;
   const subTabs = `<div class="htabs" style="margin-bottom:10px">
 <a href="/crm/contactos/correo" class="${portalView === "coches" ? "on-tab" : ""}">Coches.net${unreadCochesNet > 0 ? ` <span class="tag">${unreadCochesNet > 99 ? "99+" : unreadCochesNet}</span>` : ""}</a>
 <a href="/crm/contactos/correo?portal=wallapop" class="${portalView === "wallapop" ? "on-tab" : ""}">Wallapop${unreadWallapop > 0 ? ` <span class="tag">${unreadWallapop > 99 ? "99+" : unreadWallapop}</span>` : ""}</a>
@@ -3756,7 +3769,13 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   // mensajes son 10, es una locura"): agrupar por remitente real, no un
   // mensaje por fila -- el hilo completo se sigue viendo entero al abrir
   // (correoDetailFor ya agrupa por thread_id/remitente).
-  const conversations = groupMessagesByKey(all, (m) => m.from).filter(
+  // FALLO REAL que se evitó antes de desplegar (28/10/2026): TODOS los
+  // avisos de Wallapop llegan del mismo remitente compartido
+  // (info@wallapop.com) -- agrupar por "from" aquí habría mezclado a
+  // TODOS los clientes reales de Wallapop en una sola fila. Se agrupa
+  // por el teléfono real ya extraído del propio aviso (mismo que usa
+  // agent.ts), nunca por el remitente compartido.
+  const conversations = groupMessagesByKey(all, portalView === "wallapop" ? (m) => extractWallapopContact(m.text)?.phone || m.id : (m) => m.from).filter(
     (c) => matchesMsgFilter(f, c) && (searchMatches(q, c.latest.from, c.latest.subject, c.latest.portal, c.latest.text) || c.all.some((m) => searchMatches(q, "", "", "", m.text))),
   );
   conversations.sort((a, b) => b.latest.created_at.localeCompare(a.latest.created_at));
@@ -3776,15 +3795,18 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   const rows = pageItems.length === 0 ? `<div class="empty" style="margin:14px">No hay correos en esta vista.</div>` : pageItems.map((c) => {
     const m = c.latest;
     // Mismo fallo que en correoDetailFor: buscar por "phone" (la clave
-    // real de contacto en email), no por "email".
-    const lead = findLeadForContact(allLeads, m.from, null);
-    const name = lead?.name || m.from;
+    // real de contacto en email), no por "email". En Wallapop el
+    // remitente es siempre el mismo (compartido) -- el nombre real sale
+    // del propio aviso, nunca del remitente.
+    const wallapopContact = portalView === "wallapop" ? extractWallapopContact(m.text) : null;
+    const lead = findLeadForContact(allLeads, wallapopContact?.phone ?? m.from, null);
+    const name = lead?.name || wallapopContact?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     const isSelected = selectedConvo === c;
     const rowClass = isSelected ? " active" : c.read || c.answered ? " leido" : "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${rowClass}">
 ${convoCheckbox("/crm/correos", c.all.map((x) => x.id))}
-${avatarBadge(m.from, name)}
+${avatarBadge(wallapopContact?.phone || m.from, name)}
 <div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
 <div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;

@@ -3,7 +3,7 @@ import dns from "dns";
 import { readCollection, writeCollection } from "../store.js";
 import { handleChatMessage } from "../chat/agent.js";
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
-import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity, isCochesNetSharedSender } from "./interest.js";
+import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity, isCochesNetSharedSender, extractWallapopContact } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled, isEmailContactPaused } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
@@ -173,6 +173,66 @@ function recordInbox(
   writeCollection("email_inbox", inbox.slice(-500));
 }
 
+// Factorizado (28/10/2026, "que Daniel coja ese número y los datos del
+// coche y Carolina le contacte por WhatsApp directamente"): este era el
+// cuerpo real de la rama "SOLO por WhatsApp" de Coches.net (16/10/2026),
+// ahora reutilizado también para Wallapop -- mismo camino real probado
+// (abrir con la plantilla aprobada si hace falta, mandar la respuesta
+// real después), solo cambia el portal y el texto de la nota del lead.
+async function contactLeadViaWhatsapp(
+  email: InboundEmail,
+  processed: Processed[],
+  contact: { phone: string; name: string | null; make: string | null; model: string | null; version: string | null; inquiry: string | null },
+  portal: string,
+): Promise<{ outcome: string; reply?: string }> {
+  const waPhone = contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`;
+  const vehicleLabel = [contact.make, contact.model, contact.version].filter(Boolean).join(" ");
+  upsertLead({
+    phone: waPhone,
+    name: contact.name ?? undefined,
+    channel: "WHATSAPP",
+    vehicle_interest: vehicleLabel || undefined,
+    notes: `Pidió explícitamente que le contacten por WhatsApp (aviso real de ${portal}).`,
+  });
+  const userText = vehicleLabel
+    ? `Hola, escribí en ${portal} preguntando por este vehículo: ${vehicleLabel}.${contact.inquiry ? ` ${contact.inquiry}` : ""}`
+    : contact.inquiry || "Me interesa un vehículo, pero no se especificó cuál.";
+  const { reply } = await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone);
+  const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
+
+  if (sent.ok) {
+    recordInbox(email, "sent_whatsapp_automatico", { portal });
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_automatico", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "sent_whatsapp_automatico", reply };
+  }
+
+  if (vehicleLabel && (await isContactoInicialTemplateApproved())) {
+    const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel);
+    if (templateSent.ok) {
+      const replySent = await sendWhatsappText(waPhone, reply);
+      recordInbox(email, "sent_whatsapp_plantilla", { portal, draftNote: replySent.ok ? undefined : reply });
+      writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+      if (!replySent.ok) {
+        raiseAlert({
+          kind: "gestion_portal",
+          lead_phone: waPhone,
+          name: contact.name,
+          reason: `${portal}: se abrió la conversación de WhatsApp con ${contact.name ?? "el cliente"} con la plantilla, pero la respuesta real a su pregunta no se pudo enviar después: ${explainWhatsappSendError(replySent.error)}. Escríbele a mano: https://wa.me/${contact.phone}`,
+          draft_note: reply,
+        });
+      }
+      return { outcome: "sent_whatsapp_plantilla" };
+    }
+  }
+
+  const failReason = explainWhatsappSendError(sent.error);
+  const draftNote = `El envío automático por WhatsApp falló: ${failReason} -- escribirle a mano: https://wa.me/${contact.phone}\n\nRespuesta ya redactada, lista para copiar:\n${reply}`;
+  recordInbox(email, "pendiente_whatsapp_manual", { portal, draftNote });
+  writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_whatsapp_manual", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+  raiseAlert({ kind: "gestion_portal", lead_phone: waPhone, name: contact.name, reason: `${portal}: cliente pidió contacto SOLO por WhatsApp -- el envío automático falló: ${failReason}. Escribirle a mano: https://wa.me/${contact.phone}`, draft_note: draftNote });
+  return { outcome: "pendiente_whatsapp_manual" };
+}
+
 export async function processInboundEmail(email: InboundEmail): Promise<{ outcome: string; reply?: string; error?: string }> {
   // FALLO REAL grave detectado (15/10/2026): el correo de prueba "Probar
   // Gmail" (que se envía desde la propia cuenta conectada A SÍ MISMA) se
@@ -206,77 +266,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   if (WHATSAPP_ONLY_REQUEST.test(email.text)) {
     const contact = extractCochesNetContact(email.text);
     if (contact?.phone) {
-      const waPhone = contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`;
-      const vehicleLabel = [contact.make, contact.model, contact.version].filter(Boolean).join(" ");
-      upsertLead({
-        phone: waPhone,
-        name: contact.name ?? undefined,
-        channel: "WHATSAPP",
-        vehicle_interest: vehicleLabel || undefined,
-        notes: "Pidió explícitamente que le contacten por WhatsApp (aviso real de Coches.net).",
-      });
-      // A petición real (16/10/2026, "que también le diga el coche por el
-      // cual le estamos escribiendo"): este es un contacto que iniciamos
-      // nosotros (el cliente no ha escrito nada todavía en esta conversación
-      // de WhatsApp) -- si el vehículo queda solo como nota al margen, el
-      // modelo puede confirmarlo sin nombrarlo ("sí, lo tenemos disponible")
-      // y el cliente no sabe de qué coche se habla. Se deja clarísimo como
-      // el dato central, no como apunte.
-      const userText = vehicleLabel
-        ? `Hola, escribí en Coches.net preguntando por este vehículo: ${vehicleLabel}.${contact.inquiry ? ` ${contact.inquiry}` : ""}`
-        : contact.inquiry || "Me interesa un vehículo, pero no se especificó cuál.";
-      const { reply } = await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone);
-      const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
-
-      if (sent.ok) {
-        recordInbox(email, "sent_whatsapp_automatico", { portal: "Coches.net" });
-        writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_automatico", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-        return { outcome: "sent_whatsapp_automatico", reply };
-      }
-
-      // Plantilla real aprobada por Meta como segundo intento real (27/10/2026,
-      // caso real de Robert Leonardo) -- solo si hay un vehículo real que
-      // poner como parámetro y la plantilla ya está aprobada de verdad (se
-      // comprueba cada vez, nunca se asume). Si esto funciona, se abre la
-      // ventana de 24h y Carolina ya puede seguir la conversación real
-      // después con la respuesta que ya tenía redactada.
-      if (vehicleLabel && (await isContactoInicialTemplateApproved())) {
-        const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel);
-        if (templateSent.ok) {
-          // FALLO REAL GRAVE detectado (28/10/2026, caso real: Carlos,
-          // HYUNDAI ix55 -- "ni siquiera veo la respuesta de Daniel"): la
-          // plantilla aprobada por Meta SOLO abre la ventana de 24h con un
-          // texto fijo genérico ("vimos su interés en el..."), su
-          // contenido no se puede cambiar -- nunca mandaba la respuesta
-          // real que Daniel ya había redactado para la pregunta real del
-          // cliente. Se quedaba redactada y nunca se enviaba, aunque el
-          // propio comentario de este código ya decía que debía pasar.
-          // Ahora, justo después de abrir la conversación con la
-          // plantilla, se manda también la respuesta real -- la ventana
-          // ya está abierta, así que el envío normal de texto libre
-          // funciona de verdad.
-          const replySent = await sendWhatsappText(waPhone, reply);
-          recordInbox(email, "sent_whatsapp_plantilla", { portal: "Coches.net", draftNote: replySent.ok ? undefined : reply });
-          writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-          if (!replySent.ok) {
-            raiseAlert({
-              kind: "gestion_portal",
-              lead_phone: waPhone,
-              name: contact.name,
-              reason: `Coches.net: se abrió la conversación de WhatsApp con ${contact.name ?? "el cliente"} con la plantilla, pero la respuesta real a su pregunta no se pudo enviar después: ${explainWhatsappSendError(replySent.error)}. Escríbele a mano: https://wa.me/${contact.phone}`,
-              draft_note: reply,
-            });
-          }
-          return { outcome: "sent_whatsapp_plantilla" };
-        }
-      }
-
-      const failReason = explainWhatsappSendError(sent.error);
-      const draftNote = `El envío automático por WhatsApp falló: ${failReason} -- escribirle a mano: https://wa.me/${contact.phone}\n\nRespuesta ya redactada, lista para copiar:\n${reply}`;
-      recordInbox(email, "pendiente_whatsapp_manual", { portal: "Coches.net", draftNote });
-      writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_whatsapp_manual", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-      raiseAlert({ kind: "gestion_portal", lead_phone: waPhone, name: contact.name, reason: `Coches.net: cliente pidió contacto SOLO por WhatsApp -- el envío automático falló: ${failReason}. Escribirle a mano: https://wa.me/${contact.phone}`, draft_note: draftNote });
-      return { outcome: "pendiente_whatsapp_manual" };
+      return await contactLeadViaWhatsapp(email, processed, { ...contact, phone: contact.phone }, "Coches.net");
     }
   }
 
@@ -311,20 +301,26 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     portal: portalInfo.portal,
   });
   if (!decision.interested) {
-    // Sección de Wallapop (28/10/2026, "vamos a construir la sección de
-    // Wallapop que tenemos pendiente"): nunca se intenta responder por
-    // correo (rebota siempre, confirmado real) ni se genera ningún texto
-    // con handleChatMessage (el cuerpo real del aviso de Wallapop siempre
-    // llega vacío -- generar una respuesta sobre la nada ya causó un fallo
-    // real, ver detectPortal). Se deja visible en Correo (portal Wallapop,
-    // sección propia) y se avisa al equipo para que conteste desde la
-    // propia web/app de Wallapop.
+    // Sección de Wallapop (28/10/2026, "que Daniel coja ese número y los
+    // datos del coche y Carolina le contacte por WhatsApp directamente"):
+    // nunca se intenta responder por correo (rebota siempre, confirmado
+    // real) -- pero el bloque JSON real del aviso SÍ trae el teléfono, el
+    // coche y el mensaje real del cliente (confirmado real tras arreglar
+    // plainText en google.ts, que antes lo descartaba entero). Mismo
+    // camino real ya probado con Coches.net: Carolina le escribe por
+    // WhatsApp directamente. Solo si de verdad no se puede extraer el
+    // teléfono (p. ej. un aviso de seguridad de Wallapop, no un cliente)
+    // se queda como aviso para gestionar a mano, nunca se inventa nada.
     if (decision.reason === "wallapop_gestionar_en_portal") {
+      const contact = extractWallapopContact(email.text);
+      if (contact?.phone) {
+        return await contactLeadViaWhatsapp(email, processed, { ...contact, phone: contact.phone }, "Wallapop");
+      }
       recordInbox(email, "pendiente_gestion_portal", { portal: portalInfo.portal });
       writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_gestion_portal", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
       raiseAlert({
         kind: "gestion_portal",
-        reason: `Wallapop: nuevo contacto sobre "${email.subject || "tu anuncio"}" -- Wallapop no deja responder por correo ni manda aquí el mensaje real del cliente. Revísalo y contesta directamente en Wallapop.`,
+        reason: `Wallapop: nuevo aviso sobre "${email.subject || "tu anuncio"}" sin teléfono real detectado -- revísalo y gestiónalo directamente en Wallapop.`,
       });
       return { outcome: "pendiente_gestion_portal" };
     }

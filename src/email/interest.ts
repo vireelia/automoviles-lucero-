@@ -203,6 +203,47 @@ export function extractCochesNetContact(
   };
 }
 
+// Mismo bloque JSON real, pero el de Wallapop (28/10/2026, "que Daniel
+// coja ese número y los datos del coche y Carolina le contacte por
+// WhatsApp directamente" -- confirmado real contra un correo real de
+// Wallapop, una vez corregido el parser de HTML: client.phone/
+// first_name/last_name, sales_lead.car.make/model/version, e
+// "inquiry":"Nombre: mensaje real" -- formato fijo, siempre con el
+// nombre antes de ": "). Wallapop nunca deja responder por correo, pero
+// SÍ manda el teléfono real y el mensaje real del cliente -- antes se
+// descartaba todo por el fallo de plainText, nunca por falta de dato.
+export function extractWallapopContact(
+  text: string,
+): { name: string | null; phone: string | null; make: string | null; model: string | null; version: string | null; inquiry: string | null } | null {
+  const phoneMatch = /"client":\{[^}]*"phone":"(\+?\d+)"/.exec(text);
+  if (!phoneMatch) return null;
+  const firstMatch = /"first_name":"([^"]*)"/.exec(text);
+  const lastMatch = /"last_name":"([^"]*)"/.exec(text);
+  // El objeto "car" tiene su propio campo "version" -- pero el bloque
+  // entero de Wallapop empieza con un "version":"1.0.0" propio del
+  // formato del aviso (nada que ver con el coche). Sin acotar la
+  // búsqueda al objeto "car", el "1.0.0" del aviso ganaba siempre por
+  // ir primero (confirmado real en una prueba local antes de desplegar).
+  const carMatch = /"car":\{([^}]*)\}/.exec(text);
+  const carBody = carMatch?.[1] ?? "";
+  const makeMatch = /"make":"([^"]*)"/.exec(carBody);
+  const modelMatch = /"model":\s*"([^"]*)"/.exec(carBody);
+  const versionMatch = /"version":\s*"([^"]*)"/.exec(carBody);
+  const inquiryMatch = /"inquiry":\s*"([^"]*)"/.exec(text);
+  const rawInquiry = inquiryMatch?.[1] ?? "";
+  const colonIdx = rawInquiry.indexOf(": ");
+  const inquiry = (colonIdx >= 0 ? rawInquiry.slice(colonIdx + 2) : rawInquiry).trim() || null;
+  const name = [firstMatch?.[1]?.trim(), lastMatch?.[1]?.trim()].filter(Boolean).join(" ") || null;
+  return {
+    phone: phoneMatch[1].replace(/^\+/, ""),
+    name,
+    make: makeMatch?.[1]?.trim() || null,
+    model: modelMatch?.[1]?.trim() || null,
+    version: versionMatch?.[1]?.trim() || null,
+    inquiry,
+  };
+}
+
 // FALLO REAL detectado (21/10/2026, caso real de un cliente llamado Ignacio
 // y otro ZAKARIA): el bloque JSON de Coches.net trae su nombre real y su
 // correo personal real (client.first_name/client.email), pero
