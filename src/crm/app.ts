@@ -928,10 +928,25 @@ body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;b
 /* Menú lateral rediseñado (25/10/2026, rediseño visual CRM PRO: fondo
    blanco, acento rojo, colapsable, con barra superior nueva) -- header/
    nav/main siguen siendo los mismos elementos de siempre (softRefreshHoy
-   sigue buscando el texto literal <main>/</main>, sin tocar: solo se le
-   añade un wrapper .appcol alrededor junto con la barra superior, el
-   propio <main> no cambia). En móvil (<=900px) la barra lateral vuelve a
-   ser horizontal, sin colapsar (es más usable con poco ancho).*/
+   sigue buscando el elemento principal real, sin tocar: solo se le añade
+   un wrapper .appcol alrededor junto con la barra superior, el elemento
+   principal no cambia). En móvil (<=900px) la barra lateral vuelve a ser
+   horizontal, sin colapsar (es más usable con poco ancho).
+   FALLO REAL GRAVE detectado y corregido (28/10/2026, "al entrar al CRM
+   siempre me sale esto" -- el usuario pegó CSS en bruto como si fuera el
+   contenido de la página): este mismo comentario, antes, escribía el
+   nombre de la etiqueta principal tal cual, con sus corchetes angulares,
+   dos veces. softRefreshHoy (más abajo en este archivo) busca esa misma
+   etiqueta dentro del HTML descargado con una simple búsqueda de texto,
+   no con un analizador real -- esas dos apariciones sueltas, al vivir
+   ANTES de la etiqueta de verdad en el documento, eran justo lo primero
+   que encontraba esa búsqueda. Cuando una alerta nueva disparaba el
+   refresco automático, el script cogía todo el CSS de en medio (desde
+   aquí hasta el cierre real) y lo volcaba como si fuera el contenido de
+   la página -- exactamente el texto en bruto que vio el usuario. Nunca
+   vuelvas a escribir el nombre de esa etiqueta entre corchetes angulares
+   dentro de ESTE bloque de estilos (ni en código, ni en prosa) -- softRefreshHoy
+   sigue intacto, solo deja de haber una apariencia falsa que confundirlo. */
 body{display:flex;min-height:100vh}
 header{background:var(--bg);color:var(--ink);border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:14px;flex:0 0 226px;width:226px;height:100vh;position:sticky;top:0;align-self:flex-start;transition:width .15s,flex-basis .15s}
 header .brand{display:flex;align-items:center;gap:10px}
