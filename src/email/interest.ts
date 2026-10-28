@@ -439,6 +439,18 @@ export function decideInterest(input: { from: string; subject: string; text: str
   // rebote). Y ahora SÍ se permite contestar a un cliente que escribe
   // DIRECTO (sin venir de ningún portal) si de verdad muestra interés real --
   // antes se bloqueaba cualquier correo que no viniera de un portal.
+  // Petición real del negocio (28/10/2026, "vamos a construir la sección
+  // de Wallapop que tenemos pendiente"): seguir sin contestar nunca por
+  // correo a Wallapop (confirmado real que rebota, ver mustManageOnPortal
+  // arriba) no es lo mismo que el equipo no se entere -- hasta ahora
+  // caía en el mismo "portal_no_habilitado_para_respuesta_automatica" que
+  // cualquier otro portal sin soporte, y ESE caso ni siquiera avisa a
+  // nadie (ver decideInterest/agent.ts) -- los contactos reales de
+  // Wallapop se perdían en silencio. Un motivo propio para que agent.ts
+  // sí lo registre y avise, sin tocar el resto de portales no soportados.
+  if (input.portal === "Wallapop") {
+    return { interested: false, reason: "wallapop_gestionar_en_portal" };
+  }
   if (input.portal && input.portal !== "Coches.net") {
     return { interested: false, reason: "portal_no_habilitado_para_respuesta_automatica" };
   }

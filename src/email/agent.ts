@@ -311,6 +311,23 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     portal: portalInfo.portal,
   });
   if (!decision.interested) {
+    // Sección de Wallapop (28/10/2026, "vamos a construir la sección de
+    // Wallapop que tenemos pendiente"): nunca se intenta responder por
+    // correo (rebota siempre, confirmado real) ni se genera ningún texto
+    // con handleChatMessage (el cuerpo real del aviso de Wallapop siempre
+    // llega vacío -- generar una respuesta sobre la nada ya causó un fallo
+    // real, ver detectPortal). Se deja visible en Correo (portal Wallapop,
+    // sección propia) y se avisa al equipo para que conteste desde la
+    // propia web/app de Wallapop.
+    if (decision.reason === "wallapop_gestionar_en_portal") {
+      recordInbox(email, "pendiente_gestion_portal", { portal: portalInfo.portal });
+      writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_gestion_portal", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+      raiseAlert({
+        kind: "gestion_portal",
+        reason: `Wallapop: nuevo contacto sobre "${email.subject || "tu anuncio"}" -- Wallapop no deja responder por correo ni manda aquí el mensaje real del cliente. Revísalo y contesta directamente en Wallapop.`,
+      });
+      return { outcome: "pendiente_gestion_portal" };
+    }
     // Especificación formal (15/10/2026, sección 10: "sin almacenar
     // contenido sensible innecesario"): si el motivo de no contestar es que
     // el correo trae datos sensibles (DNI, IBAN, contraseñas...), el texto

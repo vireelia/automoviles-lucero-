@@ -3616,6 +3616,34 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
   return { detail, activity };
 }
 
+// Sección propia de Wallapop (28/10/2026, "sección de contactos de
+// wallapop"): a diferencia de Correo, aquí nunca hay un hilo real que
+// mostrar ni una respuesta que enviar desde el CRM -- Wallapop no deja
+// contestar por correo (rebota siempre) y el aviso que manda nunca trae
+// el mensaje real del cliente (confirmado real, ver detectPortal en
+// interest.ts). Vista honesta: solo lo que de verdad se sabe (asunto,
+// fecha) más un enlace directo al perfil real de Wallapop para
+// gestionarlo allí, y un botón para marcarlo como ya atendido.
+function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string): { detail: string; activity: string } {
+  const lead = findLeadForContact(allLeads, selected.from, null);
+  const detail = `${contactDetailHeader(lead, "Contacto de Wallapop", null, null, null)}
+<div class="meta-grid"><div>Portal<b>Wallapop</b></div><div>Recibido<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${statusPill(selected.answered ? "Gestionado" : "Pendiente", selected.answered ? "ok" : "warn")}</b></div></div>
+<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí.</b> No manda el mensaje real del cliente a este correo -- hay que abrir Wallapop y contestarle desde ahí.<br><a class="btn" style="margin-top:8px;display:inline-block" target="_blank" rel="noopener" href="${esc(businessInfo.profiles.wallapop)}">Abrir Wallapop ↗</a></div>
+<h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
+<form method="post" action="/crm/correos/${esc(selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
+${!selected.answered ? `<button class="btn ok" type="submit" name="accion" value="ya">Ya lo gestioné en Wallapop</button>` : ""}
+${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
+${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
+</form>`;
+  const activity = `<h3 style="margin-top:0">Actividad</h3>
+<div class="activity-item email">Aviso de Wallapop recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
+${selected.answered ? `<div class="activity-item ia">Gestionado por el equipo en Wallapop</div>` : ""}
+${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
+<h3>Notas internas</h3>
+<form method="post" action="/crm/correos/${esc(selected.id)}"><input type="hidden" name="volver" value="${esc(volver)}"><textarea name="nota" rows="4" placeholder="Escribe una nota interna...">${esc(selected.internal_note ?? "")}</textarea><button class="btn" type="submit" name="accion" value="nota">Guardar nota</button><p class="sub" style="margin:4px 0 0;font-size:11px">Solo visible para el equipo</p></form>`;
+  return { detail, activity };
+}
+
 // Agrupar mensajes sueltos en conversaciones reales por contacto
 // (27/10/2026, "hay 6 chats como si fuesen 6 clientes de mi mismo numero
 // otro error grave: duplicados en whatsapp"): la lista mostraba un MENSAJE
@@ -3710,8 +3738,20 @@ ${avatarBadge(m.phone, name)}
   return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
-function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
-  const all = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
+function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: string, allLeads: Lead[], appts: Appointment[], resv: Reservation[], today: string, financing: { lead_phone?: string; status: string }[], selectedIdRaw: string | undefined, portalView: "coches" | "wallapop" = "coches"): { rows: string; detail: string; activity: string; total: number; totalPages: number; selectedId: string | null } {
+  // División real pedida (28/10/2026, "dentro de la sección de correos,
+  // vamos a dividirlo, sección de correos de coches.net y sección de
+  // contactos de wallapop"): Wallapop nunca se mezcla con la bandeja de
+  // Coches.net -- no hay mensaje real que leer (ver agent.ts) ni se puede
+  // responder desde aquí, así que mostrarlos juntos solo confundiría.
+  const emailInboxAll = list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply");
+  const all = emailInboxAll.filter((m) => (portalView === "wallapop" ? m.portal === "Wallapop" : m.portal !== "Wallapop"));
+  const unreadCochesNet = groupMessagesByKey(emailInboxAll.filter((m) => m.portal !== "Wallapop"), (m) => m.from).filter((c) => !c.read).length;
+  const unreadWallapop = groupMessagesByKey(emailInboxAll.filter((m) => m.portal === "Wallapop"), (m) => m.from).filter((c) => !c.read).length;
+  const subTabs = `<div class="htabs" style="margin-bottom:10px">
+<a href="/crm/contactos/correo" class="${portalView === "coches" ? "on-tab" : ""}">Coches.net${unreadCochesNet > 0 ? ` <span class="tag">${unreadCochesNet > 99 ? "99+" : unreadCochesNet}</span>` : ""}</a>
+<a href="/crm/contactos/correo?portal=wallapop" class="${portalView === "wallapop" ? "on-tab" : ""}">Wallapop${unreadWallapop > 0 ? ` <span class="tag">${unreadWallapop > 99 ? "99+" : unreadWallapop}</span>` : ""}</a>
+</div>`;
   // Mismo arreglo real que WhatsApp (27/10/2026, "una conversación de 10
   // mensajes son 10, es una locura"): agrupar por remitente real, no un
   // mensaje por fila -- el hilo completo se sigue viendo entero al abrir
@@ -3753,9 +3793,11 @@ ${avatarBadge(m.from, name)}
   // mensajes antiguos"): mismo endpoint real de siempre (/crm/correos-
   // masivo), ya movía a la papelera (recuperable) -- solo faltaba volver a
   // engancharlo aquí, dentro de Contactos, con un checkbox por conversación.
-  const rowsWithBulk = pageItems.length === 0 ? rows : contactosBulkBar("/crm/correos", f, q, pageItems.length) + rows;
-  if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">No hay correos en esta vista.</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
-  const { detail, activity } = correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
+  const rowsWithBulk = subTabs + (pageItems.length === 0 ? rows : contactosBulkBar("/crm/correos", f, q, pageItems.length) + rows);
+  if (!selected) return { rows: rowsWithBulk, detail: `<div class="empty">${portalView === "wallapop" ? "No hay contactos de Wallapop en esta vista." : "No hay correos en esta vista."}</div>`, activity: "", total: conversations.length, totalPages, selectedId: null };
+  const { detail, activity } = portalView === "wallapop"
+    ? wallapopDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id))
+    : correoDetailFor(selected, allLeads, contactosUrl(navBase, f, q, pageNum, selected.id));
   return { rows: rowsWithBulk, detail, activity, total: conversations.length, totalPages, selectedId: selected.id };
 }
 
@@ -4247,8 +4289,9 @@ crm.get("/contactos/:canal", (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
   const selectedIdRaw = typeof req.query.id === "string" ? req.query.id : undefined;
+  const portalView: "coches" | "wallapop" = req.query.portal === "wallapop" ? "wallapop" : "coches";
   const user = me(res);
-  const navBase = `/crm/contactos/${canal}`;
+  const navBase = `/crm/contactos/${canal}${canal === "correo" && portalView === "wallapop" ? "?portal=wallapop" : ""}`;
   const allLeads = list<Lead>("leads");
   const appts = list<Appointment>("appointments");
   const resv = list<Reservation>("reservations");
@@ -4279,7 +4322,7 @@ ${tabLink("llamadas", "Llamadas", unreadLl)}
   const built = canal === "whatsapp"
     ? whatsappContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
     : canal === "correo"
-      ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
+      ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw, portalView)
       : callsContactos(cf, q, pageNum, `${navBase}?cf=${cf}`, allLeads, appts, resv, today, financing, selectedIdRaw);
   const withAnswered = canal !== "llamadas";
   const listLabel: Record<ContactoCanal, string> = { whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
