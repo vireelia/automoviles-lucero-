@@ -26,6 +26,8 @@ import {
   downloadWhatsAppMedia,
   saveWhatsAppMedia,
   isContactoInicialTemplateApproved,
+  sendZernioWhatsappVehicleContactTemplate,
+  findWhatsappConversation,
 } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -464,7 +466,7 @@ app.post(
 app.post(
   "/admin/replay_single_whatsapp",
   requireAdminToken,
-  route(async (a: { phone: string; user_text?: string; send_text?: string }) => {
+  route(async (a: { phone: string; user_text?: string; send_text?: string; vehicle_label?: string }) => {
     if (!a.phone) return { status: "error", error: "falta_phone" };
     const phone = a.phone.startsWith("+") ? a.phone : `+${a.phone}`;
     // FALLO REAL detectado (28/10/2026, caso real: Carlos -- el mensaje que
@@ -478,6 +480,17 @@ app.post(
     // EXACTAMENTE el texto ya aprobado, sin volver a preguntarle nada al
     // agente.
     if (a.send_text) {
+      // Caso real (28/10/2026, "LA RUTA" -- AUDI Q3): a diferencia de
+      // Carlos, aquí nunca llegó a abrirse ninguna conversación real
+      // (llegó antes de que Meta aprobara la plantilla) -- un envío de
+      // texto normal fallaría siempre sin conversación abierta. Si hace
+      // falta, se abre primero con la plantilla real ya aprobada (mismo
+      // camino real que usa email/agent.ts), y solo entonces se manda el
+      // texto aprobado.
+      if (!findWhatsappConversation(phone) && a.vehicle_label) {
+        const templateSent = await sendZernioWhatsappVehicleContactTemplate(phone, a.vehicle_label);
+        if (!templateSent.ok) return { status: "ok", enviado: false, error_envio: `no se pudo abrir la conversación: ${templateSent.error}` };
+      }
       const sent = await sendWhatsappText(phone, a.send_text);
       return { status: "ok", enviado: sent.ok, respuesta: a.send_text, error_envio: sent.ok ? null : sent.error };
     }
