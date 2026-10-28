@@ -3029,7 +3029,7 @@ ${items.length === 0 ? `<div class="empty">No hay mensajes de WhatsApp en esta v
 ${msgCheckbox("/crm/whatsapp", m.id)}
 <h3>${esc(m.phone)}</h3>
 <p class="meta"><span class="tag">WhatsApp directo</span> · ${esc(fmtDate(m.created_at))}</p>
-<p>${answeredTag(m)}${m.answered && m.delivered === false ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">No entregado (WhatsApp no conectado)</span>` : ""}${m.archived ? ` <span class="tag">Archivado</span>` : ""}</p>
+<p>${answeredTag(m)}${m.answered && m.delivered === false ? ` <span class="tag" style="background:#fde2e1;color:#7a1c17">No entregado</span>` : ""}${m.archived ? ` <span class="tag">Archivado</span>` : ""}</p>
 ${emailPreviewBox(m.text)}
 ${m.reply_text ? `<p style="margin-top:10px"><b>Última respuesta:</b></p><div class="box" style="background:#eef6ec;white-space:pre-wrap;font-size:19px">${esc(m.reply_text)}</div>` : ""}
 <form method="post" action="/crm/whatsapp/${esc(m.id)}"><input type="hidden" name="volver" value="${esc(volver)}">
@@ -3466,7 +3466,7 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${statusPill(waStatus.label, waStatus.tone)}</b></div></div>
 ${agentToggleBox}
-${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
+${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">⚠️ La respuesta del ${esc(fmtDate(selected.created_at))} no se pudo entregar (fallo real de envío de ese momento, ya pasado). Si el cliente sigue sin respuesta, escríbele ahora desde el cuadro de abajo -- WhatsApp funciona con normalidad hoy.</div>` : ""}
 <h3 style="margin-bottom:6px;margin-top:12px">Conversación</h3><div class="wa-thread">${threadHtml}${typingRow}</div>
 <div class="wa-composer">
 <form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" class="wa-composer-row"><input type="hidden" name="volver" value="${esc(volver)}">
