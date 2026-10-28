@@ -445,6 +445,30 @@ app.post(
   }),
 );
 
+// Caso real (28/10/2026, Carlos -- HYUNDAI ix55, "ni siquiera veo la
+// respuesta de Daniel"): a diferencia del backlog de arriba (clientes que
+// YA escribieron algo real en WhatsApp), este es el caso de un cliente
+// que escribió por correo (Coches.net, "contacto solo por WhatsApp") y a
+// quien se le abrió la conversación con la plantilla aprobada, pero cuya
+// pregunta real nunca llegó a contestarse (fallo ya corregido para los
+// casos nuevos, ver email/agent.ts) -- aquí no hay ningún mensaje
+// entrante real en WhatsApp que leer, así que process-whatsapp-backlog no
+// lo detecta. Mismo cerebro real (handleChatMessage) y mismo criterio de
+// seguridad (send por defecto false, para revisar antes de mandar nada a
+// un cliente real).
+app.post(
+  "/admin/replay_single_whatsapp",
+  requireAdminToken,
+  route(async (a: { phone: string; user_text: string; send?: boolean }) => {
+    if (!a.phone || !a.user_text) return { status: "error", error: "faltan_phone_o_user_text" };
+    const phone = a.phone.startsWith("+") ? a.phone : `+${a.phone}`;
+    const chatResult = await handleChatMessage(phone, a.user_text, "WHATSAPP", phone);
+    if (!a.send) return { status: "ok", enviado: false, respuesta_propuesta: chatResult.reply };
+    const sent = await sendWhatsappText(phone, chatResult.reply);
+    return { status: "ok", enviado: sent.ok, respuesta: chatResult.reply, error_envio: sent.ok ? null : sent.error };
+  }),
+);
+
 // CRM sencillo para el equipo del concesionario.
 bootstrapAdmin();
 app.use("/crm", crm);
