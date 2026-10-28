@@ -1338,6 +1338,24 @@ verdad sigue pendiente de mirar. */
 .wa-row .wa-bubble.out{background:#d9fdd3;border-top-right-radius:2px}
 .wa-bubble time{display:block;font-size:10.5px;color:#8696a0;text-align:right;margin-top:3px}
 .wa-no-entregado{font-size:11.5px;font-weight:700;color:var(--urgent);margin-top:4px}
+/* Caja de responder/adjuntar compacta (28/10/2026, "ponla más organizada,
+más bonita, con botones más pequeños al lado del chat") -- antes eran dos
+cajas sueltas con una etiqueta y un botón rojo grande cada una; ahora es
+una fila por acción, pegada justo debajo de la conversación, con botones
+redondos pequeños al lado del campo de texto (mismo lenguaje visual que
+cualquier app de mensajería real). Dos <form> reales por debajo (uno de
+texto, otro multipart para el adjunto) para no perder el envío en tiempo
+real del texto -- solo se ven como una sola caja. */
+.wa-composer{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.wa-composer-row{display:flex;align-items:center;gap:7px}
+.wa-composer-row textarea{flex:1;margin:0;resize:none;min-height:38px;max-height:120px;padding:9px 14px;border-radius:19px;border:1px solid var(--border);font:inherit;font-size:14px;line-height:1.4}
+.wa-composer-row input[type="text"]{flex:1;margin:0;padding:9px 14px;border-radius:19px;border:1px solid var(--border);font:inherit;font-size:13px}
+.wa-send-btn{flex-shrink:0;width:36px;height:36px;border-radius:50%;border:0;background:var(--ok);color:#fff;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.wa-send-btn:hover{filter:brightness(1.08)}
+.wa-attach-btn{position:relative;flex-shrink:0;width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:#fff;color:var(--ink-dim);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.wa-attach-btn:hover{background:var(--panel)}
+.wa-attach-btn input[type="file"]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.wa-attach-filename{font-size:11px;color:var(--ink-dim);flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wa-typing-row{display:flex;justify-content:flex-start}
 .wa-typing{display:inline-flex;align-items:center;gap:5px;background:#fff;border-radius:8px;border-top-left-radius:2px;padding:9px 12px;box-shadow:0 1px 1px rgba(0,0,0,.08)}
 .wa-typing span{width:6px;height:6px;border-radius:999px;background:#8696a0;display:inline-block;animation:wa-bounce 1.2s infinite ease-in-out}
@@ -3450,15 +3468,19 @@ ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehic
 ${agentToggleBox}
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">No entregado -- WhatsApp no conectado en ese momento.</div>` : ""}
 <h3 style="margin-bottom:6px;margin-top:12px">Conversación</h3><div class="wa-thread">${threadHtml}${typingRow}</div>
-<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" style="margin-top:16px"><input type="hidden" name="volver" value="${esc(volver)}">
-<label>Responder por WhatsApp</label><textarea name="respuesta" rows="4" placeholder="Escribe tu respuesta..."></textarea><button class="btn ok" type="submit" name="accion" value="responder">Enviar por WhatsApp</button>
+<div class="wa-composer">
+<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" class="wa-composer-row"><input type="hidden" name="volver" value="${esc(volver)}">
+<textarea name="respuesta" rows="1" placeholder="Escribe tu respuesta..." aria-label="Responder por WhatsApp" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+<button class="wa-send-btn" type="submit" name="accion" value="responder" title="Enviar por WhatsApp">➤</button>
+</form>
+<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" enctype="multipart/form-data" class="wa-composer-row"><input type="hidden" name="volver" value="${esc(volver)}">
+<label class="wa-attach-btn" title="Adjuntar foto o audio">📎<input type="file" name="adjunto" accept="image/jpeg,image/png,image/webp,audio/*" required onchange="this.closest('form').querySelector('.wa-attach-filename').textContent=this.files[0]?this.files[0].name:''"></label>
+<input type="text" name="respuesta" placeholder="Pie de foto (opcional)" aria-label="Pie de foto opcional">
+<span class="wa-attach-filename"></span>
+<button class="wa-send-btn" type="submit" name="accion" value="responder_adjunto" title="Enviar foto o audio">➤</button>
+</form>
+</div>
 <p class="sub" style="margin:4px 0 0;font-size:12px">Solo se puede enviar texto libre dentro de las 24h desde el último mensaje del cliente -- límite real de WhatsApp, no de este CRM.</p>
-</form>
-<form method="post" action="/crm/whatsapp/${esc(thread[thread.length - 1]?.id ?? selected.id)}" enctype="multipart/form-data" style="margin-top:10px"><input type="hidden" name="volver" value="${esc(volver)}">
-<label>Enviar foto o audio</label><input type="file" name="adjunto" accept="image/jpeg,image/png,image/webp,audio/*" required>
-<input type="text" name="respuesta" placeholder="Pie de foto opcional" style="margin-top:6px">
-<button class="btn ok" type="submit" name="accion" value="responder_adjunto" style="margin-top:6px">Enviar adjunto</button>
-</form>
 <form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="margin-top:10px"><input type="hidden" name="volver" value="${esc(volver)}">${phoneLink(selected.phone)}
 ${!selected.read ? `<button class="btn light" type="submit" name="accion" value="marcar_leido">Marcar leído</button>` : ""}
 ${!selected.archived ? `<button class="btn light" type="submit" name="accion" value="archivar">Archivar</button>` : ""}
