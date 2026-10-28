@@ -206,7 +206,14 @@ async function contactLeadViaWhatsapp(
   // suelto respondiendo a su pregunta de Wallapop no dice de dónde
   // viene. Se antepone siempre la misma frase real, nunca se deja a que
   // el modelo la redacte distinto cada vez.
-  const reply = portal === "Wallapop" ? `Hola, te respondo al mensaje que dejaste en Wallapop. Soy del equipo de Automóviles Lucero.\n\n${aiReply}` : aiReply;
+  // Sin esto, el saludo fijo de arriba y el saludo propio de Carolina se
+  // duplicaban ("Hola, te respondo... Hola, el Fiat..." -- confirmado
+  // real antes de desplegar) -- se quita el saludo inicial de su propia
+  // respuesta, nunca el resto del contenido real.
+  const aiReplyBody = aiReply
+    .replace(/^\s*(hola|buenas|buenos d[ií]as|buenas tardes)[,.!]?\s*/i, "")
+    .replace(/^[a-záéíóúñ]/, (c) => c.toUpperCase());
+  const reply = portal === "Wallapop" ? `Hola, te respondo al mensaje que dejaste en Wallapop. Soy del equipo de Automóviles Lucero.\n\n${aiReplyBody}` : aiReply;
   const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
 
   if (sent.ok) {
