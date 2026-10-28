@@ -379,9 +379,26 @@ function teamPhones(): Set<string> {
 app.post(
   "/admin/zernio/process-whatsapp-backlog",
   requireAdminToken,
-  route(async (a: { limit?: number; dry_run?: boolean; max_age_hours?: number }) => {
+  route(async (a: { limit?: number; max_age_hours?: number; approved?: Array<{ phone: string; text: string }> }) => {
+    // FALLO REAL detectado (28/10/2026, mismo caso que replay_single_whatsapp
+    // más abajo -- Carlos, HYUNDAI ix55): dry_run:false volvía a llamar a
+    // handleChatMessage para enviar, así que el texto aprobado en la vista
+    // previa y el que de verdad se mandaba podían ser DISTINTOS (la
+    // conversación avanza de verdad en cada llamada real, no es una
+    // función pura). Ahora solo existe un modo de envío: pasar "approved"
+    // con los pares {phone, text} EXACTOS ya revisados -- nunca se vuelve
+    // a generar nada, solo se envía tal cual. Sin "approved", esto sigue
+    // siendo siempre una vista previa, nunca envía nada de verdad.
+    if (a.approved && a.approved.length > 0) {
+      const report: Array<Record<string, unknown>> = [];
+      for (const item of a.approved) {
+        const sent = await sendWhatsappText(item.phone, item.text);
+        report.push({ phone: item.phone, respuesta: item.text, enviado: sent.ok, error_envio: sent.ok ? null : sent.error });
+      }
+      return { status: "ok", modo: "envio_aprobado", report };
+    }
+
     const limit = a.limit ?? 100;
-    const dryRun = a.dry_run ?? true;
     const maxAgeHours = a.max_age_hours ?? 24;
 
     const convsResult = await listRecentWhatsappConversations(limit);
@@ -423,25 +440,13 @@ app.post(
 
       try {
         const chatResult = await handleChatMessage(c.phone, lastIncoming.text, "WHATSAPP", c.phone);
-        if (dryRun) {
-          report.push({ phone: c.phone, name: c.name, pregunta: lastIncoming.text, respuesta_propuesta: chatResult.reply, enviado: false });
-        } else {
-          const sent = await sendWhatsappText(c.phone, chatResult.reply);
-          report.push({
-            phone: c.phone,
-            name: c.name,
-            pregunta: lastIncoming.text,
-            respuesta: chatResult.reply,
-            enviado: sent.ok,
-            error_envio: sent.ok ? null : sent.error,
-          });
-        }
+        report.push({ phone: c.phone, name: c.name, pregunta: lastIncoming.text, respuesta_propuesta: chatResult.reply, enviado: false });
       } catch (err) {
         report.push({ phone: c.phone, name: c.name, saltado: `error_agente: ${err instanceof Error ? err.message : String(err)}` });
       }
     }
 
-    return { status: "ok", dry_run: dryRun, total_conversaciones: convsResult.conversations.length, report };
+    return { status: "ok", modo: "vista_previa", total_conversaciones: convsResult.conversations.length, report };
   }),
 );
 
@@ -459,13 +464,26 @@ app.post(
 app.post(
   "/admin/replay_single_whatsapp",
   requireAdminToken,
-  route(async (a: { phone: string; user_text: string; send?: boolean }) => {
-    if (!a.phone || !a.user_text) return { status: "error", error: "faltan_phone_o_user_text" };
+  route(async (a: { phone: string; user_text?: string; send_text?: string }) => {
+    if (!a.phone) return { status: "error", error: "falta_phone" };
     const phone = a.phone.startsWith("+") ? a.phone : `+${a.phone}`;
+    // FALLO REAL detectado (28/10/2026, caso real: Carlos -- el mensaje que
+    // se enseñó y se aprobó, y el que de verdad le llegó al cliente,
+    // fueron DISTINTOS): handleChatMessage no es una función pura, cada
+    // llamada avanza la conversación de verdad (guarda turno, puede
+    // responder distinto la segunda vez) -- generar la respuesta dos
+    // veces (una para enseñarla, otra al confirmar el envío) podía dar
+    // dos textos diferentes, y el que se mandaba era el segundo, nunca
+    // revisado. Ahora solo hay UNA generación real: send_text manda
+    // EXACTAMENTE el texto ya aprobado, sin volver a preguntarle nada al
+    // agente.
+    if (a.send_text) {
+      const sent = await sendWhatsappText(phone, a.send_text);
+      return { status: "ok", enviado: sent.ok, respuesta: a.send_text, error_envio: sent.ok ? null : sent.error };
+    }
+    if (!a.user_text) return { status: "error", error: "falta_user_text_o_send_text" };
     const chatResult = await handleChatMessage(phone, a.user_text, "WHATSAPP", phone);
-    if (!a.send) return { status: "ok", enviado: false, respuesta_propuesta: chatResult.reply };
-    const sent = await sendWhatsappText(phone, chatResult.reply);
-    return { status: "ok", enviado: sent.ok, respuesta: chatResult.reply, error_envio: sent.ok ? null : sent.error };
+    return { status: "ok", enviado: false, respuesta_propuesta: chatResult.reply };
   }),
 );
 
