@@ -15,7 +15,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet } from "./integrations/google.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
   verifyZernioSignature,
@@ -652,6 +652,18 @@ app.post("/admin/delete_lead_by_phone", requireAdminToken, route((a: { phone: st
   return { status: "ok", encontrado: true, movido_a_papelera: true };
 }));
 app.get("/debug/email_contact_pauses", requireAdminToken, debugSlice("email_contact_pauses", 200));
+// Diagnóstico puntual (28/10/2026, para confirmar con un correo real de
+// Wallapop si el arreglo de plainText/google.ts de verdad rescata
+// contenido antes descartado, antes de construir nada encima) -- busca
+// directo en Gmail (nunca en lo ya guardado, que se guardó vacío) y
+// devuelve el texto real ya extraído con el parser corregido. Solo
+// lectura, nunca contesta ni guarda nada.
+app.get("/debug/wallapop_raw_sample", requireAdminToken, async (req, res) => {
+  const q = typeof req.query.q === "string" && req.query.q ? req.query.q : "from:wallapop.com";
+  const found = await gmailSearch(q, 5);
+  const messages = await Promise.all(found.map((f) => gmailGet(f.id)));
+  res.json(messages.map((m) => ({ id: m.id, subject: m.subject, from: m.from, text: m.text })));
+});
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
 // o cualquier web que conecte el negocio. Solo con el token de admin.

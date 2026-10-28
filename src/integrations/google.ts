@@ -242,16 +242,47 @@ function header(headers: { name: string; value: string }[], name: string): strin
   return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
-function plainText(payload: any): string {
+// FALLO REAL detectado (28/10/2026, confirmado real: 111 de 111 avisos
+// reales de Wallapop en producción llegan con texto vacío): esto solo
+// buscaba una parte "text/plain" -- un correo que solo trae "text/html"
+// (sin parte de texto plano, caso real de Wallapop) siempre devolvía "",
+// aunque el HTML sí lleve contenido real (por ejemplo, el teléfono del
+// comprador interesado). Ahora, si no hay ninguna parte de texto plano
+// en todo el árbol MIME, se usa el HTML real y se le quitan las
+// etiquetas -- nunca se inventa contenido, solo se deja de descartar el
+// que ya llegaba.
+function htmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<(br|p|div|tr|li|h[1-6])[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+function findPart(payload: any, mimeType: string): string {
   if (!payload) return "";
-  if (payload.mimeType === "text/plain" && payload.body?.data) {
+  if (payload.mimeType === mimeType && payload.body?.data) {
     return Buffer.from(payload.body.data, "base64url").toString("utf8");
   }
   for (const part of payload.parts ?? []) {
-    const t = plainText(part);
+    const t = findPart(part, mimeType);
     if (t) return t;
   }
   return "";
+}
+function plainText(payload: any): string {
+  const plain = findPart(payload, "text/plain");
+  if (plain) return plain;
+  const html = findPart(payload, "text/html");
+  return html ? htmlToText(html) : "";
 }
 
 // FALLO REAL grave detectado (15/10/2026, confirmado en producción): el
@@ -275,6 +306,14 @@ function parseFromHeader(fromRaw: string): { email: string; name: string } {
     return { email: email.toLowerCase(), name };
   }
   return { email: trimmed.toLowerCase(), name: "" };
+}
+
+// Búsqueda real de Gmail (28/10/2026, para confirmar con un correo real de
+// Wallapop si el arreglo de plainText de verdad rescata contenido antes
+// descartado) -- misma sintaxis de búsqueda de Gmail de siempre.
+export async function gmailSearch(query: string, maxResults = 5): Promise<{ id: string; threadId: string }[]> {
+  const data = (await googleFetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`)) as any;
+  return (data.messages ?? []).map((m: { id: string; threadId: string }) => ({ id: m.id, threadId: m.threadId }));
 }
 
 export async function gmailGet(id: string): Promise<GmailMessage> {
