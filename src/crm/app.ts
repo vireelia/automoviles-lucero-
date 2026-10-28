@@ -3457,7 +3457,17 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // casi nunca coincide). Buscarlo como email nunca encontraba el lead ya
   // existente.
   const lead = findLeadForContact(allLeads, selected.from, null);
-  const inboundThread = (selected.thread_id ? list<InboxMail>("email_inbox").filter((m) => m.thread_id === selected.thread_id) : [selected])
+  // FALLO REAL detectado (28/10/2026, "las conversaciones de correos... no
+  // solo se vea una parte" -- caso real confirmado: una conversación de 4
+  // correos reales del mismo cliente tenía 4 thread_id de Gmail distintos,
+  // así que al abrirla solo se veía 1 de los 4): Coches.net no siempre
+  // encadena sus avisos como respuestas de un mismo hilo de Gmail, aunque
+  // sea el mismo cliente escribiendo varias veces -- depender de thread_id
+  // mostraba la conversación cortada a la mitad. La lista ya agrupa por
+  // remitente real (correoContactos, groupMessagesByKey); el hilo abierto
+  // tiene que mostrar EXACTAMENTE ese mismo grupo, no un subconjunto.
+  const inboundThread = list<InboxMail>("email_inbox")
+    .filter((m) => m.from === selected.from)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   // FALLO REAL detectado y corregido antes de confirmar (26/10/2026):
   // filtrar solo status==="sent" hacía desaparecer del hilo una
@@ -3467,9 +3477,11 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // aparecía por ningún lado. Se muestran los tres estados reales
   // (sent/queued/failed), cada uno con su aviso honesto, nunca se oculta
   // un envío real.
-  const outboundThread = selected.thread_id
-    ? list<EmailOutboxRow>("email_outbox").filter((o) => o.thread_id === selected.thread_id)
-    : [];
+  // Mismo motivo que inboundThread justo arriba -- una respuesta real
+  // enviada bajo un thread_id de Gmail distinto (mismo cliente, mismo
+  // remitente real) se perdía del hilo. Se agrupa por destinatario real
+  // (o.to), igual que el hilo entrante se agrupa por remitente real.
+  const outboundThread = list<EmailOutboxRow>("email_outbox").filter((o) => o.to === selected.from || o.thread_id === selected.thread_id);
   type ThreadItem = { kind: "in" | "out"; created_at: string; from: string; body: string; status?: EmailOutboxRow["status"] };
   const items: ThreadItem[] = [
     ...inboundThread.map((m): ThreadItem => ({ kind: "in", created_at: m.created_at, from: lead?.name || m.from, body: m.text })),
