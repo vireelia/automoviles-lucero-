@@ -16,6 +16,7 @@ import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet } from "./integrations/google.js";
+import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
   verifyZernioSignature,
@@ -663,6 +664,49 @@ app.get("/debug/wallapop_raw_sample", requireAdminToken, async (req, res) => {
   const found = await gmailSearch(q, 5);
   const messages = await Promise.all(found.map((f) => gmailGet(f.id)));
   res.json(messages.map((m) => ({ id: m.id, subject: m.subject, from: m.from, text: m.text })));
+});
+// Importar el histórico real de Wallapop (28/10/2026, "ve desplegando los
+// numero o correos de wallapop en el sistema... subelos normal como las
+// otras secciones, no se te ocurra hacerlo en formato json"): los avisos
+// de antes del arreglo de plainText se guardaron con texto vacío para
+// siempre (ver email_inbox) -- la única copia real que queda es la de
+// Gmail. Se busca ahí directo, se extrae cada contacto real con el mismo
+// parser ya usado en producción, y se da de alta como ficha normal de
+// cliente (upsertLead) -- igual que cualquier otro lead del CRM, nunca
+// un volcado aparte. Deliberadamente NO contacta a nadie por WhatsApp --
+// eso es una decisión real aparte, de negocio, sobre avisos que pueden
+// tener semanas (algunos clientes ya habrán comprado en otro sitio).
+app.post("/admin/wallapop_backlog_import", requireAdminToken, async (_req, res) => {
+  const found = await gmailSearch("from:wallapop.com", 500);
+  const vistos = new Set<string>();
+  let creados = 0;
+  let actualizados = 0;
+  let sinTelefono = 0;
+  const leadsAntes = readCollection<{ phone?: string | null }>("leads");
+  const phonesAntes = new Set(leadsAntes.map((l) => l.phone).filter(Boolean));
+  for (const f of found) {
+    const m = await gmailGet(f.id);
+    const contact = extractWallapopContact(m.text);
+    if (!contact?.phone) {
+      sinTelefono++;
+      continue;
+    }
+    const phone = contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`;
+    const normalized = normalizePhone(phone);
+    if (vistos.has(normalized)) continue;
+    vistos.add(normalized);
+    const vehicleLabel = [contact.make, contact.model, contact.version].filter(Boolean).join(" ");
+    upsertLead({
+      phone,
+      name: contact.name ?? undefined,
+      channel: "WHATSAPP",
+      vehicle_interest: vehicleLabel || undefined,
+      notes: "Aviso histórico real de Wallapop (importado el 28/10/2026) -- pidió contacto por WhatsApp, pendiente de decidir si se le contacta ahora.",
+    });
+    if (phonesAntes.has(normalized)) actualizados++;
+    else creados++;
+  }
+  res.json({ status: "ok", avisos_reales_encontrados: found.length, clientes_distintos: vistos.size, fichas_creadas: creados, fichas_actualizadas: actualizados, sin_telefono_real: sinTelefono });
 });
 
 // Chat propio de Miguel (fuera de Retell). Lo llama el canal de WhatsApp (n8n)
