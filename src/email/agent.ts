@@ -328,17 +328,28 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   // TODOS los clientes reales que hayan escrito alguna vez por ahí en una
   // sola ficha y una sola memoria de conversación. En ese caso se usa el
   // correo real del cliente (del propio bloque "client") como clave real
-  // -- nunca el remitente compartido. La respuesta real por correo sigue
-  // yendo siempre a "email.from" (eso no cambia, es la dirección real del
-  // hilo), esto solo afecta a qué lead/memoria de conversación se usa.
+  // -- nunca el remitente compartido.
+  // FALLO REAL GRAVE detectado (28/10/2026, captura real de un rebote de
+  // Gmail: "Address not found... vehiculosocasion@coches.net... the
+  // address couldn't be found"): el comentario de arriba decía que la
+  // respuesta por correo "sigue yendo siempre a email.from" -- eso era el
+  // propio fallo. Un remitente compartido no es una bandeja real que
+  // reciba respuestas (solo sirve para AVISAR al concesionario), así que
+  // contestarle ahí rebota siempre, y encima se contaba como "enviado" de
+  // verdad porque Gmail sí acepta el envío (el rebote llega después, aparte).
+  // Si hay un correo real del cliente en el propio bloque "client", la
+  // respuesta va ahí -- nunca al remitente compartido.
   let identityKey = email.from;
+  let replyToAddress = email.from;
+  let cochesNetIdentity: { name: string | null; email: string | null } | null = null;
   if (portalInfo.portal === "Coches.net") {
-    const identity = extractCochesNetClientIdentity(email.text);
-    if (isCochesNetSharedSender(email.from) && identity?.email) {
-      identityKey = identity.email;
+    cochesNetIdentity = extractCochesNetClientIdentity(email.text);
+    if (isCochesNetSharedSender(email.from) && cochesNetIdentity?.email) {
+      identityKey = cochesNetIdentity.email;
+      replyToAddress = cochesNetIdentity.email;
     }
-    if (identity?.name || identity?.email) {
-      upsertLead({ phone: identityKey, name: identity.name ?? undefined, email: identity.email ?? undefined, channel: "EMAIL" });
+    if (cochesNetIdentity?.name || cochesNetIdentity?.email) {
+      upsertLead({ phone: identityKey, name: cochesNetIdentity.name ?? undefined, email: cochesNetIdentity.email ?? undefined, channel: "EMAIL" });
     }
   }
 
@@ -354,7 +365,14 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   // hizo arriba), pero no se envía un correo que nadie va a leer. Se deja
   // la respuesta que se habría mandado como nota, para que el equipo solo
   // tenga que copiarla en el portal en vez de redactarla de cero.
-  if (portalInfo.mustManageOnPortal) {
+  // FALLO REAL (28/10/2026): si el remitente es compartido y no hay correo
+  // real del cliente en el bloque "client" (pasa en los avisos genéricos
+  // de "alguien está interesado", que no siempre lo traen), no hay NINGUNA
+  // dirección real a la que contestar por correo -- mismo caso que "hay
+  // que gestionarlo desde el portal", nunca se envía a ciegas al
+  // remitente compartido (rebota siempre, confirmado real).
+  const sinDireccionRealDeCliente = portalInfo.portal === "Coches.net" && isCochesNetSharedSender(email.from) && !cochesNetIdentity?.email;
+  if (portalInfo.mustManageOnPortal || sinDireccionRealDeCliente) {
     recordInbox(email, "pendiente_gestion_portal", { portal: portalInfo.portal, draftNote: body });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_gestion_portal", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
     // Mejora real (15/10/2026, a petición de "qué podemos hacer para mejorar
@@ -365,7 +383,9 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     // usa el resto del negocio, con el texto de respuesta ya incluido.
     raiseAlert({
       kind: "gestion_portal",
-      reason: `${portalInfo.portal ?? "Portal"}: "${email.subject}" -- responde desde la propia app, el correo no le llega al cliente.`,
+      reason: sinDireccionRealDeCliente
+        ? `Coches.net: "${email.subject}" -- aviso genérico sin correo real del cliente, no se puede contestar por correo (rebotaría). Revísalo desde la herramienta profesional de Coches.net.`
+        : `${portalInfo.portal ?? "Portal"}: "${email.subject}" -- responde desde la propia app, el correo no le llega al cliente.`,
       draft_note: body,
     });
     return { outcome: "pendiente_gestion_portal", reply: body };
@@ -402,7 +422,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   }
 
   const delivery = await deliverEmail(
-    email.from,
+    replyToAddress,
     subject,
     body,
     email.threadId && email.inReplyTo ? { threadId: email.threadId, inReplyTo: email.inReplyTo } : undefined,
