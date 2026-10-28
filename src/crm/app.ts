@@ -736,6 +736,23 @@ function mailIconLink(email: string | null | undefined): string {
   if (!email) return "";
   return `<a class="ibtn" href="mailto:${esc(email)}" aria-label="Correo" title="Correo" style="border-color:#c7d4e8;color:#2d5fa8">${ICON_MAIL}</a>`;
 }
+// Petición real del negocio (28/10/2026, "cuando un cliente deje su
+// número que salga una sección de enviar mensaje a whatsapp" en
+// Correo): muchos avisos reales de Coches.net llevan el teléfono del
+// cliente en texto libre ("Teléfono de [nombre]: [número]"), no solo en
+// el bloque JSON del aviso de "solo por WhatsApp" (confirmado real en
+// 15 correos reales de 362). Se busca en TODO el hilo (no solo el
+// correo seleccionado), por si el cliente lo dejó en un mensaje
+// anterior de la misma conversación.
+function extractPhoneFromEmailText(texts: string[]): string | null {
+  for (const text of texts) {
+    const jsonPhone = /"phone":"(\d{6,15})"/.exec(text);
+    if (jsonPhone) return jsonPhone[1];
+    const labeled = /Tel[eé]fono(?:\s+de[^:]*)?:\s*(\d{6,15})/i.exec(text);
+    if (labeled) return labeled[1];
+  }
+  return null;
+}
 // El borrador de "pendiente_whatsapp_manual" ya trae el enlace wa.me real
 // incrustado en el texto (email/agent.ts) -- se extrae solo para mostrarlo
 // como botón real, en vez de obligar a leer/copiar el enlace a mano.
@@ -3304,14 +3321,19 @@ function contactosUrl(navBase: string, f: MsgFilter | null, q: string, pageNum: 
   if (!params.length) return navBase;
   return `${navBase}${navBase.includes("?") ? "&" : "?"}${params.join("&")}`;
 }
-function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: string | null, email?: string | null): string {
+function contactDetailHeader(lead: Lead | null, fallbackName: string, phone?: string | null, email?: string | null, whatsappPhone?: string | null): string {
   const name = lead?.name || fallbackName;
   const badge = lead
     ? `<span class="tag" style="background:var(--ok-bg);color:#1d6b3d">Cliente</span>`
     : `<span class="tag" style="background:#fdecea;color:#7a1c17">Sin ficha</span>`;
+  // Petición real de Ramón (28/10/2026): cuando el cliente dejó su número
+  // en el correo, un botón de WhatsApp pequeño junto al teléfono -- mismo
+  // icono ya usado en Clientes, para que no desentone ni ocupe sitio de
+  // más ("que no se vea feo").
+  const waBtn = whatsappPhone ? waIconButton(whatsappPhone, `Hola${lead?.name ? ` ${lead.name}` : ""}, soy del equipo de Automóviles Lucero.`) : "";
   return `<div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
 ${avatarBadge(phone || email || name, name, 52)}
-<div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}</p></div>
+<div><h3 style="margin:0 0 4px">${esc(name)}</h3><p class="sub" style="margin:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${badge}${phone ? ` · ${esc(phone)}` : ""}${email ? ` · ${esc(email)}` : ""}${waBtn}</p></div>
 </div>`;
 }
 function cpager(navBase: string, f: MsgFilter | null, q: string, pageNum: number, totalPages: number, total: number, count: number): string {
@@ -3569,7 +3591,8 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
 <span>${contactPaused ? "🔇 Daniel está pausado para este remitente -- responde el equipo" : "Daniel responde aquí con normalidad"}</span>
 <form method="post" action="/crm/correos/${esc(selected.id)}" style="display:inline"><input type="hidden" name="volver" value="${esc(volver)}"><button class="btn ${contactPaused ? "ok" : "light"}" type="submit" name="accion" value="${contactPaused ? "reanudar_chat" : "pausar_chat"}">${contactPaused ? "Reactivar Daniel aquí" : "Pausar Daniel para este remitente"}</button></form>
 </div>`;
-  const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from)}
+  const detectedPhone = lead?.phone ?? extractPhoneFromEmailText(inboundThread.map((m) => m.text));
+  const detail = `${contactDetailHeader(lead, selected.from, lead?.phone ?? null, selected.from, detectedPhone)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
 <div class="meta-grid"><div>Correos<b>${items.length}</b></div><div>Portal<b>${esc(platformLabel(selected.portal))}</b></div><div>Estado<b>${statusPill(mailStatus.label, mailStatus.tone)}</b></div></div>
 ${agentToggleBox}
