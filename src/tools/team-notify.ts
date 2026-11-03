@@ -65,9 +65,17 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
 // intento (a cada uno de los dos, por separado) queda registrado en
 // "team_notifications", igual que whatsapp_queue para clientes -- consultable
 // vía /debug/team_notifications.
+// Pedido real (03/11/2026, "los errores del sistema que me lleguen a mí"):
+// los fallos técnicos reales (IA caída, Google desconectado, sondeo
+// fallando) son distintos de los avisos normales de negocio (visita,
+// reserva) -- este número personal solo recibe la categoría fallo_tecnico,
+// nunca el resto, para no mezclarse con los avisos reales de Ramón/José.
+const TECHNICAL_ALERT_EXTRA_RECIPIENT = { name: "Eliud", phone: "+34632570373" };
+
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null, name?: string | null, channel?: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, name: name ?? null, channel: channel ?? null, reason: whatsappText });
-  for (const member of team()) {
+  const recipients = kind === "fallo_tecnico" ? [...team(), TECHNICAL_ALERT_EXTRA_RECIPIENT] : team();
+  for (const member of recipients) {
     let whatsappOk = false;
     try {
       // Fallo real detectado (03/11/2026): Ramón y José nunca le escriben
