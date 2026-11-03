@@ -155,8 +155,26 @@ export function raiseAlert(input: {
     done_at: selfResolving ? new Date().toISOString() : null,
   };
   appendToCollection("alerts", alert);
+  // Fallo real detectado (03/11/2026, "esos correos que no se envíen
+  // tantos, estaban haciendo spam" -- caso real: 98 correos reales de
+  // gestion_portal en una sola tarde, al limpiar de golpe meses de
+  // backlog real atascado): gestion_portal es informativo y de bajo
+  // riesgo (el registro real ya queda siempre en el CRM, en Pendientes,
+  // nadie pierde el dato) -- pero un pico real de muchos a la vez no
+  // necesita un correo cada uno. Límite real: máximo 5 correos de
+  // gestion_portal por ventana de 30 min -- a partir del 6º, el aviso
+  // se sigue registrando en el CRM igual que siempre, solo deja de
+  // mandar correo individual hasta que la ventana se renueve.
+  const EMAIL_BURST_LIMIT = 5;
+  const EMAIL_BURST_WINDOW_MS = 30 * 60 * 1000;
+  const enBurst =
+    input.kind === "gestion_portal" &&
+    readCollection<Alert>("alerts").filter(
+      (a) => a.kind === "gestion_portal" && a.email_status === "enviado" && Date.now() - new Date(a.created_at).getTime() < EMAIL_BURST_WINDOW_MS,
+    ).length >= EMAIL_BURST_LIMIT;
   // No se espera al correo: el aviso ya queda registrado aunque falle el envío.
-  void sendAlertEmail(alert);
+  if (!enBurst) void sendAlertEmail(alert);
+  else setEmailStatus(alert.id, "omitido_pico_real");
   return alert;
 }
 
