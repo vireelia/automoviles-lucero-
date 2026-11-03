@@ -37,6 +37,7 @@ import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused } from "./tools/agent-toggle.js";
 import { raiseAlert } from "./alerts/alerts.js";
+import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { getBusinessConfig } from "./data/business-config.js";
 import { processInboundEmail } from "./email/agent.js";
@@ -584,6 +585,18 @@ app.get("/debug/chat_conversations", requireAdminToken, debugSlice("chat_convers
 app.get("/debug/call_analyses", requireAdminToken, debugSlice("call_analyses", 50));
 app.get("/debug/studio_jobs", requireAdminToken, debugSlice("studio_jobs", 50));
 app.get("/debug/alerts", requireAdminToken, debugSlice("alerts", 50));
+app.get("/debug/whatsapp_retry_jobs", requireAdminToken, debugSlice("whatsapp_retry_jobs", 20));
+// Reintento real del backlog de 199 alertas de HOY (03/11/2026, ver
+// src/alerts/whatsapp-retry.ts para el detalle completo del porqué): el
+// bug que las causó ya está corregido en src/email/agent.ts, esto solo
+// reprocesa lo que quedó pendiente de ANTES del arreglo. Responde YA
+// (nunca mantiene la petición abierta durante el lote, que puede tardar
+// hasta ~2h) y sigue en segundo plano -- progreso real consultable en
+// GET /debug/whatsapp_retry_jobs mientras corre.
+app.post("/admin/retry_gestion_portal_whatsapp", requireAdminToken, async (_req, res) => {
+  const result = await startGestionPortalWhatsappRetry();
+  res.json(result);
+});
 app.get("/debug/reservations", requireAdminToken, debugSlice("reservations", 50));
 app.get("/debug/leads", requireAdminToken, debugSlice("leads", 200));
 app.get("/debug/appointments", requireAdminToken, debugSlice("appointments", 100));
