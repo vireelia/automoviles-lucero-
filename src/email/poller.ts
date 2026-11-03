@@ -61,6 +61,7 @@ export function startEmailPoller() {
           threadId: m.threadId,
           inReplyTo: m.messageId,
           automated: m.automated,
+          receivedAt: m.received_at,
         });
         // Fallo real detectado (03/11/2026, incidente real: la bandeja
         // acumuló 100+ correos sin leer, en su mayoría avisos automáticos

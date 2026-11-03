@@ -19,6 +19,9 @@ export type InboundEmail = {
   threadId?: string;
   inReplyTo?: string;
   automated?: boolean;
+  // Fecha real de recepción (internalDate de Gmail) -- distinta de cuándo lo
+  // procesó el sistema. Ver received_at en recordInbox más abajo.
+  receivedAt?: string;
 };
 
 type Processed = { key: string; at: string; outcome: string; threadId?: string };
@@ -145,6 +148,7 @@ type InboxItem = {
   // registros existentes (opcional, nunca se asume presente).
   message_key?: string;
   created_at: string;
+  received_at?: string | null;
 };
 
 function recordInbox(
@@ -175,6 +179,12 @@ function recordInbox(
     answered_by: extra?.answered ? (extra?.answeredBy ?? "ia") : undefined,
     message_key: extra?.messageKey,
     created_at: new Date().toISOString(),
+    // "de donde sacaste tantos correos" (03/11/2026): created_at es cuándo
+    // el sistema PROCESÓ el correo, no cuándo llegó de verdad -- si hay
+    // backlog real de correos viejos, se procesan hoy pero no llegaron hoy.
+    // received_at es la fecha real (internalDate de Gmail), para no volver a
+    // confundir "procesado hoy" con "llegado hoy".
+    received_at: email.receivedAt ?? null,
   });
   writeCollection("email_inbox", inbox.slice(-500));
 }

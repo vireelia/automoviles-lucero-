@@ -249,6 +249,13 @@ export type GmailMessage = {
   messageId: string;
   automated: boolean;
   text: string;
+  // Fecha real de recepción del correo (03/11/2026, "de donde sacaste tantos
+  // correos" -- un backlog real de correos viejos sin leer se procesó hoy y
+  // el log (email_inbox) solo guardaba cuándo se PROCESÓ, no cuándo llegó de
+  // verdad, inflando el conteo de "hoy" con correos de días anteriores.
+  // internalDate de Gmail es la fecha real de recepción del servidor, nunca
+  // la hora de procesado local).
+  received_at: string;
 };
 
 function header(headers: { name: string; value: string }[], name: string): string {
@@ -348,6 +355,7 @@ export async function gmailGet(id: string): Promise<GmailMessage> {
     messageId: header(headers, "Message-ID"),
     automated,
     text: plainText(m.payload).slice(0, 4000),
+    received_at: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : new Date().toISOString(),
   };
 }
 
