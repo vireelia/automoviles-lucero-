@@ -15,7 +15,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -638,6 +638,19 @@ app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
 
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
 app.get("/debug/email_poller_errors", requireAdminToken, debugSlice("email_poller_errors", 50));
+// Diagnóstico real de verdad (03/11/2026, incidente real: el sondeo no
+// registraba errores pero clientes reales (caso Juan) no se contestaban)
+// -- solo lectura, muestra exactamente qué ve Gmail ahora mismo, sin
+// procesar nada.
+app.get("/debug/gmail_unread_now", requireAdminToken, async (_req, res) => {
+  try {
+    const list = await gmailListUnread();
+    const sample = await Promise.all(list.slice(0, 15).map((m) => gmailGet(m.id).catch((e) => ({ id: m.id, error: e instanceof Error ? e.message : String(e) }))));
+    res.json({ total_no_leidos: list.length, muestra: sample });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
