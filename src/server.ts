@@ -638,6 +638,7 @@ app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
 
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
 app.get("/debug/email_poller_errors", requireAdminToken, debugSlice("email_poller_errors", 50));
+app.get("/debug/whatsapp_errors", requireAdminToken, debugSlice("whatsapp_errors", 50));
 // Diagnóstico real de verdad (03/11/2026, incidente real: el sondeo no
 // registraba errores pero clientes reales (caso Juan) no se contestaban)
 // -- solo lectura, muestra exactamente qué ve Gmail ahora mismo, sin
@@ -1034,7 +1035,20 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       console.error("[zernio-whatsapp] no se pudo actualizar el registro del CRM:", err instanceof Error ? err.message : err);
     }
   } catch (err) {
-    console.error("[zernio-whatsapp] inbound:", err instanceof Error ? err.message : err);
+    // Pedido real (03/11/2026, "como podemos poner avisos en el sistema,
+    // para cuando haya algún error"): este catch solo hacía console.error
+    // -- invisible desde fuera, mismo patrón que ya se arregló para el
+    // sondeo de correo. Se deja constancia real para que checkTechnicalHealth
+    // (scheduler.ts) pueda detectar y avisar a Ramón/José solo.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[zernio-whatsapp] inbound:", err);
+    try {
+      const errors = readCollection<{ id: string; message: string; at: string }>("whatsapp_errors");
+      writeCollection("whatsapp_errors", [...errors, { id: crypto.randomUUID(), message, at: new Date().toISOString() }].slice(-50));
+    } catch {
+      // Igual que en el sondeo de correo -- si ni esto se puede escribir,
+      // no hay nada más que hacer, el console.error ya se intentó.
+    }
   }
 });
 

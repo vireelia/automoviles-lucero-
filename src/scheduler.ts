@@ -5,6 +5,8 @@ import { businessInfo } from "./data/business-info.js";
 import { getBusinessConfig } from "./data/business-config.js";
 import { deliverEmail, sendPendingDailyCapEmails } from "./email/agent.js";
 import { notifyVisitUpcoming } from "./tools/team-notify.js";
+import { raiseAlert } from "./alerts/alerts.js";
+import { googleStatus } from "./integrations/google.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -225,12 +227,67 @@ function checkStaleFollowups() {
   }
 }
 
+// Pedido real (03/11/2026, "como podemos poner avisos en el sistema, para
+// cuando haya algún error" -- tras un incidente real del mismo día en el
+// que la IA y Google estuvieron caídos horas sin que nadie se enterara
+// hasta que un cliente real se quejó): comprueba cada CHECK_INTERVAL_MS
+// (5 min) las mismas señales reales ya construidas hoy (email_poller_errors,
+// whatsapp_errors, estado de Google, correos reales que la IA no pudo
+// contestar) y avisa a Ramón/José por el mismo canal real de siempre
+// (notifyTeam vía raiseAlert) en cuanto algo falla -- en vez de que lo
+// descubran por un cliente enfadado horas después. Dedup real ya incluido
+// en raiseAlert (DEDUP_HOURS=6, mismo motivo exacto no se repite).
+let lastCheckedAt = new Date().toISOString();
+async function checkTechnicalHealth() {
+  const now = new Date().toISOString();
+  const since = lastCheckedAt;
+  lastCheckedAt = now;
+
+  if (!googleStatus().connected) {
+    raiseAlert({
+      kind: "fallo_tecnico",
+      lead_phone: null,
+      reason: "Google (Gmail/Calendar) está desconectado -- Daniel no puede leer ni enviar correos hasta que se reconecte en /crm/integraciones.",
+    });
+  }
+
+  const pollerErrors = readCollection<{ at: string }>("email_poller_errors").filter((e) => e.at > since);
+  if (pollerErrors.length > 0) {
+    raiseAlert({
+      kind: "fallo_tecnico",
+      lead_phone: null,
+      reason: `El sondeo de correo está fallando (${pollerErrors.length} error(es) real(es) recientes) -- revisa /debug/email_poller_errors.`,
+    });
+  }
+
+  const whatsappErrors = readCollection<{ at: string }>("whatsapp_errors").filter((e) => e.at > since);
+  if (whatsappErrors.length > 0) {
+    raiseAlert({
+      kind: "fallo_tecnico",
+      lead_phone: null,
+      reason: `WhatsApp está fallando al procesar mensajes reales (${whatsappErrors.length} error(es) recientes) -- revisa /debug/whatsapp_errors.`,
+    });
+  }
+
+  const iaFallidos = readCollection<{ outcome: string; created_at: string }>("email_inbox").filter(
+    (m) => m.outcome === "fallo_ia_pendiente_revision" && m.created_at > since,
+  );
+  if (iaFallidos.length > 0) {
+    raiseAlert({
+      kind: "fallo_tecnico",
+      lead_phone: null,
+      reason: `El asistente de IA está fallando -- ${iaFallidos.length} correo(s) real(es) de clientes se quedaron sin respuesta (posible problema de créditos/cuota en OpenAI). Revisa la cuenta de OpenAI.`,
+    });
+  }
+}
+
 export function startScheduler() {
   setInterval(() => {
     (async () => {
       try {
         checkAppointmentReminders();
         checkTeamUpcomingVisits();
+        await checkTechnicalHealth();
         // Desactivado (28/10/2026, "elimínalos por ahora" -- fallo real:
         // el aviso de "nos han entrado coches nuevos" se mandaba cada
         // STALE_DAYS a CUALQUIER lead inactivo, sin comprobar si ya había

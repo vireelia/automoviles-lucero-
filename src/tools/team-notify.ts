@@ -28,7 +28,13 @@ import { callUrgentAlert } from "../integrations/twilio-voice.js";
 // llamada no depende de ninguna ventana ni cuenta, así que es el único
 // canal que de verdad siempre llega -- pero solo para lo urgente de
 // verdad, nunca para un recordatorio rutinario de visita.
-const URGENT_ALERT_KINDS: AlertKind[] = ["handoff_urgente", "reserva_pendiente", "lead_caliente"];
+// fallo_tecnico añadido (03/11/2026, pedido real: "como podemos poner
+// avisos en el sistema, para cuando haya algún error" -- incidente real
+// del mismo día en el que ni WhatsApp ni correo llegaron a Ramón/José
+// durante horas): un fallo técnico real (IA caída, Google desconectado)
+// significa clientes reales sin respuesta -- es tan urgente como un
+// handoff, merece el mismo respaldo de llamada si el WhatsApp falla.
+const URGENT_ALERT_KINDS: AlertKind[] = ["handoff_urgente", "reserva_pendiente", "lead_caliente", "fallo_tecnico"];
 
 // Se lee en cada aviso, no en un const de módulo (26/10/2026) -- así un
 // teléfono editado desde Ajustes se usa al momento, sin reiniciar el proceso.
