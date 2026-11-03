@@ -36,7 +36,7 @@ import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused } from "./tools/agent-toggle.js";
-import { raiseAlert } from "./alerts/alerts.js";
+import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { getBusinessConfig } from "./data/business-config.js";
@@ -597,6 +597,18 @@ app.post("/admin/retry_gestion_portal_whatsapp", requireAdminToken, async (req, 
   const onlyPhones = Array.isArray(req.body?.phones) ? req.body.phones.filter((p: unknown) => typeof p === "string") : undefined;
   const result = await startGestionPortalWhatsappRetry(onlyPhones);
   res.json(result);
+});
+// Petición real (03/11/2026, "los demás elimínalos" -- tras contactar a los
+// 10 con intención real confirmada, el dueño decidió no contactar al resto):
+// mismo patrón real ya usado en el CRM (crm/app.ts, "/alertas-masivo") --
+// nunca borra de verdad, mueve a la papelera (moveToTrash), reversible.
+app.post("/admin/delete_gestion_portal_whatsapp_pendientes", requireAdminToken, (_req, res) => {
+  const rows = readCollection<{ id: string; reason: string; name: string | null; lead_phone: string | null; status: string }>("alerts");
+  const targets = rows.filter((a) => a.status === "pendiente" && (a.reason ?? "").includes("Meta todavía no permite"));
+  for (const a of targets) {
+    if (deleteAlert(a.id)) moveToTrash("alerts", a, `Alerta: ${a.reason} (${a.name ?? a.lead_phone ?? "sin contacto"})`, "admin-token");
+  }
+  res.json({ movidas_a_papelera: targets.length });
 });
 app.get("/debug/reservations", requireAdminToken, debugSlice("reservations", 50));
 app.get("/debug/leads", requireAdminToken, debugSlice("leads", 200));
