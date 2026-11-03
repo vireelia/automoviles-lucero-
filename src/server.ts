@@ -637,6 +637,7 @@ app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
 });
 
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
+app.get("/debug/email_poller_errors", requireAdminToken, debugSlice("email_poller_errors", 50));
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));

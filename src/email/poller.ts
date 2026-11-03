@@ -1,5 +1,6 @@
 import { isGoogleConnected, gmailListUnread, gmailGet } from "../integrations/google.js";
 import { processInboundEmail } from "./agent.js";
+import { readCollection, writeCollection } from "../store.js";
 
 // Bajado de 3 minutos a 30 segundos (26/10/2026, petición real: "pon
 // todos los gmail en tiempo real"). Esto es sondeo (polling), no un
@@ -60,7 +61,21 @@ export function startEmailPoller() {
         if (i < items.length - 1) await new Promise((r) => setTimeout(r, humanSpacingMs()));
       }
     } catch (err) {
+      // Fallo real detectado (03/11/2026, incidente real: el sondeo fallaba
+      // en silencio -- un error aquí (lectura de Gmail, no solo el envío de
+      // la respuesta) solo se veía en console.error, invisible desde fuera
+      // del contenedor. No había forma de confirmar desde el CRM si el
+      // sondeo seguía vivo o lleva horas fallando siempre igual.
+      const message = err instanceof Error ? err.message : String(err);
       console.error("[email] poll:", err);
+      try {
+        const errors = readCollection<{ id: string; message: string; at: string }>("email_poller_errors");
+        writeCollection("email_poller_errors", [...errors, { id: crypto.randomUUID(), message, at: new Date().toISOString() }].slice(-50));
+      } catch {
+        // Si ni esto se puede escribir, no hay nada más que hacer aquí --
+        // el console.error de arriba ya se intentó, no se vuelve a fallar
+        // en cascada por culpa del propio registro del fallo.
+      }
     } finally {
       running = false;
     }
