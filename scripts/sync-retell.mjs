@@ -119,20 +119,27 @@ const S = { type: "string" };
 const N = { type: "number" };
 const B = { type: "boolean" };
 
-function tool(name, description, properties, required = []) {
+function tool(name, description, properties, required = [], speakDuring = false) {
   return {
     type: "custom",
     name,
     description,
     url: `${TOOLS_BASE}/${name}`,
-    // speak_during_execution en false a propósito: con él en true, el modelo
-    // tiende a narrar literalmente la acción ("Buscando Audi Q3...",
-    // "Registrando interés...") aunque el prompt lo prohíba explícitamente --
-    // pasó dos veces. El backend es JSON local, normalmente responde en
-    // milisegundos, así que no hace falta ningún aviso de espera para la
-    // mayoría de tools -- la instrucción de "dame un segundo" en el prompt
-    // sigue existiendo para el caso raro de que algo tarde de verdad.
-    speak_during_execution: false,
+    // speak_during_execution en false POR DEFECTO a propósito: con él en
+    // true, el modelo tiende a narrar literalmente la acción ("Buscando
+    // Audi Q3...", "Registrando interés...") aunque el prompt lo prohíba
+    // explícitamente -- pasó dos veces. El backend es JSON local, normalmente
+    // responde en milisegundos, así que no hace falta ningún aviso de espera
+    // para la mayoría de tools.
+    // EXCEPCIÓN real (03/11/2026, "que suene algo, que no haya un vacío...
+    // da a entender que el agente dejó de responder"): create_appointment y
+    // create_handoff (visita/reserva) sí lo activan -- es justo el momento
+    // en que el cliente espera una confirmación real y un silencio ahí se
+    // nota más. El riesgo de narración de la tool en sí queda controlado
+    // porque el prompt (ver prompt-voice.md, VISITAS/RESERVA) dicta
+    // explícitamente la única frase permitida para este hueco -- nunca el
+    // nombre técnico de la tool.
+    speak_during_execution: speakDuring,
     speak_after_execution: true,
     timeout_ms: 8000,
     parameters: { type: "object", properties, required },
@@ -180,7 +187,7 @@ const AGENT_TOOLS = [
     lead_phone: S, vehicle_id: S,
     appointment_type: { type: "string", enum: ["visita", "prueba", "tasacion", "reserva_comercial"] },
     requested_date: S, requested_time: S, notes: S,
-  }),
+  }, [], true),
   tool("update_appointment", "Modifica fecha/hora de una cita ya solicitada.", { appointment_id: S, requested_date: S, requested_time: S, notes: S }, ["appointment_id"]),
   tool("cancel_appointment", "Cancela una cita ya solicitada.", { appointment_id: S, reason: S }, ["appointment_id"]),
   // submit_payment_receipt queda FUERA de las tools del agente a propósito
@@ -206,7 +213,7 @@ const AGENT_TOOLS = [
   tool("create_handoff", "Registra una solicitud de atención humana o devolución de llamada. Úsalo para escalar cualquier caso de la Sección 40. Pon reason_type:\"reserva\" SIEMPRE que sea la reserva de 500€, para que quede notificado de forma distinta y visible en el CRM -- no lo dejes como \"otro\".", {
     lead_phone: S, reason: S, urgency: { type: "string", enum: ["normal", "alta"] }, notes: S,
     reason_type: { type: "string", enum: ["reserva", "compra_inmediata", "otro"] },
-  }),
+  }, [], true),
   tool("send_location", "Devuelve la dirección y referencias de metro confirmadas del concesionario.", {}, []),
   tool("send_whatsapp", "Envía de verdad un WhatsApp al cliente (puede fallar, comprueba la respuesta real antes de decir que se envió). En VOZ no hace falta pedir el teléfono: se usa automáticamente el número real de quien llama si no se indica lead_phone.", { lead_phone: S, message: S }),
   tool("notify_salesperson", "Notifica al vendedor (Ramón/José) de un lead caliente o incidencia urgente. Queda en cola hasta conectar el destino real.", {
