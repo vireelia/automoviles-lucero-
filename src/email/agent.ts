@@ -213,13 +213,13 @@ async function contactLeadViaWhatsapp(
     aiReply = (await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone)).reply;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // Aviso de este fallo desactivado (03/11/2026, "quita esa mierda del
+    // aviso" -- con la IA fallando por créditos de OpenAI agotados, cada
+    // mensaje real generaba su propio aviso nuevo, porque el motivo incluía
+    // el nombre/vehículo y nunca deduplicaba -- inundando el correo del
+    // equipo mientras ya sabían la causa real. Queda constancia igual en
+    // Pendientes vía recordInbox, solo se deja de avisar por este canal.
     recordInbox(email, "fallo_ia_pendiente_revision", { portal, messageKey: email.messageKey });
-    raiseAlert({
-      kind: "gestion_portal",
-      lead_phone: waPhone,
-      name: contact.name,
-      reason: `${portal}: ${contact.name ?? "el cliente"} pidió que le contacten por WhatsApp sobre "${vehicleLabel || "un vehículo"}", pero el asistente de IA falló al redactar la respuesta (${errorMessage}). Escríbele a mano: https://wa.me/${contact.phone}`,
-    });
     return { outcome: "fallo_ia_pendiente_revision" };
   }
   // Petición real (28/10/2026, "para que el cliente sepa" -- SOLO para
@@ -445,16 +445,12 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     reply = (await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey)).reply;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    const yaAvisado = readCollection<InboxItem>("email_inbox").some(
-      (m) => m.message_key === email.messageKey && m.outcome === "fallo_ia_pendiente_revision",
-    );
+    // Aviso de este fallo desactivado (03/11/2026, "quita esa mierda del
+    // aviso" -- mismo motivo que arriba: con la IA fallando por créditos
+    // agotados, el remitente/asunto cambia en cada correo real y nunca
+    // deduplicaba, inundando el correo del equipo). Queda constancia igual
+    // en Pendientes vía recordInbox, solo se deja de avisar por este canal.
     recordInbox(email, "fallo_ia_pendiente_revision", { portal: portalInfo.portal, messageKey: email.messageKey });
-    if (!yaAvisado) {
-      raiseAlert({
-        kind: "gestion_portal",
-        reason: `Correo de ${email.from} ("${email.subject || "sin asunto"}") no se pudo contestar -- fallo real del asistente de IA (${errorMessage}). Revísalo a mano en Correos mientras se resuelve; se reintentará solo en cuanto el fallo se arregle.`,
-      });
-    }
     return { outcome: "fallo_ia_pendiente_revision", error: errorMessage };
   }
   const body = `${reply}\n\n${SIGNATURE}`;

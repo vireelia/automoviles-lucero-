@@ -287,7 +287,12 @@ export function startScheduler() {
       try {
         checkAppointmentReminders();
         checkTeamUpcomingVisits();
-        await checkTechnicalHealth();
+        // Desactivado (03/11/2026, "quita los avisos" -- ya sabe que la IA
+        // está fallando por los créditos de OpenAI, no hace falta que el
+        // sistema se lo siga avisando por este canal mientras lo resuelve).
+        // No se borra el código -- reactivar cuando quiera volver a recibir
+        // estos avisos de salud técnica.
+        // await checkTechnicalHealth();
         // Desactivado (28/10/2026, "elimínalos por ahora" -- fallo real:
         // el aviso de "nos han entrado coches nuevos" se mandaba cada
         // STALE_DAYS a CUALQUIER lead inactivo, sin comprobar si ya había
