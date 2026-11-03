@@ -593,8 +593,9 @@ app.get("/debug/whatsapp_retry_jobs", requireAdminToken, debugSlice("whatsapp_re
 // (nunca mantiene la petición abierta durante el lote, que puede tardar
 // hasta ~2h) y sigue en segundo plano -- progreso real consultable en
 // GET /debug/whatsapp_retry_jobs mientras corre.
-app.post("/admin/retry_gestion_portal_whatsapp", requireAdminToken, async (_req, res) => {
-  const result = await startGestionPortalWhatsappRetry();
+app.post("/admin/retry_gestion_portal_whatsapp", requireAdminToken, async (req, res) => {
+  const onlyPhones = Array.isArray(req.body?.phones) ? req.body.phones.filter((p: unknown) => typeof p === "string") : undefined;
+  const result = await startGestionPortalWhatsappRetry(onlyPhones);
   res.json(result);
 });
 app.get("/debug/reservations", requireAdminToken, debugSlice("reservations", 50));

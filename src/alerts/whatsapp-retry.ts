@@ -152,12 +152,21 @@ export type StartRetryResult =
 // de arrancar NADA, comprueba que WhatsApp está conectado y que la
 // plantilla sigue aprobada -- si no, no se intenta ni un solo envío y se
 // dice con claridad por qué.
-export async function startGestionPortalWhatsappRetry(): Promise<StartRetryResult> {
+// onlyPhones (03/11/2026, petición real: "filtra clientes con intención
+// real, no gastemos dinero en tonterías... a esos dales prioridad") -- el
+// dueño decidió NO contactar a los 199 por igual, sino solo a los que
+// tienen intención real confirmada (cita/reserva/handoff de reserva ya
+// registrado) -- 10 de los 199 en la comprobación real de ese momento.
+// Filtro opcional por teléfono exacto, nunca cambia el comportamiento por
+// defecto (sin el parámetro, sigue procesando todos los pendientes).
+export async function startGestionPortalWhatsappRetry(onlyPhones?: string[]): Promise<StartRetryResult> {
   if (running) return { started: false, reason: "ya_hay_una_tanda_en_curso" };
   if (!isWhatsappConnected()) return { started: false, reason: "whatsapp_no_conectado" };
   if (!(await isContactoInicialTemplateApproved())) return { started: false, reason: "plantilla_contacto_inicial_no_aprobada" };
 
-  const alerts = pendingMetaBacklogAlerts();
+  const allAlerts = pendingMetaBacklogAlerts();
+  const normalize = (p: string | null) => (p ?? "").replace(/[+\s]/g, "");
+  const alerts = onlyPhones ? allAlerts.filter((a) => onlyPhones.map(normalize).includes(normalize(a.lead_phone))) : allAlerts;
   if (alerts.length === 0) return { started: false, reason: "no_hay_alertas_pendientes_de_este_tipo" };
 
   const job: WhatsappRetryJob = {
