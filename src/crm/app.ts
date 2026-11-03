@@ -3813,12 +3813,25 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
     const name = lead?.name || wallapopContact?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     const isSelected = selectedConvo === c;
-    const rowClass = isSelected ? " active" : c.read || c.answered ? " leido" : "";
+    // Fallo real detectado (03/11/2026, pedido real: "pon en esos números
+    // como un botón o algo que confirme que Carolina realmente les
+    // escribió"): sent_whatsapp_plantilla/sent_whatsapp_automatico nunca
+    // marcan `answered: true` en recordInbox (ese campo es solo para
+    // respuestas por correo) -- así que un contacto de Wallapop/portal ya
+    // contactado de verdad por WhatsApp seguía mostrando "Pendiente" en
+    // la lista, indistinguible de uno que de verdad nadie ha tocado.
+    const yaContactadoPorWhatsapp = m.outcome === "sent_whatsapp_automatico" || m.outcome === "sent_whatsapp_plantilla";
+    const rowClass = isSelected ? " active" : c.read || c.answered || yaContactadoPorWhatsapp ? " leido" : "";
+    const estadoTag = yaContactadoPorWhatsapp
+      ? `<span class="tag" style="background:#2e9e55;color:#fff;font-size:10px;padding:2px 6px" title="Carolina ya le escribió por WhatsApp">✅ Contactado por WhatsApp</span>`
+      : !c.answered
+        ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>`
+        : "";
     return `<a href="${esc(contactosUrl(navBase, f, q, pageNum, m.id))}" class="contact-row${rowClass}">
 ${convoCheckbox("/crm/correos", c.all.map((x) => x.id))}
 ${avatarBadge(wallapopContact?.phone || m.from, name)}
 <div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+<div class="rmeta"><time>${esc(time)}</time>${estadoTag}</div>
 </a>`;
   }).join("");
   // Petición real (27/10/2026, "secciones de eliminar... para eliminar
