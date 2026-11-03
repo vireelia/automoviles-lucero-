@@ -377,23 +377,15 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     const sensitive = decision.reason === "documento_sensible_revision_humana";
     recordInbox(sensitive ? { ...email, text: "[contenido sensible -- no almacenado]" } : email, "automated_no_reply", { portal: portalInfo.portal });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "automated_no_reply", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-    // FALLO REAL detectado (27/10/2026, "contestaba mal, ni siquiera lo
-    // contesta"): un cliente real (Opel Mokka, hilo previo real) escribió
-    // mencionando de pasada una palabra de la lista de SENSITIVE_DOCS (DNI,
-    // factura, contrato...) en una pregunta normal de compra -- no un
-    // documento sensible de verdad -- y se descartó en silencio, sin
-    // contestar NI avisar a nadie. No se cambia la cautela de no
-    // responder sola (sigue siendo lo correcto ante la duda), pero ya
-    // nunca se pierde en silencio: para los dos motivos donde sí podría
-    // ser un cliente real de verdad (documento_sensible/sin_tema_claro,
-    // a diferencia de marketing/banco/b2b/interno, que nunca lo son), se
-    // avisa al equipo igual que cualquier otra gestión manual real.
-    if (decision.reason === "documento_sensible_revision_humana" || decision.reason === "sin_tema_claro_revision_humana") {
-      raiseAlert({
-        kind: "gestion_portal",
-        reason: `Correo de ${email.from} ("${email.subject || "sin asunto"}") no se contestó solo -- ${decision.reason === "documento_sensible_revision_humana" ? "puede traer un dato sensible, revísalo a mano" : "no quedó claro que fuera un cliente, revísalo a mano"}. Si es un cliente real, contéstale desde Correos.`,
-      });
-    }
+    // Decisión real (03/11/2026, "solo se tiene que responder mensajes de
+    // clientes y enviar avisos de reservas o visitas, no de todoooo"):
+    // antes (27/10/2026, caso real del Opel Mokka) esto avisaba al equipo
+    // por correo cada vez que un correo ambiguo no se contestaba solo, para
+    // no perder un cliente real en silencio -- pero generaba demasiado
+    // ruido real (la mayoría de estos casos no son clientes). Se mantiene
+    // la cautela de no responder sola ante la duda, y el registro sigue
+    // quedando visible en Pendientes dentro del CRM (nada se pierde del
+    // todo) -- pero ya no manda un correo de aviso por cada uno.
     return { outcome: "automated_no_reply" };
   }
 
