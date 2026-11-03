@@ -3484,9 +3484,19 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
 <span>${chatPaused ? "🔇 Carolina está pausada en este chat -- responde el equipo" : "Carolina responde aquí con normalidad"}</span>
 <form method="post" action="/crm/whatsapp/${esc(selected.id)}" style="display:inline"><input type="hidden" name="volver" value="${esc(volver)}"><button class="btn ${chatPaused ? "ok" : "light"}" type="submit" name="accion" value="${chatPaused ? "reanudar_chat" : "pausar_chat"}">${chatPaused ? "Reactivar Carolina aquí" : "Pausar Carolina en este chat"}</button></form>
 </div>`;
+  // Pedido real (03/11/2026, "que en whatsapp aquí arriba ponga Wallapop a
+  // los que se les contacte por Wallapop" -- para diferenciar un contacto
+  // que escribió directo a WhatsApp de uno al que Carolina contactó
+  // primero por un aviso de portal): se busca en email_inbox si este
+  // mismo teléfono real ya se contactó vía sent_whatsapp_automatico/
+  // sent_whatsapp_plantilla, y de qué portal venía ese aviso -- mismo dato
+  // real que ya existe, solo mostrado aquí también.
+  const origenPortal = list<InboxMail>("email_inbox")
+    .filter((m) => (m.outcome === "sent_whatsapp_automatico" || m.outcome === "sent_whatsapp_plantilla") && extractPhoneFromEmailText([m.text])?.replace(/^\+/, "") === selected.phone.replace(/^\+/, ""))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.portal;
   const detail = `${contactDetailHeader(lead, selected.phone, selected.phone, lead?.email ?? null)}
 ${lead?.vehicle_interest ? (findExactVehicleMatch(lead.vehicle_interest) ? vehicleCard(findExactVehicleMatch(lead.vehicle_interest)!) : `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(lead.vehicle_interest)}</b></p>`) : ""}
-<div class="meta-grid"><div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${statusPill(waStatus.label, waStatus.tone)}</b></div></div>
+<div class="meta-grid">${origenPortal ? `<div>Origen<b>${esc(origenPortal)}</b></div>` : ""}<div>Mensajes<b>${thread.length}</b></div><div>Último<b>${esc(fmtDate(thread[thread.length - 1]?.created_at ?? selected.created_at))}</b></div><div>Estado<b>${statusPill(waStatus.label, waStatus.tone)}</b></div></div>
 ${agentToggleBox}
 ${selected.answered && selected.delivered === false ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:12px;margin-top:10px">⚠️ La respuesta del ${esc(fmtDate(selected.created_at))} no se pudo entregar (fallo real de envío de ese momento, ya pasado). Si el cliente sigue sin respuesta, escríbele ahora desde el cuadro de abajo -- WhatsApp funciona con normalidad hoy.</div>` : ""}
 <h3 style="margin-bottom:6px;margin-top:12px">Conversación</h3><div class="wa-thread">${threadHtml}${typingRow}</div>
