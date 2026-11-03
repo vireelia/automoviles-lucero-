@@ -13,7 +13,7 @@ import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./tras
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
-import { parseCochesNetJsonBlock, parseCochesNetReplyMessage, extractWallapopContact } from "../email/interest.js";
+import { parseCochesNetJsonBlock, parseCochesNetReplyMessage, extractWallapopContact, isCochesNetSharedSender, extractCochesNetClientIdentity } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
 import { analyzeIncidents, lastIncidentAnalysis } from "../tools/incident-analyst.js";
@@ -3533,7 +3533,12 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // canal, no necesariamente su "email" -- con los relays de Coches.net
   // casi nunca coincide). Buscarlo como email nunca encontraba el lead ya
   // existente.
-  const lead = findLeadForContact(allLeads, selected.from, null);
+  // Misma identidad real usada para agrupar el hilo (emailIdentityKeyFor) --
+  // con remitente compartido de Coches.net, buscar el lead por selected.from
+  // encontraría (o confundiría) el lead de CUALQUIER cliente que haya escrito
+  // por ese mismo relay, nunca el de este cliente concreto.
+  const sharedSenderIdentity = isCochesNetSharedSender(selected.from) ? extractCochesNetClientIdentity(selected.text) : null;
+  const lead = findLeadForContact(allLeads, sharedSenderIdentity?.email ?? selected.from, null);
   // FALLO REAL detectado (28/10/2026, "las conversaciones de correos... no
   // solo se vea una parte" -- caso real confirmado: una conversación de 4
   // correos reales del mismo cliente tenía 4 thread_id de Gmail distintos,
@@ -3543,8 +3548,9 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // mostraba la conversación cortada a la mitad. La lista ya agrupa por
   // remitente real (correoContactos, groupMessagesByKey); el hilo abierto
   // tiene que mostrar EXACTAMENTE ese mismo grupo, no un subconjunto.
+  const selectedKey = emailIdentityKeyFor(selected);
   const inboundThread = list<InboxMail>("email_inbox")
-    .filter((m) => m.from === selected.from)
+    .filter((m) => emailIdentityKeyFor(m) === selectedKey)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   // FALLO REAL detectado y corregido antes de confirmar (26/10/2026):
   // filtrar solo status==="sent" hacía desaparecer del hilo una
@@ -3566,8 +3572,17 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // verdadera para CUALQUIER correo saliente sin thread_id propio, sin
   // relación real con este contacto. Ahora esa comparación solo cuenta
   // cuando selected.thread_id existe de verdad.
+  // Con remitente compartido (vehiculosocasion@coches.net y similares), las
+  // respuestas reales de Daniel van al correo real del cliente (sharedSenderIdentity.email),
+  // nunca al relay (selected.from) -- sin esto, o.to === selected.from
+  // nunca sería cierto para ningún envío real a un cliente de Coches.net
+  // con remitente compartido.
+  const inboundThreadIds = new Set(inboundThread.map((m) => m.thread_id).filter((t): t is string => Boolean(t)));
   const outboundThread = list<EmailOutboxRow>("email_outbox").filter(
-    (o) => o.to === selected.from || (Boolean(selected.thread_id) && o.thread_id === selected.thread_id),
+    (o) =>
+      o.to === selected.from ||
+      (sharedSenderIdentity?.email ? o.to.toLowerCase() === sharedSenderIdentity.email.toLowerCase() : false) ||
+      (Boolean(o.thread_id) && inboundThreadIds.has(o.thread_id!)),
   );
   type ThreadItem = { kind: "in" | "out"; created_at: string; from: string; body: string; status?: EmailOutboxRow["status"] };
   const items: ThreadItem[] = [
@@ -3641,8 +3656,22 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
   const lead = findLeadForContact(allLeads, phone, null);
   const vehicleLabel = contact ? [contact.make, contact.model, contact.version].filter(Boolean).join(" ") : null;
   const yaContactado = selected.outcome === "sent_whatsapp_automatico" || selected.outcome === "sent_whatsapp_plantilla";
+  // Fallo real detectado (03/11/2026, caso real: +34643764144, "le daba
+  // a ver la conversación y no me salió nada"): /crm/contactos/whatsapp
+  // solo lista mensajes de whatsapp_inbox, que SOLO guarda mensajes
+  // ENTRANTES del cliente -- cuando Carolina escribe primero (plantilla
+  // de Wallapop) y el cliente todavía no ha respondido nada, no existe
+  // ninguna fila ahí y el enlace llevaba a una lista vacía, dando a
+  // entender que el mensaje nunca se envió de verdad. Ahora se comprueba
+  // antes si de verdad hay algo que ver, y si no, se dice la verdad en
+  // vez de enlazar a algo vacío.
+  const hayRespuestaDelCliente = phone ? list<WhatsappMessage>("whatsapp_inbox").some((m) => m.phone === phone.replace(/^\+/, "")) : false;
   const statusBox = yaContactado
-    ? `<div class="box" style="background:var(--ok-bg);border:1px solid #2e9e55;margin:12px 0">✅ Ya se le contactó por WhatsApp directamente.${phone ? ` <a href="/crm/contactos/whatsapp?q=${encodeURIComponent(phone)}">Ver la conversación ↗</a>` : ""}</div>`
+    ? `<div class="box" style="background:var(--ok-bg);border:1px solid #2e9e55;margin:12px 0">✅ Ya se le contactó por WhatsApp directamente.${
+        phone && hayRespuestaDelCliente
+          ? ` <a href="/crm/contactos/whatsapp?q=${encodeURIComponent(phone)}">Ver la conversación ↗</a>`
+          : " El cliente todavía no ha respondido nada -- por eso no hay conversación que ver todavía en Contactos → WhatsApp (aparecerá en cuanto conteste)."
+      }</div>`
     : selected.outcome === "pendiente_whatsapp_manual"
       ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin:12px 0"><b>El envío automático por WhatsApp falló.</b> Hace falta escribirle a mano.${phone ? ` ${waButton(phone, "")}` : ""}${selected.draft_note ? `<div class="box" style="background:var(--ok-bg);white-space:pre-wrap;margin-top:8px">${esc(selected.draft_note)}</div>` : ""}</div>`
       : `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí</b> y no se pudo extraer un teléfono real de este aviso -- hay que abrir Wallapop y contestarle desde ahí.<br><a class="btn" style="margin-top:8px;display:inline-block" target="_blank" rel="noopener" href="${esc(businessInfo.profiles.wallapop)}">Abrir Wallapop ↗</a></div>`;
@@ -3676,6 +3705,30 @@ ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 // lista la que no agrupaba. Una fila real por contacto, como cualquier
 // app de mensajería -- el hilo completo se sigue viendo entero al abrir
 // (whatsappDetailFor ya construye el hilo por teléfono, no por mensaje).
+// FALLO REAL GRAVE detectado (03/11/2026, caso real confirmado: decenas de
+// clientes reales distintos -- Jorge, Elbour, Lisandro, Veronica, Fredy,
+// Tomas... cada uno con su propio coche/teléfono/correo real -- aparecían
+// TODOS mezclados en una sola ficha de contacto llamada "juan", con casi
+// 100 correos). Causa raíz: vehiculosocasion@coches.net (y cualquier
+// remitente compartido de Coches.net) es el MISMO "from" para absolutamente
+// todos los avisos, de cualquier cliente -- agrupar por m.from (como ya
+// hacía correoContactos) o filtrar por m.from === selected.from (como ya
+// hacía correoDetailFor) mezclaba a todo el mundo en un único hilo gigante.
+// email/agent.ts YA resolvía esto mismo para decidir A QUIÉN responder por
+// correo (isCochesNetSharedSender + extractCochesNetClientIdentity) --
+// nunca se aplicaba aquí, en cómo el CRM AGRUPA las fichas. Esta es la
+// misma lógica, reutilizada para que lista y detalle agrupen por la
+// identidad real del cliente (su correo real, extraído del bloque JSON de
+// cada aviso) en vez del remitente compartido. Si no se puede extraer una
+// identidad real (aviso genérico sin bloque "client"), se usa el id único
+// del propio mensaje -- nunca se vuelve a caer en agrupar por el remitente
+// compartido, que es precisamente el fallo.
+function emailIdentityKeyFor(m: { from: string; text: string; id: string }): string {
+  if (!isCochesNetSharedSender(m.from)) return m.from;
+  const identity = extractCochesNetClientIdentity(m.text);
+  return identity?.email ? `coches-net-cliente:${identity.email.toLowerCase()}` : `coches-net-sin-identidad:${m.id}`;
+}
+
 function groupMessagesByKey<T extends { created_at: string; answered?: boolean; read?: boolean; archived?: boolean }>(
   all: T[],
   keyOf: (m: T) => string,
@@ -3785,7 +3838,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
   // TODOS los clientes reales de Wallapop en una sola fila. Se agrupa
   // por el teléfono real ya extraído del propio aviso (mismo que usa
   // agent.ts), nunca por el remitente compartido.
-  const conversations = groupMessagesByKey(all, portalView === "wallapop" ? (m) => extractWallapopContact(m.text)?.phone || m.id : (m) => m.from).filter(
+  const conversations = groupMessagesByKey(all, portalView === "wallapop" ? (m) => extractWallapopContact(m.text)?.phone || m.id : emailIdentityKeyFor).filter(
     (c) => matchesMsgFilter(f, c) && (searchMatches(q, c.latest.from, c.latest.subject, c.latest.portal, c.latest.text) || c.all.some((m) => searchMatches(q, "", "", "", m.text))),
   );
   conversations.sort((a, b) => b.latest.created_at.localeCompare(a.latest.created_at));
