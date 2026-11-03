@@ -652,6 +652,24 @@ app.get("/debug/gmail_unread_now", requireAdminToken, async (_req, res) => {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+// Añadido (03/11/2026, "pero no correos de nuestro sistema, si no correos de
+// las plataformas reales" -- verificar contra Gmail EN VIVO, no contra lo
+// que nuestro propio log interno (email_inbox) dice que procesó, para
+// descartar que el log esté inflado por algo nuestro). Usa Gmail Search
+// Operators reales (from:/after:), igual que el resto del sistema -- nunca
+// cuenta sobre datos propios cuando puede comprobar la fuente real.
+app.get("/debug/gmail_real_count_today", requireAdminToken, async (_req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "/");
+    const [cochesnet, wallapop] = await Promise.all([
+      gmailSearch(`from:coches.net after:${today}`, 500),
+      gmailSearch(`from:wallapop.com after:${today}`, 500),
+    ]);
+    res.json({ fecha: today, cochesnet_hoy: cochesnet.length, wallapop_hoy: wallapop.length, total_hoy: cochesnet.length + wallapop.length });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
