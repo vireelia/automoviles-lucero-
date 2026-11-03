@@ -8,6 +8,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { sendWhatsapp } from "./delivery.js";
 import { isGoogleConnected, sendGmail } from "../integrations/google.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
+import { markLeadRealIntent } from "./leads.js";
 
 function vehicleLabel(vehicleId: string): string {
   const v = currentVehicles().find((x) => x.id === vehicleId);
@@ -99,6 +100,7 @@ export async function createReservationPending(args: { vehicle_id: string; lead_
   };
   appendToCollection("reservations", reservation);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
+  markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: una reserva real es la intención real por excelencia.
   await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount, channel: args.channel ?? null });
 
   const conflicts = [

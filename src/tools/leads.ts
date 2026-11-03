@@ -26,6 +26,16 @@ type Lead = {
   followup_count: number;
   do_not_contact: boolean;
   preferred_channel: string | null;
+  // Petición real del dueño (03/11/2026): "solo vamos a dejar en el sistema
+  // los leads de visitas o reserva, los curiosos dejalos fuera, porque si no
+  // llenaremos el sistema de leads sin responder". Reutiliza el campo
+  // "archived" que ya existía (tools/leads.ts lo escribía desde siempre,
+  // pero solo lo leía crm/app.ts -- ver autoArchiveColdLeads: "nunca borra
+  // nada, solo deja de salir en la lista principal, reversible"), el mismo
+  // criterio ya establecido para "esto no es un lead activo, pero se queda
+  // guardado". Opcional por compatibilidad con leads históricos (se leen
+  // como no archivados si falta).
+  archived?: boolean;
   created_at: string;
   updated_at: string;
   last_contact: string;
@@ -84,6 +94,49 @@ function notifyWhatsappOpportunity(phone: string, lead: Lead, fromChannel: strin
     priority: "normal",
   });
 }
+// Criterio real de "intención real de visitar o reservar" (03/11/2026,
+// petición literal del dueño: "solo vamos a dejar en el sistema los leads
+// de visitas o reserva, los curiosos dejalos fuera"). NO se inventa un
+// criterio nuevo -- se reutiliza el que ya existe en el resto del sistema:
+// prompt-core.md (sección VISITAS Y CITAS / RESERVA) distingue "consulta
+// de curiosidad" de "intención real" precisamente por si hay o no una cita
+// o una reserva real registrada, y crm/app.ts (leadPhase()) ya deriva fases
+// como "visita_concertada"/"reserva_pendiente"/"reservado" de estas mismas
+// dos colecciones, nunca del texto libre de las notas. Se usa aquí el
+// mismo criterio, por eso se lee directamente "appointments"/"reservations"
+// en vez de adivinar algo a partir de intent/notes (texto libre que el
+// propio modelo redacta distinto cada vez, nada fiable para decidir esto).
+// Conservador a propósito (instrucción real: "si hay ambigüedad real... es
+// mejor registrarlo que descartarlo"): CUALQUIER cita o reserva no
+// cancelada/expirada ya cuenta, aunque sea "requested" sin confirmar --
+// ante la duda, mejor un lead de más visible que perder a un cliente real.
+function hasRealVisitOrReservationIntent(phone: string | null): boolean {
+  if (!phone) return false;
+  const appts = readCollection<{ lead_phone?: string | null; status: string }>("appointments");
+  if (appts.some((a) => a.lead_phone === phone && a.status !== "cancelled")) return true;
+  const reservations = readCollection<{ lead_phone: string | null; status: string }>("reservations");
+  return reservations.some((r) => r.lead_phone === phone && r.status !== "cancelled" && r.status !== "expired");
+}
+
+// Se llama en cuanto aparece una señal real de intención (cita registrada,
+// reserva registrada, handoff de reserva/compra inmediata, o lead marcado
+// HOT) -- nunca antes. Si el lead ya existe y estaba archivado por ser solo
+// curiosidad hasta ahora, reaparece en la lista principal del CRM. Si el
+// lead todavía no existe (no debería pasar en el flujo normal -- el nombre
+// y el teléfono se registran con upsert_lead antes de cerrar cita/reserva,
+// ver prompt-core.md) no se crea nada aquí -- esto solo desarchiva, nunca
+// inventa un lead nuevo sin los demás datos reales que upsert_lead ya pide.
+export function markLeadRealIntent(phone: string | null): void {
+  if (!phone) return;
+  const normalized = normalizePhone(phone);
+  const leads = readLeads();
+  const lead = leads.find((l) => l.phone === normalized);
+  if (lead && lead.archived) {
+    lead.archived = false;
+    writeCollection("leads", leads);
+  }
+}
+
 export function upsertLead(args: {
   phone?: string;
   email?: string;
@@ -143,6 +196,15 @@ export function upsertLead(args: {
       followup_count: 0,
       do_not_contact: false,
       preferred_channel: null,
+      // Petición real del dueño (03/11/2026, ver hasRealVisitOrReservationIntent
+      // arriba): un contacto NUEVO que todavía no tiene cita ni reserva real
+      // es, hasta donde se sabe en este instante, un curioso -- se guarda
+      // igual (el agente de IA sigue contestando igual de bien, y el equipo
+      // puede verlo en "Archivados" si hace falta), pero no cuenta como lead
+      // activo/pendiente en la lista principal. En cuanto exista una cita o
+      // reserva real (markLeadRealIntent, llamado desde appointments.ts/
+      // reservations.ts/requests.ts/scoreLead) reaparece sola.
+      archived: !hasRealVisitOrReservationIntent(normalizedPhone ?? null),
       created_at: now(),
       updated_at: now(),
       last_contact: now(),
@@ -215,6 +277,12 @@ export function scoreLead(args: { phone: string; temperature: Temperature; objec
   lead.temperature = args.temperature;
   if (args.objection) lead.objection = args.objection;
   lead.updated_at = now();
+  // HOT ("quiere comprar ya", "me lo llevo", "tengo el dinero" -- ver
+  // prompt-core.md, LEADS Y SEGUIMIENTO) es, por definición, la misma
+  // intención real de arriba (hasRealVisitOrReservationIntent) aunque
+  // todavía no haya una cita/reserva registrada en firme -- si estaba
+  // archivado por ser solo curiosidad hasta ahora, deja de estarlo (03/11/2026).
+  if (args.temperature === "HOT" && lead.archived) lead.archived = false;
   writeCollection("leads", leads);
   // Aviso solo cuando el cliente pasa a caliente (no en cada actualización).
   if (args.temperature === "HOT" && previous !== "HOT") {

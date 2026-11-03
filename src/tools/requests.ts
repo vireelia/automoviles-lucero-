@@ -4,7 +4,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending } from "./reservations.js";
 import { createAutoTask } from "./tasks.js";
 import { notifyHandoffRequested } from "./team-notify.js";
-import { normalizePhone } from "./leads.js";
+import { normalizePhone, markLeadRealIntent } from "./leads.js";
 
 function now() {
   return new Date().toISOString();
@@ -179,6 +179,15 @@ export async function createHandoff(args: {
     channel: args.channel ?? null,
     priority: args.urgency === "alta" ? "alta" : "normal",
   });
+  // Petición real del dueño (03/11/2026, ver markLeadRealIntent en
+  // tools/leads.ts): "reserva" y "compra_inmediata" aquí SIEMPRE significan
+  // que el cliente dijo explícitamente que quiere reservar/comprar ya (ver
+  // prompt-core.md, RESERVA y CUÁNDO SE TRANSFIERE EN VOZ) -- cuenta como
+  // intención real aunque tryAutoCreateReservation no llegue a crear la
+  // reserva de verdad (p. ej. vehículo ambiguo en el catálogo).
+  if (args.reason_type === "reserva" || args.reason_type === "compra_inmediata") {
+    markLeadRealIntent(leadPhone ?? null);
+  }
   if (args.reason_type === "reserva" && leadPhone) {
     await tryAutoCreateReservation(leadPhone, lead?.vehicle_interest, args.channel);
   }

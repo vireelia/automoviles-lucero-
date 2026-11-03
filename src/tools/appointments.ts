@@ -7,6 +7,7 @@ import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
+import { markLeadRealIntent } from "./leads.js";
 
 function now() {
   return new Date().toISOString();
@@ -107,6 +108,7 @@ export async function createAppointment(args: {
       created_at: now(),
     };
     appendToCollection("appointments", appointment);
+    markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: una cita real es intención real, aunque sea fin de semana/festivo.
     await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
     createAutoTask({
       lead_phone: args.lead_phone ?? null,
@@ -153,6 +155,7 @@ export async function createAppointment(args: {
     created_at: now(),
   };
   appendToCollection("appointments", appointment);
+  markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: ver nota arriba -- una cita registrada ya es intención real.
   await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
   if (canAutoConfirm) {
     await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
