@@ -18,7 +18,13 @@ const AUTOMATED_ONLY = [
   // es un registro de que entró una llamada, no un cliente escribiendo un
   // mensaje que haya que contestar. El agente le respondía "¿en qué puedo
   // ayudarte?" a un aviso automático sin nadie al otro lado leyéndolo.
-  /\bcontacto de llamada (atendida|no atendida)\b/i,
+  // Fallo real detectado (03/11/2026, caso real: "MA - Contacto de llamada
+  // PERDIDA sobre un anuncio publicado" generó un aviso real de "revisar a
+  // mano" -- el patrón solo cubría "atendida"/"no atendida", "perdida" es
+  // una tercera variante real de Coches.net que no estaba contemplada. Se
+  // quita la lista cerrada de palabras -- cualquier "contacto de llamada"
+  // de este tipo de aviso es automático, sea cual sea la palabra que siga.
+  /\bcontacto de llamada\b/i,
 ];
 
 // Remitentes de marketing/boletín de los propios portales (nunca un cliente
@@ -446,11 +452,17 @@ export type InterestDecision = { interested: boolean; reason: string };
 
 export function decideInterest(input: { from: string; subject: string; text: string; hasPriorThread: boolean; portal: string | null }): InterestDecision {
   const body = `${input.subject}\n${input.text}`;
+  // Fallo real detectado (03/11/2026, caso real: mail-es@info.auto1.com,
+  // confirmaciones de venta/transporte -- generaban avisos reales de
+  // "puede traer un dato sensible" porque su texto real menciona
+  // "factura"/datos similares): los remitentes YA identificados como
+  // B2B/marketing/banco/proveedor nunca son un cliente real, pase lo que
+  // pase en su contenido -- antes SENSITIVE_DOCS se comprobaba primero y
+  // podía disparar un aviso real de revisión humana para un remitente que
+  // las comprobaciones de abajo ya iban a descartar de todas formas.
+  // Comprobar primero QUIÉN escribe, nunca QUÉ dice, para estos casos.
   if (INTERNAL_SENDERS.some((r) => r.test(input.from))) {
     return { interested: false, reason: "remitente_interno_del_negocio" };
-  }
-  if (SENSITIVE_DOCS.some((r) => r.test(body))) {
-    return { interested: false, reason: "documento_sensible_revision_humana" };
   }
   if (MARKETING_SENDER.test(input.from)) {
     return { interested: false, reason: "remitente_marketing_portal" };
@@ -458,14 +470,20 @@ export function decideInterest(input: { from: string; subject: string; text: str
   if (B2B_INDUSTRY_SENDER.some((r) => r.test(input.from))) {
     return { interested: false, reason: "plataforma_b2b_sector_no_cliente" };
   }
-  if (AUTOMATED_ONLY.some((r) => r.test(body))) {
-    return { interested: false, reason: "correo_masivo_o_baja" };
-  }
-  if (BANK_OR_ADS.some((r) => r.test(body)) || BANK_SENDER.test(input.from)) {
+  if (BANK_SENDER.test(input.from)) {
     return { interested: false, reason: "banco_o_publicidad_prohibido" };
   }
   if (PROFESSIONAL_SERVICES_SENDER.test(input.from)) {
     return { interested: false, reason: "proveedor_privado_del_negocio_prohibido" };
+  }
+  if (SENSITIVE_DOCS.some((r) => r.test(body))) {
+    return { interested: false, reason: "documento_sensible_revision_humana" };
+  }
+  if (AUTOMATED_ONLY.some((r) => r.test(body))) {
+    return { interested: false, reason: "correo_masivo_o_baja" };
+  }
+  if (BANK_OR_ADS.some((r) => r.test(body))) {
+    return { interested: false, reason: "banco_o_publicidad_prohibido" };
   }
   if (SECURITY_OR_ACCOUNT.some((r) => r.test(body))) {
     return { interested: false, reason: "aviso_seguridad_o_cuenta_prohibido" };
