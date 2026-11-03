@@ -188,7 +188,18 @@ export async function handleChatMessage(
   // palabra en vez del código real ("EMAIL"), rompiendo cualquier filtro
   // o agrupación que dependa de ese campo en el CRM. Ahora se dan los dos,
   // dejando clarísimo cuál va en cada sitio.
-  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}`;
+  // Brevedad y cierre reforzado SOLO para Carolina/WhatsApp (03/11/2026,
+  // petición real de Ramón: "que vaya al grano con unos 4 mensajes... así
+  // ahorrar coste y evitar perder el tiempo" -- corregido después: "es solo
+  // para Carolina, a Miguel y Daniel déjalos tal cual"). Por eso esto NO va
+  // en prompt-core.md (compartido por los tres canales de chat) sino aquí,
+  // inyectado solo cuando channel === "WHATSAPP" -- Daniel (EMAIL) y Miguel
+  // (voz, prompt-voice.md aparte) quedan exactamente como estaban.
+  const whatsappBrevityNote =
+    channel === "WHATSAPP"
+      ? `\n\nBREVEDAD REAL -- VE AL GRANO, UNOS 4 MENSAJES (petición real de Ramón, solo para este canal): cada conversación real tiene que resolverse en unos 4 mensajes tuyos como máximo -- identificar lo que pide, dar el dato real o la disponibilidad, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario (usa get_business_info, nunca de memoria), el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto (pídelo con get_responsable_contact si no lo tienes ya). No lo repitas en cada mensaje, solo en el de cierre real.`
+      : "";
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}${whatsappBrevityNote}`;
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() + context }, ...history, ...turn];
 
   let toolRuns = 0;
