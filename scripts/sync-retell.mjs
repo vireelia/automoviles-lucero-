@@ -141,6 +141,14 @@ function tool(name, description, properties, required = [], speakDuring = false)
     // nombre técnico de la tool.
     speak_during_execution: speakDuring,
     speak_after_execution: true,
+    // enable_typing_sound (03/11/2026, "necesito igualmente el sonido del
+    // teclado" -- confirmado en la documentación real de Retell: campo
+    // real de la API, sonido de verdad en la pista de audio, sin relación
+    // con speak_during_execution ni con el riesgo de narración de la tool
+    // -- es solo un sonido, nunca texto hablado por el modelo). Se activa
+    // en TODAS las tools, no solo en visita/reserva -- así nunca hay un
+    // vacío real mientras se procesa cualquier consulta o registro.
+    enable_typing_sound: true,
     timeout_ms: 8000,
     parameters: { type: "object", properties, required },
   };
