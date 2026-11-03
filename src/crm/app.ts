@@ -3558,7 +3558,17 @@ function correoDetailFor(selected: InboxMail, allLeads: Lead[], volver: string):
   // enviada bajo un thread_id de Gmail distinto (mismo cliente, mismo
   // remitente real) se perdía del hilo. Se agrupa por destinatario real
   // (o.to), igual que el hilo entrante se agrupa por remitente real.
-  const outboundThread = list<EmailOutboxRow>("email_outbox").filter((o) => o.to === selected.from || o.thread_id === selected.thread_id);
+  // Fallo real detectado (03/11/2026, caso real: una ficha de contacto
+  // mostraba ~193 mensajes ajenos -- resúmenes internos diarios y avisos
+  // de catálogo, que nunca llevan thread_id): cuando selected.thread_id
+  // es undefined (contacto sin hilo real de Gmail todavía), la condición
+  // `o.thread_id === selected.thread_id` se volvía undefined === undefined,
+  // verdadera para CUALQUIER correo saliente sin thread_id propio, sin
+  // relación real con este contacto. Ahora esa comparación solo cuenta
+  // cuando selected.thread_id existe de verdad.
+  const outboundThread = list<EmailOutboxRow>("email_outbox").filter(
+    (o) => o.to === selected.from || (Boolean(selected.thread_id) && o.thread_id === selected.thread_id),
+  );
   type ThreadItem = { kind: "in" | "out"; created_at: string; from: string; body: string; status?: EmailOutboxRow["status"] };
   const items: ThreadItem[] = [
     ...inboundThread.map((m): ThreadItem => ({ kind: "in", created_at: m.created_at, from: lead?.name || m.from, body: m.text })),

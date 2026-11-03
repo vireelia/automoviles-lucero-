@@ -310,7 +310,12 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     }
   }
 
-  const looksAutomated = /no-?reply|mailer-daemon|postmaster|do-?not-?reply/i.test(email.from);
+  // Fallo real detectado (03/11/2026, caso real: facturaciononline@adevinta.com
+  // -- un documento/factura automática de Adevinta Motor S.L., no un cliente --
+  // se trató como consulta real y se le contestó, lo que rebotó con "address
+  // not found" porque ese buzón de facturación no acepta respuestas). "factura"
+  // en la parte local del remitente nunca es un cliente real escribiendo.
+  const looksAutomated = /no-?reply|mailer-daemon|postmaster|do-?not-?reply|factura/i.test(email.from);
   if (email.automated || looksAutomated || !email.from.includes("@")) {
     return { outcome: "skipped_automated" };
   }
