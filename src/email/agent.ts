@@ -251,7 +251,15 @@ async function contactLeadViaWhatsapp(
   const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
 
   if (sent.ok) {
-    recordInbox(email, "sent_whatsapp_automatico", { portal });
+    // Fallo real detectado (03/11/2026, petición real: "cuando los agentes
+    // se vayan quitando los leads o respondiendo, que se marquen en el CRM
+    // como respondidos"): este envío SÍ llegó de verdad al cliente por
+    // WhatsApp, pero recordInbox nunca recibía answered/answered_by -- el
+    // mensaje se quedaba para siempre como si nadie lo hubiera contestado,
+    // aunque Carolina ya lo hizo. Mismo criterio que el envío directo por
+    // correo más abajo (outcome "sent"): solo se marca cuando de verdad se
+    // entregó, nunca al fallar.
+    recordInbox(email, "sent_whatsapp_automatico", { portal, answered: true, answeredBy: "ia" });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_automatico", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
     return { outcome: "sent_whatsapp_automatico", reply };
   }
@@ -267,7 +275,17 @@ async function contactLeadViaWhatsapp(
     const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel || "el vehículo que consultaste");
     if (templateSent.ok) {
       const replySent = await sendWhatsappText(waPhone, reply);
-      recordInbox(email, "sent_whatsapp_plantilla", { portal, draftNote: replySent.ok ? undefined : reply });
+      // Mismo fallo real de arriba (03/11/2026): solo se marca
+      // answered/answered_by cuando la respuesta real de verdad salió
+      // (replySent.ok) -- si solo se abrió la plantilla pero la respuesta
+      // real falló después, el aviso de abajo (raiseAlert) sigue su curso y
+      // esto NO se marca como respondido, para no mentir en el CRM.
+      recordInbox(email, "sent_whatsapp_plantilla", {
+        portal,
+        draftNote: replySent.ok ? undefined : reply,
+        answered: replySent.ok,
+        answeredBy: replySent.ok ? "ia" : undefined,
+      });
       writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
       if (!replySent.ok) {
         raiseAlert({
