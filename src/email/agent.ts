@@ -527,7 +527,17 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   if (sentTodayCount() >= DAILY_SEND_CAP) {
     recordInbox(email, "tope_diario_alcanzado", { portal: portalInfo.portal, draftNote: body });
     writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "tope_diario_alcanzado", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-    raiseAlert({ kind: "gestion_portal", reason: `Se alcanzó el tope diario de ${DAILY_SEND_CAP} correos automáticos -- "${email.subject}" quedó sin enviar, respuesta ya redactada.`, draft_note: body });
+    // Fallo real detectado (03/11/2026, "arregla eso, me llegó 3 mensajes
+    // así"): el motivo incluía el asunto del correo (`"${email.subject}"`),
+    // así que cada cliente nuevo que llegaba tras alcanzar el tope
+    // generaba un correo DISTINTO (dedup de raiseAlert compara el texto
+    // exacto del motivo) -- un aviso por cada cliente atascado, en vez de
+    // uno solo avisando que el tope ya se alcanzó hoy. Motivo fijo ahora
+    // (sin el asunto) -- el dedup real de 6h de raiseAlert ya colapsa
+    // todos los avisos del mismo día en uno. Cada respuesta individual ya
+    // queda redactada y visible en Pendientes igualmente, solo deja de
+    // generar un correo nuevo por cada una.
+    raiseAlert({ kind: "gestion_portal", reason: `Se alcanzó el tope diario de ${DAILY_SEND_CAP} correos automáticos -- hay respuestas ya redactadas esperando en Pendientes. Revísalas en el CRM.`, draft_note: body });
     return { outcome: "tope_diario_alcanzado", reply: body };
   }
 
