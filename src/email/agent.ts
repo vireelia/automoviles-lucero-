@@ -139,13 +139,18 @@ type InboxItem = {
   read?: boolean;
   answered?: boolean;
   answered_by?: "ia" | "equipo";
+  // Añadido (03/11/2026, incidente real: ver fallo_ia_pendiente_revision
+  // más abajo) -- solo para poder detectar si ya se avisó de este mismo
+  // correo en un reintento anterior del sondeo, sin tocar el resto de
+  // registros existentes (opcional, nunca se asume presente).
+  message_key?: string;
   created_at: string;
 };
 
 function recordInbox(
   email: InboundEmail,
   outcome: string,
-  extra?: { portal?: string | null; draftNote?: string; answered?: boolean; answeredBy?: "ia" | "equipo" },
+  extra?: { portal?: string | null; draftNote?: string; answered?: boolean; answeredBy?: "ia" | "equipo"; messageKey?: string },
 ) {
   const inbox = readCollection<InboxItem>("email_inbox");
   inbox.push({
@@ -168,6 +173,7 @@ function recordInbox(
     in_reply_to: email.inReplyTo,
     answered: extra?.answered ?? false,
     answered_by: extra?.answered ? (extra?.answeredBy ?? "ia") : undefined,
+    message_key: extra?.messageKey,
     created_at: new Date().toISOString(),
   });
   writeCollection("email_inbox", inbox.slice(-500));
@@ -197,7 +203,25 @@ async function contactLeadViaWhatsapp(
   const userText = vehicleLabel
     ? `Hola, escribí en ${portal} preguntando por este vehículo: ${vehicleLabel}.${contact.inquiry ? ` ${contact.inquiry}` : ""}`
     : contact.inquiry || "Me interesa un vehículo, pero no se especificó cuál.";
-  const { reply: aiReply } = await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone);
+  // Mismo fallo real que en processInboundEmail (03/11/2026) -- si la IA
+  // falla aquí, el cliente real que pidió explícitamente que le
+  // contacten por WhatsApp se queda invisible para siempre. Se deja
+  // constancia honesta y se avisa al equipo con el teléfono real, sin
+  // marcar email_processed (se reintenta solo en el siguiente sondeo).
+  let aiReply: string;
+  try {
+    aiReply = (await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone)).reply;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    recordInbox(email, "fallo_ia_pendiente_revision", { portal, messageKey: email.messageKey });
+    raiseAlert({
+      kind: "gestion_portal",
+      lead_phone: waPhone,
+      name: contact.name,
+      reason: `${portal}: ${contact.name ?? "el cliente"} pidió que le contacten por WhatsApp sobre "${vehicleLabel || "un vehículo"}", pero el asistente de IA falló al redactar la respuesta (${errorMessage}). Escríbele a mano: https://wa.me/${contact.phone}`,
+    });
+    return { outcome: "fallo_ia_pendiente_revision" };
+  }
   // Petición real (28/10/2026, "para que el cliente sepa" -- SOLO para
   // Wallapop): a diferencia de Coches.net (donde la plantilla aprobada
   // por Meta ya se identifica como Automóviles Lucero antes de que
@@ -405,7 +429,37 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   }
 
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
-  const { reply } = await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey);
+  // FALLO REAL detectado (03/11/2026, incidente real: un correo directo de
+  // un cliente real -- no un aviso de portal -- se quedó invisible para
+  // siempre mientras el proveedor de IA fallaba (créditos de OpenAI
+  // agotados, llm_http_429)) -- hasta aquí, recordInbox() SOLO se llamaba
+  // DESPUÉS de generar la respuesta con éxito, así que si handleChatMessage
+  // lanzaba un error, el correo nunca se registraba en email_inbox NI en
+  // email_processed. El sondeo (cada 30s) lo reintentaba en silencio para
+  // siempre, sin que el equipo se enterara nunca -- a diferencia de
+  // WhatsApp (zernio-whatsapp en server.ts), que SÍ registra el mensaje
+  // ANTES de llamar al agente. Mismo criterio aquí: si falla la IA, se
+  // deja constancia honesta ya mismo con el error real y se avisa al
+  // equipo -- sin marcar email_processed, a propósito, para que si el
+  // fallo es pasajero (p. ej. créditos repuestos) el siguiente sondeo lo
+  // intente de verdad y, si sale bien, añada la respuesta real de verdad.
+  let reply: string;
+  try {
+    reply = (await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey)).reply;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const yaAvisado = readCollection<InboxItem>("email_inbox").some(
+      (m) => m.message_key === email.messageKey && m.outcome === "fallo_ia_pendiente_revision",
+    );
+    recordInbox(email, "fallo_ia_pendiente_revision", { portal: portalInfo.portal, messageKey: email.messageKey });
+    if (!yaAvisado) {
+      raiseAlert({
+        kind: "gestion_portal",
+        reason: `Correo de ${email.from} ("${email.subject || "sin asunto"}") no se pudo contestar -- fallo real del asistente de IA (${errorMessage}). Revísalo a mano en Correos mientras se resuelve; se reintentará solo en cuanto el fallo se arregle.`,
+      });
+    }
+    return { outcome: "fallo_ia_pendiente_revision", error: errorMessage };
+  }
   const body = `${reply}\n\n${SIGNATURE}`;
   const subject = replySubject(email.subject);
 

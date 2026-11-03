@@ -5358,6 +5358,29 @@ crm.get("/asistentes", (req, res) => {
   const lastVoiceEvent = vs.recentCalls.length ? vs.recentCalls[vs.recentCalls.length - 1].created_at : null;
   const lastWaEvent = list<WhatsappMessage>("whatsapp_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
   const lastMailEvent = list<InboxMail>("email_inbox").sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.created_at ?? null;
+  // Fallo real detectado (03/11/2026, incidente real: Carolina seguía
+  // mostrando "Respondiendo en WhatsApp" aquí mientras OpenAI devolvía
+  // 429 sin parar y los clientes reales se quedaban sin contestar) --
+  // esta tarjeta solo miraba el interruptor (encendido/apagado), nunca si
+  // el agente de verdad estaba consiguiendo responder. Mismo umbral que
+  // ya usa agentReplyStatus (AGENT_TYPING_WINDOW_MS) para "lleva
+  // demasiado sin respuesta", y una ventana de 12h para no señalar como
+  // fallo algo ya antiguo que el equipo decidió dejar así a propósito.
+  const STALE_LOOKBACK_MS = 12 * 60 * 60 * 1000;
+  const now = Date.now();
+  const waStuckCount = list<WhatsappMessage>("whatsapp_inbox").filter((m) => {
+    if (m.answered) return false;
+    if (isWhatsappChatPaused(m.phone)) return false;
+    const age = now - new Date(m.created_at).getTime();
+    return age > AGENT_TYPING_WINDOW_MS && age < STALE_LOOKBACK_MS;
+  }).length;
+  const mailStuckCount = list<EmailOutboxRow>("email_outbox").filter((o) => {
+    if (o.status !== "failed") return false;
+    const age = now - new Date(o.created_at).getTime();
+    return age < STALE_LOOKBACK_MS;
+  }).length;
+  const waReallyWorking = isWhatsappZernioAgentEnabled() && waStuckCount === 0;
+  const mailReallyWorking = isEmailAutoSendEnabled() && mailStuckCount === 0;
   function agentCard(name: string, funcion: string, estado: string, canales: string, channelKeys: string[], lastEvent: string | null, active: boolean): string {
     const clientes = allLeadsForAgents.filter((l) => l.channel && channelKeys.includes(l.channel)).length;
     const handoffsCount = allHandoffsForAgents.filter((h) => h.channel && channelKeys.includes(h.channel)).length;
@@ -5377,8 +5400,24 @@ crm.get("/asistentes", (req, res) => {
   const agentCards = `<h2 style="margin-top:0">Agentes IA</h2>
 <div class="row">
 ${agentCard("Miguel -- voz", "Atiende llamadas al teléfono del negocio.", isVoiceAgentEnabled() ? "Respondiendo" : "Pausado", "Teléfono", ["VOICE"], lastVoiceEvent, isVoiceAgentEnabled())}
-${agentCard("Carolina -- WhatsApp y chat", "Atiende WhatsApp, Messenger de Facebook y el chat web.", isWhatsappZernioAgentEnabled() ? "Respondiendo en WhatsApp" : "Pausada en WhatsApp", "WhatsApp, Messenger, Chat web", ["WHATSAPP", "CHAT", "FACEBOOK"], lastWaEvent, isWhatsappZernioAgentEnabled())}
-${agentCard("Daniel -- correo", "Lee, clasifica y responde el correo comercial.", emailSendOn ? "Envío automático activado" : "Modo de prueba -- redacta, no envía", "Correo electrónico", ["EMAIL"], lastMailEvent, emailSendOn)}
+${agentCard(
+  "Carolina -- WhatsApp y chat",
+  "Atiende WhatsApp, Messenger de Facebook y el chat web.",
+  !isWhatsappZernioAgentEnabled() ? "Pausada en WhatsApp" : waReallyWorking ? "Respondiendo en WhatsApp" : `⚠️ No está respondiendo -- ${waStuckCount} mensaje(s) real(es) sin contestar en las últimas 12h`,
+  "WhatsApp, Messenger, Chat web",
+  ["WHATSAPP", "CHAT", "FACEBOOK"],
+  lastWaEvent,
+  waReallyWorking,
+)}
+${agentCard(
+  "Daniel -- correo",
+  "Lee, clasifica y responde el correo comercial.",
+  !emailSendOn ? "Modo de prueba -- redacta, no envía" : mailReallyWorking ? "Envío automático activado" : `⚠️ No está enviando -- ${mailStuckCount} correo(s) real(es) fallido(s) en las últimas 12h`,
+  "Correo electrónico",
+  ["EMAIL"],
+  lastMailEvent,
+  mailReallyWorking,
+)}
 </div>
 <p class="sub">Coste real acumulado -- solo disponible para voz (Retell lo reporta por llamada): ${vs.totalCostEur.toFixed(2)} $. WhatsApp/chat/correo todavía no tienen seguimiento de coste por canal.</p>`;
   // Calidad de llamadas (15/10/2026, el "cerebro" pedido): cada llamada real

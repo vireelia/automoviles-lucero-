@@ -444,6 +444,112 @@ export async function isContactoInicialTemplateApproved(): Promise<boolean> {
 // respuesta real que Carolina ya redactó, solo abre la puerta para que esa
 // respuesta se pueda enviar después dentro de la ventana de 24h que esto
 // abre.
+// Plantilla de aviso interno a Ramón/José (03/11/2026, incidente real:
+// TODOS los avisos de visita/reserva/urgencia a Ramón y José por WhatsApp
+// llevaban fallando siempre con "DIRECT_SEND_NOT_ELIGIBLE" -- Meta nunca
+// permite texto libre a alguien que no te ha escrito antes dentro de las
+// últimas 24h, y Ramón/José nunca le escriben primero al número del
+// negocio, así que esa ventana nunca se abre. Una sola plantilla genérica
+// con el texto real ya redactado como único parámetro -- en vez de una
+// plantilla por cada tipo de aviso (visita/reserva/urgente) -- cubre todos
+// los casos presentes y futuros de notifyTeam() sin pedir aprobación de
+// Meta cada vez que se añada un aviso nuevo.
+const TEAM_ALERT_TEMPLATE_NAME = "aviso_interno_equipo_lucero";
+
+// Se guarda el id real devuelto por Meta (nunca inventado) en una
+// colección propia -- así notifyTeam() lo puede usar en cuanto se apruebe
+// sin necesidad de un segundo despliegue para codificar el id a mano.
+export function getTeamAlertTemplateId(): string | null {
+  return readCollection<{ id: "team_alert_template"; template_id: string }>("zernio_template_ids").find((r) => r.id === "team_alert_template")?.template_id ?? null;
+}
+
+export async function createTeamAlertTemplate(): Promise<{ ok: boolean; templateId?: string; error?: string }> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data, error } = await zernio.whatsapp.createWhatsAppTemplate({
+      body: {
+        accountId,
+        name: TEAM_ALERT_TEMPLATE_NAME,
+        category: "UTILITY",
+        language: "es",
+        components: [
+          {
+            type: "body",
+            text: "🔔 Aviso de Automóviles Lucero: {{1}}",
+            example: { body_text: [["Nueva visita -- Marta Gómez (655123456) -- Toyota RAV4 2018 -- 2026-11-04 a las 11:00"]] },
+          },
+        ],
+      },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const message = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
+    }
+    const templateId = data?.template?.id;
+    if (templateId) writeCollection("zernio_template_ids", [{ id: "team_alert_template", template_id: templateId }]);
+    return { ok: true, templateId };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function teamAlertTemplateStatus(templateId: string): Promise<string | null> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return null;
+  try {
+    const { data } = await zernio.whatsapp.getWhatsAppTemplateById({ path: { templateId }, query: { accountId } });
+    return data?.template?.status ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Envía el texto real ya redactado por notifyTeam() (nunca lo reescribe --
+// Meta solo aprobó la frase fija "🔔 Aviso de Automóviles Lucero: {{1}}",
+// el {{1}} es el único hueco libre) dentro de una conversación nueva, sin
+// depender de que Ramón/José hayan escrito antes. A diferencia de
+// sendZernioWhatsappVehicleContactTemplate (abre la puerta para una
+// respuesta de Carolina después), aquí el propio mensaje de la plantilla
+// YA ES el aviso completo -- no hace falta enviar nada más después.
+export async function sendTeamAlertViaTemplate(phone: string, message: string): Promise<ZernioWhatsappSendResult> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  const templateId = getTeamAlertTemplateId();
+  if (!templateId) return { ok: false, error: "plantilla_aviso_equipo_no_creada_todavia" };
+  try {
+    const status = await teamAlertTemplateStatus(templateId);
+    if (status !== "APPROVED") return { ok: false, error: `plantilla_aviso_equipo_no_aprobada (estado: ${status ?? "desconocido"})` };
+    const { data, error } = await zernio.messages.createInboxConversation({
+      body: {
+        accountId,
+        participantId: normalizeParticipantId(phone),
+        templateName: TEAM_ALERT_TEMPLATE_NAME,
+        templateLanguage: "es",
+        templateParams: [message],
+      },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const errMessage = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${errMessage ? ` (${errMessage})` : ""}` };
+    }
+    const messageId = data?.data?.messageId;
+    const conversationId = data?.data?.conversationId;
+    if (!messageId || !conversationId) return { ok: false, error: "zernio_sin_message_id_template" };
+    rememberWhatsappConversation(phone, conversationId, accountId);
+    return { ok: true, messageId };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function sendZernioWhatsappVehicleContactTemplate(phone: string, vehicleLabel: string): Promise<ZernioWhatsappSendResult> {
   const zernio = getClient();
   const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;

@@ -29,6 +29,8 @@ import {
   isContactoInicialTemplateApproved,
   sendZernioWhatsappVehicleContactTemplate,
   findWhatsappConversation,
+  createTeamAlertTemplate,
+  teamAlertTemplateStatus,
 } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -358,6 +360,18 @@ app.post("/admin/zernio/seed-team-conversation", requireAdminToken, route((a: { 
   rememberWhatsappConversation(a.phone, a.conversation_id, a.account_id);
   return { status: "ok" };
 }));
+
+// Incidente real (03/11/2026, "y si te dije que crees la plantilla de meta
+// para solucionar eso"): TODOS los avisos reales a Ramón/José por WhatsApp
+// llevaban fallando siempre (DIRECT_SEND_NOT_ELIGIBLE) porque Meta exige
+// una plantilla aprobada para que el negocio escriba primero. Acción de
+// una sola vez: crea la plantilla real en Meta vía Zernio. Queda pendiente
+// de revisión de Meta (nunca instantáneo) -- usar /admin/zernio/team-alert-template-status
+// para comprobar cuándo pase a APPROVED.
+app.post("/admin/zernio/create-team-alert-template", requireAdminToken, route(async () => createTeamAlertTemplate()));
+app.post("/admin/zernio/team-alert-template-status", requireAdminToken, route(async (a: { template_id: string }) => ({
+  status: await teamAlertTemplateStatus(a.template_id),
+})));
 
 // Backlog real de WhatsApp (19/10/2026, "mira los 100 mensajes reales de
 // los clientes y ve respondiendo, pero verifica que son clientes"):

@@ -17,6 +17,7 @@ import { readCollection, appendToCollection } from "../store.js";
 import { getBusinessConfig } from "../data/business-config.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
+import { sendTeamAlertViaTemplate } from "../integrations/zernio.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { callUrgentAlert } from "../integrations/twilio-voice.js";
 
@@ -63,7 +64,16 @@ async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: stri
   for (const member of team()) {
     let whatsappOk = false;
     try {
-      const result = await sendWhatsappText(member.phone, whatsappText);
+      // Fallo real detectado (03/11/2026): Ramón y José nunca le escriben
+      // primero al número del negocio, así que la ventana de 24h para
+      // texto libre nunca se abre -- todos los avisos fallaban siempre con
+      // DIRECT_SEND_NOT_ELIGIBLE. Se intenta primero la plantilla real
+      // aprobada por Meta (ver zernio.ts, createTeamAlertTemplate) con el
+      // mismo texto que ya se iba a mandar; solo si la plantilla aún no
+      // existe o no está aprobada se intenta el texto libre de siempre
+      // (que sí puede funcionar si por casualidad hay una ventana abierta).
+      const templateResult = await sendTeamAlertViaTemplate(member.phone, whatsappText);
+      const result = templateResult.ok ? templateResult : await sendWhatsappText(member.phone, whatsappText);
       whatsappOk = result.ok;
       appendToCollection("team_notifications", {
         id: crypto.randomUUID(),
