@@ -4,10 +4,18 @@ import { readCollection, writeCollection } from "../store.js";
 // Scopes mínimos para lo que hace Miguel: enviar correo desde la cuenta del
 // negocio, leer su bandeja (para no contestar dos veces) y gestionar su
 // calendario de citas. calendar (completo) lo ha pedido el negocio.
+// gmail.modify añadido (03/11/2026, incidente real: la bandeja acumuló
+// 100+ correos sin leer -- avisos automáticos de Coches.net que ya se
+// clasifican correctamente como "no contestar", pero al no poder
+// marcarse como leídos nunca, se quedaban para siempre enterrando los
+// correos nuevos de clientes reales detrás). Con este scope, lo que ya
+// se decide no contestar se marca leído de verdad, sin tocar nada que
+// sí requiera respuesta.
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 const REDIRECT_URI =
@@ -341,6 +349,17 @@ export async function gmailGet(id: string): Promise<GmailMessage> {
     automated,
     text: plainText(m.payload).slice(0, 4000),
   };
+}
+
+// Marca un correo como leído de verdad (requiere gmail.modify -- hasta que
+// la cuenta no se reconecte aceptando ese permiso nuevo, Google devuelve
+// insufficient_scope aquí; se captura en el llamador para no romper nada,
+// nunca bloquea el procesamiento real del correo por esto).
+export async function gmailMarkRead(id: string): Promise<void> {
+  await googleFetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/modify`, {
+    method: "POST",
+    body: JSON.stringify({ removeLabelIds: ["UNREAD"] }),
+  });
 }
 
 export async function gmailAccountEmail(): Promise<string> {

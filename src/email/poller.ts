@@ -1,4 +1,4 @@
-import { isGoogleConnected, gmailListUnread, gmailGet } from "../integrations/google.js";
+import { isGoogleConnected, gmailListUnread, gmailGet, gmailMarkRead } from "../integrations/google.js";
 import { processInboundEmail } from "./agent.js";
 import { readCollection, writeCollection } from "../store.js";
 
@@ -48,7 +48,7 @@ export function startEmailPoller() {
       const items = list.slice(0, BATCH);
       for (let i = 0; i < items.length; i++) {
         const m = await gmailGet(items[i].id);
-        await processInboundEmail({
+        const result = await processInboundEmail({
           messageKey: m.id,
           from: m.from,
           fromName: m.fromName,
@@ -58,6 +58,25 @@ export function startEmailPoller() {
           inReplyTo: m.messageId,
           automated: m.automated,
         });
+        // Fallo real detectado (03/11/2026, incidente real: la bandeja
+        // acumuló 100+ correos sin leer, en su mayoría avisos automáticos
+        // de Coches.net ya correctamente ignorados -- pero al no poder
+        // marcarse como leídos (sin gmail.modify), se quedaban para
+        // siempre enterrando correos nuevos de clientes reales detrás,
+        // caso real: Juan preguntando si un coche seguía a la venta).
+        // Se marca leído TODO lo que ya se decidió de verdad -- excepto
+        // "fallo_ia_pendiente_revision", que debe reintentarse solo en
+        // cuanto el fallo real (p.ej. créditos de IA) se resuelva. Si
+        // gmail.modify todavía no está concedido (cuenta no reconectada
+        // con el permiso nuevo), esto falla en silencio -- nunca bloquea
+        // el procesamiento real del correo por esto.
+        if (result.outcome !== "fallo_ia_pendiente_revision") {
+          try {
+            await gmailMarkRead(m.id);
+          } catch (err) {
+            console.warn(`[email] no se pudo marcar como leído ${m.id} (probable falta de permiso gmail.modify, reconectar Google):`, err instanceof Error ? err.message : err);
+          }
+        }
         if (i < items.length - 1) await new Promise((r) => setTimeout(r, humanSpacingMs()));
       }
     } catch (err) {
