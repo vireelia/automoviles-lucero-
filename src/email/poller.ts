@@ -11,7 +11,11 @@ import { readCollection, writeCollection } from "../store.js";
 // espaciado de ENVÍO (humanSpacingMs, más abajo), que es el que de
 // verdad importa para no parecer un bot a ojos de Gmail.
 const INTERVAL_MS = 30 * 1000;
-const BATCH = 10;
+// Subido de 10 a 30 (03/11/2026) -- ahora que los descartes reales no
+// esperan nada (ver REAL_SEND_OUTCOMES más abajo), procesar más por
+// ciclo vacía el backlog real mucho más rápido sin afectar al espaciado
+// real de los envíos de verdad, que sigue intacto.
+const BATCH = 30;
 // FALLO REAL grave detectado (18/10/2026, a petición de "ajusta el agente
 // de gmail para que cumpla tiempos para que no sea baneado"): este bucle
 // procesaba el lote entero sin ninguna pausa -- una clienta real (Diana,
@@ -77,7 +81,16 @@ export function startEmailPoller() {
             console.warn(`[email] no se pudo marcar como leído ${m.id} (probable falta de permiso gmail.modify, reconectar Google):`, err instanceof Error ? err.message : err);
           }
         }
-        if (i < items.length - 1) await new Promise((r) => setTimeout(r, humanSpacingMs()));
+        // Fallo real detectado (03/11/2026): esta espera (pensada para no
+        // parecer un bot EN ENVÍOS reales) se aplicaba igual aunque el
+        // correo no fuera a enviar nada (p.ej. un aviso automático que
+        // solo hay que descartar) -- con la mayoría del lote siendo
+        // descartes reales, esto ralentizaba muchísimo vaciar el backlog
+        // real acumulado. Ahora solo se espera entre dos envíos reales.
+        const REAL_SEND_OUTCOMES = new Set(["sent", "sent_whatsapp_automatico", "sent_whatsapp_plantilla"]);
+        if (i < items.length - 1 && REAL_SEND_OUTCOMES.has(result.outcome)) {
+          await new Promise((r) => setTimeout(r, humanSpacingMs()));
+        }
       }
     } catch (err) {
       // Fallo real detectado (03/11/2026, incidente real: el sondeo fallaba
