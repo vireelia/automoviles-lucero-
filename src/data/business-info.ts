@@ -50,10 +50,10 @@ export const businessInfo = {
     note: "Número de José corregido 01/10/2026 a +34624807067 (antes +34624807069, dígito final equivocado). Número personal de Ramón para transferencia de llamada confirmado 01/10/2026: +34622188213, distinto del +34622177052 que es el WhatsApp del negocio. transfer_call en vivo activado en el agente de voz. Desde 01/10/2026 (decisión del cliente), ya no hay un orden fijo Ramón->José: el responsable se elige preguntando antes de transferir.",
   },
   hours: {
-    // Corregido 26/10/2026 (aviso real: "el horario es hasta las 19:30") --
-    // la tarde cierra a las 19:30, no 19:00 como decía la especificación
-    // maestra original.
-    weekdays: { visits: ["09:30-14:00", "16:30-19:30"] },
+    // Corregido 26/10/2026 ("el horario es hasta las 19:30") y vuelto a
+    // corregir 03/11/2026 ("de 4:30 a 7, lo de las 7:30 quítalo") -- cierre
+    // real de la tarde 19:00, no 19:30.
+    weekdays: { visits: ["09:30-14:00", "16:30-19:00"] },
     weekend: "Solo con cita previa y confirmación.",
     validation_status: "owner_confirmed",
     source: "Especificación maestra 29/09/2026 (Sección 21), horario de tarde corregido 26/10/2026.",
