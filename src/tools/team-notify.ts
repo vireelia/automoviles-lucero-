@@ -68,13 +68,19 @@ function vehicleLabel(vehicleId: string | null | undefined): string {
 // Pedido real (03/11/2026, "los errores del sistema que me lleguen a mí"):
 // los fallos técnicos reales (IA caída, Google desconectado, sondeo
 // fallando) son distintos de los avisos normales de negocio (visita,
-// reserva) -- este número personal solo recibe la categoría fallo_tecnico,
+// reserva) -- este número extra solo recibe la categoría fallo_tecnico,
 // nunca el resto, para no mezclarse con los avisos reales de Ramón/José.
-const TECHNICAL_ALERT_EXTRA_RECIPIENT = { name: "Eliud", phone: "+34632570373" };
+// Variable de entorno, nunca hardcodeado en el código (mismo criterio que
+// el resto de números/credenciales reales de este proyecto).
+function technicalAlertExtraRecipient(): { name: string; phone: string } | null {
+  const phone = process.env.TECHNICAL_ALERT_PHONE?.trim();
+  return phone ? { name: "Aviso técnico", phone } : null;
+}
 
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null, name?: string | null, channel?: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, name: name ?? null, channel: channel ?? null, reason: whatsappText });
-  const recipients = kind === "fallo_tecnico" ? [...team(), TECHNICAL_ALERT_EXTRA_RECIPIENT] : team();
+  const extra = technicalAlertExtraRecipient();
+  const recipients = kind === "fallo_tecnico" && extra ? [...team(), extra] : team();
   for (const member of recipients) {
     let whatsappOk = false;
     try {
