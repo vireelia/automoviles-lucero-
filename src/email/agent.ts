@@ -256,8 +256,15 @@ async function contactLeadViaWhatsapp(
     return { outcome: "sent_whatsapp_automatico", reply };
   }
 
-  if (vehicleLabel && (await isContactoInicialTemplateApproved())) {
-    const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel);
+  // FALLO REAL detectado (03/11/2026, "hay varios clientes así" -- varios
+  // clientes reales se quedaban sin la plantilla aunque SÍ estaba aprobada):
+  // esto exigía vehicleLabel no vacío para intentar la plantilla -- si el
+  // aviso del portal no traía marca/modelo claros (vacío), se saltaba la
+  // plantilla del todo y caía directo al aviso de "escribir a mano", aunque
+  // la plantilla habría funcionado igual con un texto genérico. Ya no exige
+  // vehicleLabel -- usa un texto genérico cuando no hay uno real.
+  if (await isContactoInicialTemplateApproved()) {
+    const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel || "el vehículo que consultaste");
     if (templateSent.ok) {
       const replySent = await sendWhatsappText(waPhone, reply);
       recordInbox(email, "sent_whatsapp_plantilla", { portal, draftNote: replySent.ok ? undefined : reply });
