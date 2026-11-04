@@ -213,18 +213,19 @@ export async function handleChatMessage(
   // palabra en vez del código real ("EMAIL"), rompiendo cualquier filtro
   // o agrupación que dependa de ese campo en el CRM. Ahora se dan los dos,
   // dejando clarísimo cuál va en cada sitio.
-  // Brevedad y cierre reforzado SOLO para Carolina/WhatsApp (03/11/2026,
-  // petición real de Ramón: "que vaya al grano con unos 4 mensajes... así
-  // ahorrar coste y evitar perder el tiempo" -- corregido después: "es solo
-  // para Carolina, a Miguel y Daniel déjalos tal cual"). Por eso esto NO va
-  // en prompt-core.md (compartido por los tres canales de chat) sino aquí,
-  // inyectado solo cuando channel === "WHATSAPP" -- Daniel (EMAIL) y Miguel
-  // (voz, prompt-voice.md aparte) quedan exactamente como estaban.
-  const whatsappBrevityNote =
-    channel === "WHATSAPP"
-      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, UNOS 4 MENSAJES (petición real de Ramón, solo para este canal: "que sea amable pero que vaya al grano"): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en unos 4 mensajes tuyos como máximo: identificar lo que pide, dar el dato real o la disponibilidad con calidez, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No lo repitas en cada mensaje, solo en el de cierre real.`
+  // Brevedad y cierre reforzado para Carolina/WhatsApp Y Daniel/correo
+  // (03/11/2026, petición real de Ramón: "que vaya al grano con unos 4
+  // mensajes... así ahorrar coste" -- corregido ese mismo día a "es solo
+  // para Carolina" -- y vuelto a ampliar 04/11/2026, transcripción real con
+  // Ramón: "Daniel... exactamente lo mismo que Carolina, que en 4 o 5
+  // mensajes y que por último envíe directamente la integración" -- ya SÍ
+  // quiere esto también en correo). Miguel (voz, prompt-voice.md aparte)
+  // sigue sin esto -- no se ha pedido ahí.
+  const brevityNote =
+    channel === "WHATSAPP" || channel === "EMAIL"
+      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, UNOS ${channel === "WHATSAPP" ? "4" : "4 o 5"} MENSAJES (petición real de Ramón): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en unos ${channel === "WHATSAPP" ? "4" : "4 o 5"} mensajes tuyos como máximo: identificar lo que pide, dar el dato real o la disponibilidad con calidez, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No lo repitas en cada mensaje, solo en el de cierre real.`
       : "";
-  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}${whatsappBrevityNote}`;
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}${brevityNote}`;
   // FALLO REAL de coste detectado (03/11/2026, "tenemos 3 dólares hasta
   // recargar mañana" -- el usuario comprobó el gasto real: ~24.000 tokens de
   // prompt estático (prompt-core.md + prompt-chat.md + tool-schemas.json) se
