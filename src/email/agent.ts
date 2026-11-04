@@ -200,7 +200,7 @@ async function contactLeadViaWhatsapp(
   processed: Processed[],
   contact: { phone: string; name: string | null; make: string | null; model: string | null; version: string | null; inquiry: string | null },
   portal: string,
-): Promise<{ outcome: string; reply?: string }> {
+): Promise<{ outcome: string; reply?: string; error?: string }> {
   const waPhone = contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`;
   const vehicleLabel = [contact.make, contact.model, contact.version].filter(Boolean).join(" ");
   upsertLead({
@@ -230,7 +230,7 @@ async function contactLeadViaWhatsapp(
     // equipo mientras ya sabían la causa real. Queda constancia igual en
     // Pendientes vía recordInbox, solo se deja de avisar por este canal.
     recordInbox(email, "fallo_ia_pendiente_revision", { portal, messageKey: email.messageKey });
-    return { outcome: "fallo_ia_pendiente_revision" };
+    return { outcome: "fallo_ia_pendiente_revision", error: errorMessage };
   }
   // Petición real (28/10/2026, "para que el cliente sepa" -- SOLO para
   // Wallapop): a diferencia de Coches.net (donde la plantilla aprobada

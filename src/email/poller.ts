@@ -40,12 +40,29 @@ function humanSpacingMs(): number {
 }
 let running = false;
 
+// FALLO REAL grave detectado (04/11/2026, "porque consumen tantos
+// creditos... eso no es lo que habiamos quedado"): con OpenAI sin crédito
+// (llm_http_429/insufficient_quota), este sondeo cada 30s reintentaba TODO
+// el backlog pendiente una y otra vez, para siempre -- 500 correos reales
+// (el tope del propio email_inbox) quedaron con outcome
+// "fallo_ia_pendiente_revision" en una sola mañana, puro ruido martilleando
+// la API sin parar mientras no había crédito. No cambia el criterio de
+// reintentar en cuanto el crédito vuelva (eso sigue siendo correcto) --
+// solo espacia MUCHO más los reintentos mientras el fallo sea
+// específicamente de cuota/crédito, en vez de cada 30s sin descanso.
+const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+let quotaCooldownUntil = 0;
+function looksLikeQuotaError(message: string | undefined): boolean {
+  return Boolean(message) && /llm_http_429|insufficient_quota|rate_limit/i.test(message!);
+}
+
 // Revisa la bandeja del negocio cada 30 segundos. Sin Google conectado no hace nada.
 // La deduplicación la lleva processInboundEmail, porque Gmail no nos deja marcar
 // los correos como leídos sin el ámbito gmail.modify.
 export function startEmailPoller() {
   setInterval(async () => {
     if (running || !isGoogleConnected()) return;
+    if (Date.now() < quotaCooldownUntil) return;
     running = true;
     try {
       const list = await gmailListUnread();
@@ -63,6 +80,11 @@ export function startEmailPoller() {
           automated: m.automated,
           receivedAt: m.received_at,
         });
+        if (result.outcome === "fallo_ia_pendiente_revision" && looksLikeQuotaError(result.error)) {
+          quotaCooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
+          console.warn(`[email] crédito de IA agotado -- pausando reintentos ${QUOTA_COOLDOWN_MS / 60000} min en vez de cada 30s.`);
+          break;
+        }
         // Fallo real detectado (03/11/2026, incidente real: la bandeja
         // acumuló 100+ correos sin leer, en su mayoría avisos automáticos
         // de Coches.net ya correctamente ignorados -- pero al no poder
