@@ -82,7 +82,16 @@ function llmTools(): unknown[] {
 // genérico de fallback. En la última ronda disponible se le quita la
 // opción de llamar a otra herramienta (tool_choice:"none") para obligarlo
 // a cerrar con una respuesta de texto real, usando lo que ya averiguó.
-async function callLlm(messages: ChatMessage[], forceText = false): Promise<{ message: ChatMessage }> {
+// Uso real por llamada (04/11/2026, "a lo mejor cambio de cuentas porque
+// tampoco me marca el consumo que tiene cada agente" -- OpenAI no separa
+// el gasto por canal/agente en su propio panel; esto sí lo hace, con el
+// dato real que ya devuelve la propia API en cada respuesta, nunca
+// estimado). cached_tokens viene de prompt_tokens_details, solo presente
+// cuando el caché de prompt (ver systemPrompt() más abajo) de verdad
+// aplicó -- permite confirmar si el ahorro real está funcionando o no,
+// en vez de asumirlo.
+export type LlmUsage = { prompt_tokens: number; completion_tokens: number; cached_tokens: number };
+async function callLlm(messages: ChatMessage[], forceText = false): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new LlmNotConfigured();
   const body: Record<string, unknown> = { model: MODEL, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
@@ -92,8 +101,24 @@ async function callLlm(messages: ChatMessage[], forceText = false): Promise<{ me
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`llm_http_${res.status}`);
-  const data = (await res.json()) as { choices: { message: ChatMessage }[] };
-  return { message: data.choices[0].message };
+  const data = (await res.json()) as {
+    choices: { message: ChatMessage }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+  };
+  const usage = data.usage
+    ? { prompt_tokens: data.usage.prompt_tokens ?? 0, completion_tokens: data.usage.completion_tokens ?? 0, cached_tokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0 }
+    : null;
+  return { message: data.choices[0].message, usage };
+}
+
+function recordLlmUsage(channel: Channel, sessionId: string, usage: LlmUsage): void {
+  try {
+    const log = readCollection<LlmUsage & { id: string; channel: string; session_id: string; at: string }>("llm_usage_logs");
+    log.push({ id: crypto.randomUUID(), channel: channel.toLowerCase(), session_id: sessionId, at: new Date().toISOString(), ...usage });
+    writeCollection("llm_usage_logs", log.slice(-5000));
+  } catch {
+    // El registro de coste nunca debe tumbar una respuesta real al cliente.
+  }
 }
 
 // Un turno empieza siempre en un mensaje de usuario: así nunca se corta una
@@ -230,7 +255,8 @@ export async function handleChatMessage(
           },
         ]
       : messages;
-    const { message } = await callLlm(callInput, isLastRound);
+    const { message, usage } = await callLlm(callInput, isLastRound);
+    if (usage) recordLlmUsage(channel, sessionId, usage);
     messages.push(message);
     turn.push(message);
 

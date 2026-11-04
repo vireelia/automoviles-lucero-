@@ -696,6 +696,39 @@ app.get("/debug/gmail_real_count_today", requireAdminToken, async (_req, res) =>
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+app.get("/debug/llm_usage_logs", requireAdminToken, debugSlice("llm_usage_logs", 500));
+// Resumen real de consumo por canal (04/11/2026, "a lo mejor cambio de
+// cuentas porque tampoco me marca el consumo que tiene cada agente" --
+// OpenAI no separa el gasto por canal en su propio panel). Tokens: dato
+// real devuelto por la propia API en cada llamada (ver agent.ts,
+// recordLlmUsage). Euros: ESTIMADO con el precio público de gpt-4.1-mini
+// (no facturado por OpenAI en este sistema, solo un cálculo orientativo) --
+// nunca se presenta como el cobro real, que solo lo tiene el panel de
+// OpenAI.
+app.get("/debug/llm_usage_resumen", requireAdminToken, (_req, res) => {
+  const PRECIO_INPUT_POR_1M = 0.4;
+  const PRECIO_CACHED_POR_1M = 0.1;
+  const PRECIO_OUTPUT_POR_1M = 1.6;
+  const log = readCollection<{ channel: string; prompt_tokens: number; completion_tokens: number; cached_tokens: number; at: string }>("llm_usage_logs");
+  const today = new Date().toISOString().slice(0, 10);
+  const porCanal: Record<string, { llamadas: number; prompt_tokens: number; cached_tokens: number; completion_tokens: number }> = {};
+  for (const r of log) {
+    if (!r.at.startsWith(today)) continue;
+    const c = (porCanal[r.channel] ??= { llamadas: 0, prompt_tokens: 0, cached_tokens: 0, completion_tokens: 0 });
+    c.llamadas++;
+    c.prompt_tokens += r.prompt_tokens;
+    c.cached_tokens += r.cached_tokens;
+    c.completion_tokens += r.completion_tokens;
+  }
+  const resumen = Object.fromEntries(
+    Object.entries(porCanal).map(([canal, c]) => {
+      const tokensNoCacheados = Math.max(0, c.prompt_tokens - c.cached_tokens);
+      const eurEstimado = (tokensNoCacheados / 1_000_000) * PRECIO_INPUT_POR_1M + (c.cached_tokens / 1_000_000) * PRECIO_CACHED_POR_1M + (c.completion_tokens / 1_000_000) * PRECIO_OUTPUT_POR_1M;
+      return [canal, { ...c, porcentaje_cacheado: c.prompt_tokens > 0 ? Math.round((c.cached_tokens / c.prompt_tokens) * 100) : 0, eur_estimado: Math.round(eurEstimado * 10000) / 10000 }];
+    }),
+  );
+  res.json({ fecha: today, por_canal: resumen, nota: "eur_estimado es orientativo (precio público gpt-4.1-mini), no el cobro real de OpenAI" });
+});
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
