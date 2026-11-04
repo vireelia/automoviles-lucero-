@@ -108,8 +108,25 @@ function llmTools(): unknown[] {
 // aplicó -- permite confirmar si el ahorro real está funcionando o no,
 // en vez de asumirlo.
 export type LlmUsage = { prompt_tokens: number; completion_tokens: number; cached_tokens: number };
-async function callLlm(messages: ChatMessage[], forceText = false): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
-  const apiKey = process.env.OPENAI_API_KEY;
+
+// Clave de OpenAI por canal (04/11/2026, "quiero cuentas separadas por
+// agente" -- Carolina, Daniel y el resto con su propio crédito, para que
+// si una se agota las otras sigan funcionando). Cada canal tiene su
+// variable propia; si no está puesta, cae en OPENAI_API_KEY (la
+// compartida de siempre) para no romper nada mientras se van añadiendo
+// las claves nuevas una a una.
+function apiKeyForChannel(channel: Channel): string | undefined {
+  const perChannel: Record<Channel, string | undefined> = {
+    WHATSAPP: process.env.OPENAI_API_KEY_WHATSAPP,
+    FACEBOOK: process.env.OPENAI_API_KEY_WHATSAPP, // Mismo agente (Carolina) que WhatsApp.
+    EMAIL: process.env.OPENAI_API_KEY_EMAIL,
+    CHAT: process.env.OPENAI_API_KEY_CHAT,
+  };
+  return perChannel[channel] ?? process.env.OPENAI_API_KEY;
+}
+
+async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
+  const apiKey = apiKeyForChannel(channel);
   if (!apiKey) throw new LlmNotConfigured();
   const body: Record<string, unknown> = { model: MODEL, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
   const res = await fetch(`${BASE_URL}/chat/completions`, {
@@ -288,7 +305,7 @@ export async function handleChatMessage(
           },
         ]
       : messages;
-    const { message, usage } = await callLlm(callInput, isLastRound);
+    const { message, usage } = await callLlm(callInput, channel, isLastRound);
     if (usage) recordLlmUsage(channel, sessionId, usage);
     messages.push(message);
     turn.push(message);
