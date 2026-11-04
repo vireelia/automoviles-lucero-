@@ -16,7 +16,24 @@ type ChatMessage = {
   tool_call_id?: string;
 };
 
-type ConversationRecord = { id: string; messages: ChatMessage[]; updated_at: string; user_turn_count?: number };
+// known_facts (04/11/2026, auditoría real: "el fix de ayer... solo fue
+// texto de prompt, no protección de código -- sigue pasando en el 30% de
+// las conversaciones, casi la misma tasa que antes del fix"). Pedirle al
+// modelo por texto que no repita get_business_info/get_responsable_contact
+// no basta -- se le puede olvidar, o la conversación puede recortarse
+// (trimToTurns) y perder el mensaje de la herramienta de una ronda vieja.
+// Esto persiste el dato real ya obtenido en el propio registro de la
+// conversación (no en `messages`, que sí se recorta) para poder
+// inyectarlo directo en el contexto en cada turno futuro -- el modelo ya
+// tiene el dato delante, sin depender de que decida "acordarse" de no
+// pedirlo otra vez.
+type ConversationRecord = {
+  id: string;
+  messages: ChatMessage[];
+  updated_at: string;
+  user_turn_count?: number;
+  known_facts?: { business_info?: unknown; responsable_contact?: unknown };
+};
 
 const MODEL = process.env.LUCERO_CHAT_MODEL ?? "gpt-4.1-mini";
 const BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
@@ -225,7 +242,12 @@ export async function handleChatMessage(
     channel === "WHATSAPP" || channel === "EMAIL"
       ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, UNOS ${channel === "WHATSAPP" ? "4" : "4 o 5"} MENSAJES (petición real de Ramón): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en unos ${channel === "WHATSAPP" ? "4" : "4 o 5"} mensajes tuyos como máximo: identificar lo que pide, dar el dato real o la disponibilidad con calidez, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No lo repitas en cada mensaje, solo en el de cierre real.`
       : "";
-  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}${brevityNote}`;
+  const knownFacts = conversation.known_facts ?? {};
+  const knownFactsNote = [
+    knownFacts.business_info ? `\nDato real YA CONOCIDO de get_business_info en esta conversación (no lo vuelvas a pedir): ${JSON.stringify(knownFacts.business_info)}` : "",
+    knownFacts.responsable_contact ? `\nDato real YA CONOCIDO de get_responsable_contact en esta conversación (no lo vuelvas a pedir): ${JSON.stringify(knownFacts.responsable_contact)}` : "",
+  ].join("");
+  const context = `\n\nCONTEXTO DE ESTA CONVERSACIÓN\nCanal: ${CHANNEL_LABEL[channel]} (en el parámetro "channel" de create_lead/upsert_lead y cualquier otra herramienta, usa SIEMPRE el código real "${channel}" tal cual, nunca la palabra de arriba). Identificador de contacto (úsalo SIEMPRE como "phone" en todas las herramientas -- create_lead, get_customer_history, etc. -- nunca uses en su lugar un teléfono o correo que aparezca dentro del texto del mensaje, aunque sea el dato real del cliente; ese dato real va en el campo "notes" si hace falta guardarlo, pero la clave de identificación es siempre esta): ${contact}.${realDelayNote ? `\n${realDelayNote}` : ""}${brevityNote}${knownFactsNote}`;
   // FALLO REAL de coste detectado (03/11/2026, "tenemos 3 dólares hasta
   // recargar mañana" -- el usuario comprobó el gasto real: ~24.000 tokens de
   // prompt estático (prompt-core.md + prompt-chat.md + tool-schemas.json) se
@@ -244,6 +266,16 @@ export async function handleChatMessage(
   let reply: string | null = null;
   const maxToolRounds = MAX_TOOL_ROUNDS_BY_CHANNEL[channel];
 
+  // FALLO REAL grave detectado (04/11/2026, auditoría real: "el cliente se
+  // queda sin ninguna respuesta" -- a diferencia del correo, que SÍ captura
+  // el fallo de la IA (fallo_ia_pendiente_revision), WhatsApp/Facebook/chat
+  // web nunca envuelven este bucle: un error real (llm_http_429, sin
+  // crédito) se propagaba sin capturar hasta el webhook, que solo hacía
+  // console.error -- el cliente real no recibía ni el FALLBACK_REPLY (ese
+  // solo cubre agotar rondas sin texto, nunca una excepción real) y nadie
+  // del equipo se enteraba. Ahora todo el bucle queda protegido igual que
+  // ya lo estaba el correo.
+  try {
   for (let round = 0; round < maxToolRounds && reply === null; round++) {
     const isLastRound = round === maxToolRounds - 1;
     const callInput = isLastRound
@@ -284,6 +316,8 @@ export async function handleChatMessage(
         }
         const result = await dispatchTool(call.function.name, args);
         toolRuns++;
+        if (call.function.name === "get_business_info") knownFacts.business_info = result;
+        else if (call.function.name === "get_responsable_contact") knownFacts.responsable_contact = result;
         appendToCollection("tool_call_logs", {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
@@ -302,6 +336,17 @@ export async function handleChatMessage(
 
     reply = message.content?.trim() || null;
   }
+  } catch (err) {
+    // Mismo criterio que createHandoffFallback de abajo -- nunca dejar al
+    // cliente real sin ninguna respuesta, y siempre avisar al equipo de un
+    // fallo real de la IA (créditos agotados u otro error real), nunca en
+    // silencio solo en console.error.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[chat] fallo real de la IA (${channel}, sesión ${sessionId}):`, message);
+    reply = FALLBACK_REPLY;
+    turn.push({ role: "assistant", content: reply });
+    await createHandoffFallback(sessionId);
+  }
 
   if (reply === null) {
     reply = FALLBACK_REPLY;
@@ -314,6 +359,7 @@ export async function handleChatMessage(
     messages: trimToTurns([...history, ...turn]),
     updated_at: new Date().toISOString(),
     user_turn_count: userTurnCount,
+    known_facts: knownFacts,
   });
   return { reply, tool_runs: toolRuns };
 }
