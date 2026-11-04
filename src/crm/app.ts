@@ -3873,7 +3873,15 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
     // del propio aviso, nunca del remitente.
     const wallapopContact = portalView === "wallapop" ? extractWallapopContact(m.text) : null;
     const lead = findLeadForContact(allLeads, wallapopContact?.phone ?? m.from, null);
-    const name = lead?.name || wallapopContact?.name || m.from;
+    // FALLO REAL detectado (04/11/2026, "porque salen asi algunos correos,
+    // y no con el nombre directo de la persona"): esto solo intentaba el
+    // nombre real del aviso para Wallapop (wallapopContact) -- en
+    // Coches.net, cuando todavía no había lead con nombre guardado, caía
+    // directo en el remitente compartido literal ("no-reply@coches.net"),
+    // en vez de sacar el nombre real del propio bloque JSON del aviso
+    // (igual que ya hace correoDetailFor más abajo).
+    const cochesNetIdentity = portalView !== "wallapop" && isCochesNetSharedSender(m.from) ? extractCochesNetClientIdentity(m.text) : null;
+    const name = lead?.name || wallapopContact?.name || cochesNetIdentity?.name || m.from;
     const time = (fmtDate(m.created_at).split(", ")[1]) ?? "";
     const isSelected = selectedConvo === c;
     // Fallo real detectado (03/11/2026, pedido real: "pon en esos números
