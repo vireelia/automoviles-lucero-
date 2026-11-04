@@ -62,13 +62,39 @@ function withinWindow(msUntil: number, hoursBefore: number): boolean {
   return msUntil <= target + tolerance && msUntil >= target - tolerance;
 }
 
-function sendApptReminder(appt: Appointment, message: string) {
-  if (!appt.lead_phone) return;
+// FALLO REAL grave detectado (04/11/2026, "pero se lo enviaste a los
+// clientes?" -- comprobado con datos reales en email_outbox: al menos 2
+// recordatorios de hoy fallaron de verdad (límite real de envíos de Gmail,
+// "User-rate limit exceeded") pero reminder_24h_sent/reminder_6h_sent se
+// marcaban en true igual, porque el envío era "fire and forget" (void) sin
+// esperar ni comprobar el resultado real). Ahora espera el resultado real y
+// solo devuelve true si de verdad se entregó -- si falla, el llamador no
+// marca el recordatorio como enviado, así se reintenta en el siguiente
+// ciclo del scheduler en vez de darlo por hecho sin serlo.
+async function sendApptReminder(appt: Appointment, message: string): Promise<boolean> {
+  if (!appt.lead_phone) return false;
   if (appt.lead_phone.includes("@")) {
-    void deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
-  } else {
-    void sendWhatsapp({ lead_phone: appt.lead_phone, message });
+    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+    if (result.status !== "sent") {
+      console.warn(`[scheduler] recordatorio por correo falló de verdad para ${appt.id} (${appt.lead_phone}):`, result.error);
+      raiseAlert({
+        kind: "gestion_portal",
+        lead_phone: appt.lead_phone,
+        reason: `El recordatorio automático de la cita de hoy no se pudo enviar por correo (${result.error ?? "fallo real desconocido"}). Avisa al cliente a mano si hace falta.`,
+      });
+    }
+    return result.status === "sent";
   }
+  const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
+  if (result.status !== "ok") {
+    console.warn(`[scheduler] recordatorio por WhatsApp falló de verdad para ${appt.id} (${appt.lead_phone})`);
+    raiseAlert({
+      kind: "gestion_portal",
+      lead_phone: appt.lead_phone,
+      reason: `El recordatorio automático de la cita de hoy no se pudo enviar por WhatsApp. Avisa al cliente a mano si hace falta.`,
+    });
+  }
+  return result.status === "ok";
 }
 
 // Recordatorios escalonados (petición real, 20/10/2026: "también se le debe
@@ -78,7 +104,7 @@ function sendApptReminder(appt: Appointment, message: string) {
 // el caso de última hora (la cita se concierta con menos de 24h de
 // antelación, así que nunca llega a cruzar esa ventana) recibe solo el de 1h
 // -- nunca los tres avisos a la vez para la misma cita.
-function checkAppointmentReminders() {
+async function checkAppointmentReminders() {
   const appointments = readCollection<Appointment>("appointments", []);
   const now = Date.now();
   let changed = false;
@@ -91,24 +117,30 @@ function checkAppointmentReminders() {
     if (msUntil <= 0) continue;
 
     if (!appt.reminder_24h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.long)) {
-      sendApptReminder(appt, `Recordatorio: mañana tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
-      appt.reminder_24h_sent = true;
-      changed = true;
-      console.log(`[scheduler] recordatorio 24h encolado para ${appt.id}`);
+      const ok = await sendApptReminder(appt, `Recordatorio: mañana tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
+      if (ok) {
+        appt.reminder_24h_sent = true;
+        changed = true;
+        console.log(`[scheduler] recordatorio 24h entregado de verdad para ${appt.id}`);
+      }
       continue;
     }
     if (appt.reminder_24h_sent && !appt.reminder_6h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.mid)) {
-      sendApptReminder(appt, `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
-      appt.reminder_6h_sent = true;
-      changed = true;
-      console.log(`[scheduler] recordatorio 6h encolado para ${appt.id}`);
+      const ok = await sendApptReminder(appt, `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
+      if (ok) {
+        appt.reminder_6h_sent = true;
+        changed = true;
+        console.log(`[scheduler] recordatorio 6h entregado de verdad para ${appt.id}`);
+      }
       continue;
     }
     if (!appt.reminder_24h_sent && !appt.reminder_1h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.short)) {
-      sendApptReminder(appt, `Recordatorio: en 1 hora tienes una cita en Automóviles Lucero (a las ${appt.requested_time}).`);
-      appt.reminder_1h_sent = true;
-      changed = true;
-      console.log(`[scheduler] recordatorio 1h (cita de última hora) encolado para ${appt.id}`);
+      const ok = await sendApptReminder(appt, `Recordatorio: en 1 hora tienes una cita en Automóviles Lucero (a las ${appt.requested_time}).`);
+      if (ok) {
+        appt.reminder_1h_sent = true;
+        changed = true;
+        console.log(`[scheduler] recordatorio 1h (cita de última hora) entregado de verdad para ${appt.id}`);
+      }
     }
   }
   if (changed) writeCollection("appointments", appointments);
@@ -285,7 +317,7 @@ export function startScheduler() {
   setInterval(() => {
     (async () => {
       try {
-        checkAppointmentReminders();
+        await checkAppointmentReminders();
         checkTeamUpcomingVisits();
         // Desactivado (03/11/2026, "quita los avisos" -- ya sabe que la IA
         // está fallando por los créditos de OpenAI, no hace falta que el

@@ -696,6 +696,26 @@ app.get("/debug/gmail_real_count_today", requireAdminToken, async (_req, res) =>
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+// Uso puntual real (04/11/2026, "pero se lo enviaste a los clientes?" --
+// comprobado: 2 recordatorios de hoy fallaron de verdad y quedaron
+// marcados como enviados por el fallo ya corregido arriba) -- permite
+// reintentar un recordatorio concreto sin esperar al siguiente ciclo.
+app.post("/admin/reset_appointment_reminder", requireAdminToken, (req, res) => {
+  const { appointment_id, field } = req.body ?? {};
+  if (typeof appointment_id !== "string" || !["reminder_24h_sent", "reminder_6h_sent", "reminder_1h_sent"].includes(field)) {
+    res.status(400).json({ error: "appointment_id y field (reminder_24h_sent|reminder_6h_sent|reminder_1h_sent) requeridos" });
+    return;
+  }
+  const appts = readCollection<Record<string, unknown>>("appointments");
+  const appt = appts.find((a) => a.id === appointment_id);
+  if (!appt) {
+    res.status(404).json({ error: "cita no encontrada" });
+    return;
+  }
+  appt[field] = false;
+  writeCollection("appointments", appts);
+  res.json({ ok: true, appointment_id, field });
+});
 app.get("/debug/llm_usage_logs", requireAdminToken, debugSlice("llm_usage_logs", 500));
 // Resumen real de consumo por canal (04/11/2026, "a lo mejor cambio de
 // cuentas porque tampoco me marca el consumo que tiene cada agente" --
