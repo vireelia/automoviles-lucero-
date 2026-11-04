@@ -40,7 +40,7 @@ import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { getBusinessConfig } from "./data/business-config.js";
-import { processInboundEmail } from "./email/agent.js";
+import { processInboundEmail, deliverEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
 import { bootstrapAdmin, listUsers } from "./crm/auth.js";
@@ -715,6 +715,32 @@ app.post("/admin/reset_appointment_reminder", requireAdminToken, (req, res) => {
   appt[field] = false;
   writeCollection("appointments", appts);
   res.json({ ok: true, appointment_id, field });
+});
+// Envío inmediato real (04/11/2026, "y recuerdales la visita" -- la ventana
+// de "6h antes" ya había pasado para el caso real de hoy, así que resetear
+// el flag no bastaba para que el scheduler lo reintentara). Reutiliza el
+// mismo deliverEmail/sendWhatsapp reales -- nunca inventa un canal nuevo,
+// solo salta la comprobación de ventana horaria para un caso puntual.
+app.post("/admin/send_appointment_reminder_now", requireAdminToken, async (req, res) => {
+  const { appointment_id } = req.body ?? {};
+  if (typeof appointment_id !== "string") {
+    res.status(400).json({ error: "appointment_id requerido" });
+    return;
+  }
+  const appts = readCollection<{ id: string; lead_phone?: string; requested_time?: string }>("appointments");
+  const appt = appts.find((a) => a.id === appointment_id);
+  if (!appt || !appt.lead_phone) {
+    res.status(404).json({ error: "cita no encontrada o sin teléfono/correo real" });
+    return;
+  }
+  const message = `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`;
+  if (appt.lead_phone.includes("@")) {
+    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+    res.json({ enviado: result.status === "sent", detalle: result });
+  } else {
+    const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
+    res.json({ enviado: result.status === "ok", detalle: result });
+  }
 });
 app.get("/debug/llm_usage_logs", requireAdminToken, debugSlice("llm_usage_logs", 500));
 // Resumen real de consumo por canal (04/11/2026, "a lo mejor cambio de
