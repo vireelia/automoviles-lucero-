@@ -6,9 +6,11 @@ import { notifyReservation } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { sendWhatsapp } from "./delivery.js";
-import { isGoogleConnected, sendGmail } from "../integrations/google.js";
+import { isGoogleConnected } from "../integrations/google.js";
+import { deliverEmail } from "../email/agent.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
 import { markLeadRealIntent } from "./leads.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 function vehicleLabel(vehicleId: string): string {
   const v = currentVehicles().find((x) => x.id === vehicleId);
@@ -20,17 +22,26 @@ function vehicleLabel(vehicleId: string): string {
 // solo cambiaba el estado interno, nadie avisaba al cliente salvo que el
 // equipo le escribiera a mano. Mismo patrón honesto que el resto de envíos:
 // si falla, se registra el error, nunca se finge entregado.
-async function sendReservationConfirmedMessage(contact: string | null, vehicleId: string): Promise<void> {
-  if (!contact) return;
+// FALLO REAL grave detectado (04/11/2026, "que se les envíe una
+// confirmación real por WhatsApp a cada cliente que no sea falso"): mismo
+// fallo que en appointments.ts -- sendWhatsapp no lanza excepción si Meta
+// rechaza el envío, devuelve {status:"denied"} con éxito HTTP normal. Esta
+// función solo capturaba excepciones reales, así que una reserva podía
+// quedar "confirmada" sin que el cliente hubiera recibido nunca el aviso.
+async function sendReservationConfirmedMessage(contact: string | null, vehicleId: string): Promise<boolean> {
+  if (!contact) return false;
   const message = renderTemplate(getMessageTemplate("reserva_confirmada"), { vehiculo: vehicleLabel(vehicleId) });
   try {
     if (contact.includes("@")) {
-      if (isGoogleConnected()) await sendGmail(contact, "Reserva confirmada -- Automóviles Lucero", message);
-    } else {
-      await sendWhatsapp({ lead_phone: contact, message });
+      if (!isGoogleConnected()) return false;
+      const result = await deliverEmail(contact, "Reserva confirmada -- Automóviles Lucero", message);
+      return result.status === "sent";
     }
+    const result = await sendWhatsapp({ lead_phone: contact, message });
+    return result.status === "ok";
   } catch (err) {
     console.error("[reservations] no se pudo enviar la confirmación de reserva al cliente:", err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -169,7 +180,14 @@ export async function confirmReservation(args: { reservation_id: string; verifie
 
   writeCollection("reservations", reservations);
   setOfficialStatus(reservation.vehicle_id, "RESERVED", reservation.id);
-  await sendReservationConfirmedMessage(reservation.lead_phone, reservation.vehicle_id);
+  const entregado = await sendReservationConfirmedMessage(reservation.lead_phone, reservation.vehicle_id);
+  if (!entregado) {
+    raiseAlert({
+      kind: "gestion_portal",
+      lead_phone: reservation.lead_phone,
+      reason: `La confirmación automática de la reserva de ${vehicleLabel(reservation.vehicle_id)} no se pudo entregar al cliente de verdad -- avísale a mano.`,
+    });
+  }
 
   return envelope({
     status: "ok",

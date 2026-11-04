@@ -1,6 +1,7 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
-import { isGoogleConnected, calendarBusy, calendarCreateEvent, sendGmail } from "../integrations/google.js";
+import { isGoogleConnected, calendarBusy, calendarCreateEvent } from "../integrations/google.js";
+import { deliverEmail } from "../email/agent.js";
 import { isMadridHoliday } from "../data/holidays-madrid-2026.js";
 import { withAppointmentLock } from "./appointment-lock.js";
 import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
@@ -8,6 +9,7 @@ import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { markLeadRealIntent } from "./leads.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 function now() {
   return new Date().toISOString();
@@ -67,17 +69,31 @@ function formatVisitDate(dateStr: string): string {
 // verdad confirmada automáticamente -- nunca para el caso de fin de
 // semana/festivo ni cuando falta día u hora, porque ahí no hay nada real
 // que confirmar todavía.
-async function sendVisitConfirmationMessage(contact: string | undefined, vehicleId: string | undefined, dateStr: string, timeStr: string): Promise<void> {
-  if (!contact) return;
+// FALLO REAL grave detectado (04/11/2026, "que se les envíe una
+// confirmación real por WhatsApp a cada cliente que no sea falso"): esto
+// llamaba a sendWhatsapp/sendGmail y solo capturaba una EXCEPCIÓN real --
+// pero sendWhatsapp nunca lanza excepción si falla, devuelve
+// {status:"denied", error_code:...} con éxito HTTP normal. Si Meta
+// rechazaba el envío (ventana de 24h cerrada, plantilla no aprobada,
+// etc.), esta función se quedaba calladita y create_appointment seguía
+// diciendo "confirmada" como si el cliente SÍ hubiera recibido el aviso,
+// cuando en realidad nunca le llegó nada -- una confirmación falsa. Ahora
+// devuelve si de verdad se entregó, para que el llamador pueda avisar al
+// equipo si no.
+async function sendVisitConfirmationMessage(contact: string | undefined, vehicleId: string | undefined, dateStr: string, timeStr: string): Promise<boolean> {
+  if (!contact) return false;
   const message = `Hola, le escribe Automóviles Lucero. Su visita para ver ${vehicleLabel(vehicleId)} queda confirmada para el ${formatVisitDate(dateStr)} a las ${timeStr}. Le esperamos.`;
   try {
     if (contact.includes("@")) {
-      if (isGoogleConnected()) await sendGmail(contact, "Visita confirmada -- Automóviles Lucero", message);
-    } else {
-      await sendWhatsapp({ lead_phone: contact, message });
+      if (!isGoogleConnected()) return false;
+      const result = await deliverEmail(contact, "Visita confirmada -- Automóviles Lucero", message);
+      return result.status === "sent";
     }
+    const result = await sendWhatsapp({ lead_phone: contact, message });
+    return result.status === "ok";
   } catch (err) {
     console.error("[appointments] no se pudo enviar el mensaje de confirmación de visita:", err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -158,7 +174,14 @@ export async function createAppointment(args: {
   markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: ver nota arriba -- una cita registrada ya es intención real.
   await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
   if (canAutoConfirm) {
-    await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
+    const entregado = await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
+    if (!entregado) {
+      raiseAlert({
+        kind: "gestion_portal",
+        lead_phone: args.lead_phone ?? null,
+        reason: `La confirmación automática de la visita (${args.requested_date} a las ${args.requested_time}) no se pudo entregar al cliente de verdad -- avísale a mano.`,
+      });
+    }
   } else {
     createAutoTask({
       lead_phone: args.lead_phone ?? null,
