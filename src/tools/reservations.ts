@@ -11,6 +11,7 @@ import { deliverEmail } from "../email/agent.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
+import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
 
 function vehicleLabel(vehicleId: string): string {
   const v = currentVehicles().find((x) => x.id === vehicleId);
@@ -38,7 +39,15 @@ async function sendReservationConfirmedMessage(contact: string | null, vehicleId
       return result.status === "sent";
     }
     const result = await sendWhatsapp({ lead_phone: contact, message });
-    return result.status === "ok";
+    if (result.status === "ok") return true;
+    // FALLO REAL detectado (04/11/2026, "pero la plantilla no estaba
+    // activa?" -- mismo fallo que en appointments.ts, sendWhatsapp nunca
+    // cae en la plantilla aprobada como respaldo).
+    if (!(await isContactoInicialTemplateApproved())) return false;
+    const templateSent = await sendZernioWhatsappVehicleContactTemplate(contact, vehicleLabel(vehicleId));
+    if (!templateSent.ok) return false;
+    const retrySent = await sendWhatsapp({ lead_phone: contact, message });
+    return retrySent.status === "ok";
   } catch (err) {
     console.error("[reservations] no se pudo enviar la confirmación de reserva al cliente:", err instanceof Error ? err.message : err);
     return false;

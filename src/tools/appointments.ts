@@ -10,6 +10,7 @@ import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
+import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
 
 function now() {
   return new Date().toISOString();
@@ -90,7 +91,18 @@ async function sendVisitConfirmationMessage(contact: string | undefined, vehicle
       return result.status === "sent";
     }
     const result = await sendWhatsapp({ lead_phone: contact, message });
-    return result.status === "ok";
+    if (result.status === "ok") return true;
+    // FALLO REAL detectado (04/11/2026, "pero la plantilla no estaba
+    // activa?" -- sendWhatsapp SOLO intenta texto libre, nunca cae en la
+    // plantilla aprobada por Meta como respaldo, a diferencia del flujo
+    // de contacto inicial. Si el cliente no escribió en las últimas 24h
+    // (caso normal: la IA ya cerró la conversación antes de la cita),
+    // esto fallaba siempre aunque la plantilla sí esté aprobada.
+    if (!(await isContactoInicialTemplateApproved())) return false;
+    const templateSent = await sendZernioWhatsappVehicleContactTemplate(contact, vehicleLabel(vehicleId));
+    if (!templateSent.ok) return false;
+    const retrySent = await sendWhatsapp({ lead_phone: contact, message });
+    return retrySent.status === "ok";
   } catch (err) {
     console.error("[appointments] no se pudo enviar el mensaje de confirmación de visita:", err instanceof Error ? err.message : err);
     return false;
