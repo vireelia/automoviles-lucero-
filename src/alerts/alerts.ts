@@ -1,11 +1,11 @@
 import crypto from "crypto";
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
-import { listUsers } from "../crm/auth.js";
-import { isGoogleConnected, sendGmail } from "../integrations/google.js";
 
-// Avisos urgentes para Ramón y José. Cada aviso queda en el CRM (bloque de Hoy)
-// hasta que alguien lo marca como atendido, y además sale por correo desde la
-// cuenta del negocio si Google está conectado.
+// Avisos urgentes para Ramón y José. Cada aviso queda en el CRM (bloque de
+// Hoy) hasta que alguien lo marca como atendido. El correo como canal de
+// aviso se desactivó del todo (04/11/2026, "deja los avisos por correos
+// quitalos") -- el único canal real de aviso activo es WhatsApp, ver
+// team-notify.ts.
 export type AlertKind = "lead_caliente" | "handoff_urgente" | "reserva_pendiente" | "gestion_portal" | "visita_agendada" | "visita_cancelada" | "visita_proxima" | "fallo_tecnico";
 export type Alert = {
   id: string;
@@ -46,66 +46,9 @@ export type Alert = {
 // sea literalmente el mismo texto, no solo el mismo tipo+teléfono.
 const DEDUP_HOURS = 6;
 
-// Destinatarios: TODOS los usuarios reales del CRM, más las direcciones de
-// ALERT_EMAILS si se configuran.
-// FALLO GRAVÍSIMO detectado (27/10/2026, dato real de producción): esto
-// excluía a propósito a los administradores -- pero la cuenta real de
-// Ramón y José en este CRM ES "admin" (automovileslucero@gmail.com), y su
-// WhatsApp nunca puede recibir estos avisos (ver team-notify.ts: su número
-// personal ES el número del negocio). Resultado real confirmado: 15 de 15
-// avisos por WhatsApp a Ramón fallaron, y el correo -- su único respaldo
-// real -- nunca se les enviaba tampoco por este filtro. Solo le llegaba a
-// Rubén (equipo). Ahora todos los roles reciben el correo de respaldo.
-function recipients(): string[] {
-  const fromCrm = listUsers().map((u) => u.email);
-  const fromEnv = (process.env.ALERT_EMAILS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return [...new Set([...fromCrm, ...fromEnv])];
-}
-
 function setEmailStatus(id: string, status: string) {
   const all = readCollection<Alert>("alerts");
   writeCollection<Alert>("alerts", all.map((a) => (a.id === id ? { ...a, email_status: status } : a)));
-}
-
-async function sendAlertEmail(alert: Alert) {
-  const to = recipients();
-  if (to.length === 0) return setEmailStatus(alert.id, "sin_destinatarios");
-  if (!isGoogleConnected()) return setEmailStatus(alert.id, "sin_correo_conectado");
-  const title =
-    alert.kind === "lead_caliente"
-      ? "Cliente caliente: quiere comprar ya"
-      : alert.kind === "reserva_pendiente"
-        ? "RESERVA de 500 € -- gestionar cobro"
-        : alert.kind === "gestion_portal"
-          ? "Responder en la app -- el correo no llega"
-          : alert.kind === "visita_agendada"
-            ? "Nueva visita agendada"
-            : alert.kind === "visita_cancelada"
-              ? "Visita cancelada"
-              : "Atención urgente";
-  const body = [
-    title,
-    "",
-    `Cliente: ${alert.name || "sin nombre"}`,
-    `Teléfono: ${alert.lead_phone || "sin teléfono"}`,
-    `Motivo: ${alert.reason}`,
-    ...(alert.draft_note ? ["", "Texto listo para copiar y pegar en la app:", "---", alert.draft_note, "---"] : []),
-    "",
-    "Llámale cuanto antes. Lo tienes en el CRM, en la pantalla Hoy:",
-    "https://virelia-hub-lucero.lzc0bh.easypanel.host/crm",
-  ].join("\n");
-  try {
-    for (const address of to) {
-      await sendGmail(address, `[Lucero] ${title}`, body);
-    }
-    setEmailStatus(alert.id, "enviado");
-  } catch (err) {
-    console.error("[alertas] correo:", err instanceof Error ? err.message : err);
-    setEmailStatus(alert.id, "error");
-  }
 }
 
 // FALLO REAL detectado (21/10/2026, "esto de llamar ya no entiendo qué
@@ -155,26 +98,13 @@ export function raiseAlert(input: {
     done_at: selfResolving ? new Date().toISOString() : null,
   };
   appendToCollection("alerts", alert);
-  // Fallo real detectado (03/11/2026, "esos correos que no se envíen
-  // tantos, estaban haciendo spam" -- caso real: 98 correos reales de
-  // gestion_portal en una sola tarde, al limpiar de golpe meses de
-  // backlog real atascado): gestion_portal es informativo y de bajo
-  // riesgo (el registro real ya queda siempre en el CRM, en Pendientes,
-  // nadie pierde el dato) -- pero un pico real de muchos a la vez no
-  // necesita un correo cada uno. Límite real: máximo 5 correos de
-  // gestion_portal por ventana de 30 min -- a partir del 6º, el aviso
-  // se sigue registrando en el CRM igual que siempre, solo deja de
-  // mandar correo individual hasta que la ventana se renueve.
-  const EMAIL_BURST_LIMIT = 5;
-  const EMAIL_BURST_WINDOW_MS = 30 * 60 * 1000;
-  const enBurst =
-    input.kind === "gestion_portal" &&
-    readCollection<Alert>("alerts").filter(
-      (a) => a.kind === "gestion_portal" && a.email_status === "enviado" && Date.now() - new Date(a.created_at).getTime() < EMAIL_BURST_WINDOW_MS,
-    ).length >= EMAIL_BURST_LIMIT;
-  // No se espera al correo: el aviso ya queda registrado aunque falle el envío.
-  if (!enBurst) void sendAlertEmail(alert);
-  else setEmailStatus(alert.id, "omitido_pico_real");
+  // Avisos por correo desactivados del todo (04/11/2026, "deja los avisos
+  // por correos quitalos, y envia solo avisos por whassap a ramon y jose
+  // de visitas y reservas solo eso"): el registro real sigue quedando
+  // siempre en el CRM (Pendientes), solo se deja de mandar correo. El
+  // único canal real de aviso ahora es WhatsApp, y solo para
+  // visitas/reservas (ver team-notify.ts, VISIT_RESERVATION_KINDS).
+  setEmailStatus(alert.id, "desactivado_a_peticion_real");
   return alert;
 }
 

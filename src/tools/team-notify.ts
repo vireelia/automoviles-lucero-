@@ -36,6 +36,14 @@ import { callUrgentAlert } from "../integrations/twilio-voice.js";
 // handoff, merece el mismo respaldo de llamada si el WhatsApp falla.
 const URGENT_ALERT_KINDS: AlertKind[] = ["handoff_urgente", "reserva_pendiente", "lead_caliente", "fallo_tecnico"];
 
+// Alcance real reducido (04/11/2026, "envia solo avisos por whassap a ramon
+// y jose de visitas y reservas solo eso"): el aviso por WhatsApp a Ramón/José
+// ahora solo se envía para visitas y reservas reales -- el resto de tipos
+// (handoff_urgente, lead_caliente, fallo_tecnico) siguen quedando
+// registrados en el CRM (raiseAlert ya lo hace siempre) pero ya no generan
+// ningún WhatsApp ni llamada de voz por este canal.
+const VISIT_RESERVATION_KINDS: AlertKind[] = ["visita_agendada", "visita_cancelada", "visita_proxima", "reserva_pendiente"];
+
 // Se lee en cada aviso, no en un const de módulo (26/10/2026) -- así un
 // teléfono editado desde Ajustes se usa al momento, sin reiniciar el proceso.
 function team(): { name: string; phone: string }[] {
@@ -79,6 +87,11 @@ function technicalAlertExtraRecipient(): { name: string; phone: string } | null 
 
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null, name?: string | null, channel?: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, name: name ?? null, channel: channel ?? null, reason: whatsappText });
+  // El aviso ya queda registrado en el CRM (raiseAlert, arriba) para TODOS
+  // los tipos -- pero el envío real por WhatsApp/llamada solo se dispara
+  // para visitas y reservas (petición real 04/11/2026, ver
+  // VISIT_RESERVATION_KINDS).
+  if (!VISIT_RESERVATION_KINDS.includes(kind)) return;
   const extra = technicalAlertExtraRecipient();
   const recipients = kind === "fallo_tecnico" && extra ? [...team(), extra] : team();
   for (const member of recipients) {
