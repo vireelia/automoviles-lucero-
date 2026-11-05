@@ -700,6 +700,23 @@ app.get("/debug/gmail_real_count_today", requireAdminToken, async (_req, res) =>
 // comprobado: 2 recordatorios de hoy fallaron de verdad y quedaron
 // marcados como enviados por el fallo ya corregido arriba) -- permite
 // reintentar un recordatorio concreto sin esperar al siguiente ciclo.
+// Uso puntual real (05/11/2026, "activalo para probarlo" -- la propia
+// conversación de prueba cruzó el tope de 4 respuestas y queda bloqueada
+// con el mismo cierre fijo 3 horas). Reinicia una conversación concreta
+// al instante -- borra el historial de chat guardado para ese
+// identificador (teléfono o "mail:..."), nunca toca leads/citas/avisos
+// reales, solo el estado de la propia conversación con la IA.
+app.post("/admin/reset_chat_conversation", requireAdminToken, (req, res) => {
+  const { session_id } = req.body ?? {};
+  if (typeof session_id !== "string") {
+    res.status(400).json({ error: "session_id requerido" });
+    return;
+  }
+  const conversaciones = readCollection<{ id: string }>("chat_conversations");
+  const sinEsa = conversaciones.filter((c) => c.id !== session_id);
+  writeCollection("chat_conversations", sinEsa);
+  res.json({ ok: true, session_id, existia: sinEsa.length !== conversaciones.length });
+});
 app.post("/admin/reset_appointment_reminder", requireAdminToken, (req, res) => {
   const { appointment_id, field } = req.body ?? {};
   if (typeof appointment_id !== "string" || !["reminder_24h_sent", "reminder_6h_sent", "reminder_1h_sent"].includes(field)) {
