@@ -1,6 +1,6 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 import { envelope } from "../response.js";
-import { isGoogleConnected, calendarBusy, calendarCreateEvent } from "../integrations/google.js";
+import { isGoogleConnected, calendarBusy, calendarCreateEvent, calendarDeleteEvent } from "../integrations/google.js";
 import { deliverEmail } from "../email/agent.js";
 import { isMadridHoliday } from "../data/holidays-madrid-2026.js";
 import { withAppointmentLock } from "./appointment-lock.js";
@@ -237,6 +237,22 @@ export async function cancelAppointment(args: { appointment_id: string; reason?:
   const appointments = readCollection<any>("appointments", []);
   const appt = appointments.find((a) => a.id === args.appointment_id);
   if (!appt) return envelope({ status: "not_found", error_code: "appointment_not_found" });
+
+  // FALLO REAL detectado (05/11/2026, "porque no podemos activar carolina"
+  // -- investigando se encontraron 23 eventos reales en Google Calendar sin
+  // ninguna cita viva detrás, bloqueando casi todos los huecos de los
+  // próximos 10 días): cancelar una cita nunca liberaba su hueco real en el
+  // calendario -- el evento se quedaba ahí para siempre, acumulándose con
+  // cada prueba o cancelación real. Ahora, si la cita tenía un evento real
+  // (google_event_id), se borra también -- best-effort, nunca bloquea la
+  // cancelación si Google falla.
+  if (appt.google_event_id && isGoogleConnected()) {
+    try {
+      await calendarDeleteEvent(appt.google_event_id);
+    } catch (err) {
+      console.error("[appointments] no se pudo borrar el evento real de Google Calendar al cancelar:", err instanceof Error ? err.message : String(err));
+    }
+  }
 
   appt.status = "cancelled";
   appt.cancel_reason = args.reason ?? null;
