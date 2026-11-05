@@ -35,7 +35,7 @@ import {
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused } from "./tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "./tools/agent-toggle.js";
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
@@ -741,6 +741,19 @@ app.post("/admin/send_appointment_reminder_now", requireAdminToken, async (req, 
     const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
     res.json({ enviado: result.status === "ok", detalle: result });
   }
+});
+// Uso puntual real (05/11/2026, "le estoy escribiendo por whassap y no me
+// responde" -- causa real: el propio número de prueba quedó pausado desde
+// el 3/11 y nadie se acordaba). Reanudar un chat pausado sin tener que
+// entrar al CRM con sesión.
+app.post("/admin/reanudar_chat_whatsapp", requireAdminToken, (req, res) => {
+  const { phone } = req.body ?? {};
+  if (typeof phone !== "string") {
+    res.status(400).json({ error: "phone requerido" });
+    return;
+  }
+  setWhatsappChatPaused(phone.replace(/^\+/, ""), false, "admin-token");
+  res.json({ ok: true, phone, pausado: isWhatsappChatPaused(phone.replace(/^\+/, "")) });
 });
 app.get("/debug/llm_usage_logs", requireAdminToken, debugSlice("llm_usage_logs", 500));
 // Resumen real de consumo por canal (04/11/2026, "a lo mejor cambio de
