@@ -236,12 +236,24 @@ export async function handleChatMessage(
   // vuelve a llamar a la IA en esta conversación -- se corta con un cierre
   // fijo y un aviso real al equipo, en vez de depender de que el modelo
   // "se acuerde" de parar.
+  // FALLO REAL detectado el mismo día probándolo (05/11/2026, "carolina me
+  // escribio... no tan seca"): el contador contaba TODO el historial
+  // guardado, sin importar cuántos días habían pasado -- un cliente real
+  // que ya habló con Carolina hace días y vuelve a escribir se encontraba
+  // el corte en su primer mensaje nuevo, aunque esta conversación de hoy
+  // recién empezara. "4 mensajes" es por conversación real, no de por
+  // vida -- si pasó más de HORAS_NUEVA_CONVERSACION desde la última vez,
+  // se trata como una conversación nueva para este límite (el historial
+  // sigue guardado igual para que recuerde el contexto, solo no cuenta
+  // para el tope de brevedad).
+  const HORAS_NUEVA_CONVERSACION = 3;
+  const esConversacionNueva = Date.now() - new Date(conversation.updated_at).getTime() > HORAS_NUEVA_CONVERSACION * 3600 * 1000;
   const MAX_RESPUESTAS_BREVEDAD = 4;
-  if (channel === "WHATSAPP" || channel === "EMAIL") {
+  if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL")) {
     const respuestasReales = conversation.messages.filter((m) => m.role === "assistant" && m.content?.trim()).length;
     if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD) {
       const cierre =
-        "Para no alargarlo más, lo mejor es que hables directo con el equipo -- te paso con ellos. ¡Gracias por escribirnos!";
+        "¡Qué tal! Para no alargar mucho más la conversación, lo mejor es que te atienda directamente el equipo -- ahora mismo te paso con ellos. ¡Gracias por escribirnos!";
       await dispatchTool("create_handoff", {
         reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (petición real de ir al grano) -- revisar si el cliente sigue necesitando algo.`,
         notes: `Canal ${channel}, sesión ${sessionId}.`,
