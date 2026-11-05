@@ -3,6 +3,8 @@ import path from "path";
 import crypto from "crypto";
 import { readCollection, writeCollection, appendToCollection } from "../store.js";
 import { dispatchTool } from "./dispatch.js";
+import { getBusinessConfig } from "../data/business-config.js";
+import { businessInfo } from "../data/business-info.js";
 
 // Agente de chat propio (fuera de Retell). Usa el mismo prompt (núcleo
 // común + addendum de chat) y las mismas 26 herramientas que el agente de
@@ -252,8 +254,20 @@ export async function handleChatMessage(
   if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL")) {
     const respuestasReales = conversation.messages.filter((m) => m.role === "assistant" && m.content?.trim()).length;
     if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD) {
-      const cierre =
-        "¡Qué tal! Para no alargar mucho más la conversación, lo mejor es que te atienda directamente el equipo -- ahora mismo te paso con ellos. ¡Gracias por escribirnos!";
+      // Cierre enriquecido con datos reales (05/11/2026, "que ponga
+      // direccion de la tienda... el como llegar, numero de telefono de
+      // ramon y jose, y tambien el link del portal de automoviles lucero
+      // en coches.net") -- igual que el cierre normal de la BREVEDAD REAL
+      // de más abajo, pero este es el cierre DURO (tope por código), así
+      // que los datos van fijos aquí, tomados en el momento real
+      // (getBusinessConfig/businessInfo), nunca inventados.
+      const cfg = getBusinessConfig();
+      const cierre = [
+        "¡Qué tal! Para no alargar mucho más la conversación, lo mejor es que te atienda directamente el equipo -- ahora mismo les aviso para que te escriban.",
+        `También puedes visitarnos en ${businessInfo.location.address.value} (${businessInfo.location.how_to_arrive}).`,
+        `Teléfonos: Ramón ${cfg.ramonPhone} · José ${cfg.josePhone}.`,
+        "Todo nuestro catálogo: https://www.coches.net/concesionario/autolunaslagunamadrid/",
+      ].join("\n");
       await dispatchTool("create_handoff", {
         reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (petición real de ir al grano) -- revisar si el cliente sigue necesitando algo.`,
         notes: `Canal ${channel}, sesión ${sessionId}.`,
