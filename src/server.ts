@@ -15,7 +15,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -673,6 +673,16 @@ app.get("/debug/calendar_busy_raw", requireAdminToken, async (_req, res) => {
     const in3Days = new Date(now.getTime() + 3 * 24 * 3600 * 1000);
     const busy = await calendarBusy(now.toISOString(), in3Days.toISOString());
     res.json({ ok: true, timeMin: now.toISOString(), timeMax: in3Days.toISOString(), busy });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err), descripcion: describeGoogleError(err) });
+  }
+});
+app.get("/debug/calendar_events_raw", requireAdminToken, async (_req, res) => {
+  try {
+    const now = new Date();
+    const in10Days = new Date(now.getTime() + 10 * 24 * 3600 * 1000);
+    const items = await calendarListEvents(now.toISOString(), in10Days.toISOString());
+    res.json({ ok: true, timeMin: now.toISOString(), timeMax: in10Days.toISOString(), items });
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err), descripcion: describeGoogleError(err) });
   }

@@ -400,6 +400,17 @@ export async function calendarCreateEvent(input: {
   }) as Promise<{ id: string; htmlLink: string }>;
 }
 
+// Diagnóstico temporal (05/11/2026): calendarBusy solo da franjas ocupadas,
+// sin título -- esto lista los eventos reales (con summary) para ver qué
+// está bloqueando el calendario del negocio.
+export async function calendarListEvents(timeMin: string, timeMax: string): Promise<{ summary?: string; start?: unknown; end?: unknown; id?: string }[]> {
+  const params = new URLSearchParams({ timeMin, timeMax, singleEvents: "true", orderBy: "startTime" });
+  const data = (await googleFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`)) as {
+    items?: { summary?: string; start?: unknown; end?: unknown; id?: string }[];
+  };
+  return data.items ?? [];
+}
+
 export async function calendarDeleteEvent(eventId: string): Promise<void> {
   await googleFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
     method: "DELETE",
