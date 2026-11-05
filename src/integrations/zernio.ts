@@ -477,7 +477,14 @@ export async function createTeamAlertTemplate(): Promise<{ ok: boolean; template
         components: [
           {
             type: "body",
-            text: "🔔 Aviso de Automóviles Lucero: {{1}}",
+            // FALLO REAL detectado (05/11/2026, investigando por qué ningún
+            // aviso de visita/reserva llegaba nunca a Ramón/José): Meta
+            // rechazaba esta plantilla con "Variables can't be at the start
+            // or end of the template" -- la variable {{1}} estaba al final,
+            // así que la plantilla nunca llegó ni siquiera a quedar
+            // pendiente de revisión. Se añade texto fijo real después de la
+            // variable para que Meta la acepte.
+            text: "🔔 Aviso de Automóviles Lucero: {{1}}. Revisa el CRM para más detalles.",
             example: { body_text: [["Nueva visita -- Marta Gómez (655123456) -- Toyota RAV4 2018 -- 2026-11-04 a las 11:00"]] },
           },
         ],
