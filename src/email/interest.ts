@@ -218,11 +218,25 @@ export function extractCochesNetContact(
 // nombre antes de ": "). Wallapop nunca deja responder por correo, pero
 // SÍ manda el teléfono real y el mensaje real del cliente -- antes se
 // descartaba todo por el fallo de plainText, nunca por falta de dato.
+// FALLO REAL grave detectado (05/11/2026, "le escribi al whassap y no me
+// respondio nadie" -- caso real confirmado: mismo foreign_id de Wallapop,
+// mismo comprador real "M B", 3 coches distintos, Wallapop SIEMPRE mandó
+// "+34666666666" como teléfono -- nunca el real). Wallapop no siempre
+// comparte el número real del comprador; cuando no lo hace, manda este
+// número de relleno fijo en vez de omitir el campo. Si se trata como un
+// teléfono real, el sistema intenta un WhatsApp que nunca puede llegar al
+// cliente de verdad, y además mezcla a compradores reales distintos bajo
+// el mismo "contacto" falso si alguna vez coincide. Se descarta como si no
+// hubiera teléfono -- cae en gestión manual del portal (Wallapop in-app),
+// que es donde de verdad está la conversación real con este comprador.
+const TELEFONO_RELLENO_WALLAPOP = "666666666";
+
 export function extractWallapopContact(
   text: string,
 ): { name: string | null; phone: string | null; make: string | null; model: string | null; version: string | null; inquiry: string | null } | null {
   const phoneMatch = /"client":\{[^}]*"phone":"(\+?\d+)"/.exec(text);
   if (!phoneMatch) return null;
+  if (phoneMatch[1].replace(/^\+?34/, "") === TELEFONO_RELLENO_WALLAPOP) return null;
   const firstMatch = /"first_name":"([^"]*)"/.exec(text);
   const lastMatch = /"last_name":"([^"]*)"/.exec(text);
   // El objeto "car" tiene su propio campo "version" -- pero el bloque
