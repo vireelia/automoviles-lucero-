@@ -252,7 +252,20 @@ export async function handleChatMessage(
   const esConversacionNueva = Date.now() - new Date(conversation.updated_at).getTime() > HORAS_NUEVA_CONVERSACION * 3600 * 1000;
   const MAX_RESPUESTAS_BREVEDAD = 4;
   if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL")) {
-    const respuestasReales = conversation.messages.filter((m) => m.role === "assistant" && m.content?.trim()).length;
+    // FALLO REAL detectado probándolo en real (05/11/2026, captura de
+    // pantalla real: "ni me dio fechas... envió el mismo mensaje dos
+    // veces"): contar mensajes de "assistant" con contenido cuenta TAMBIÉN
+    // las frases de relleno antes de una herramienta ("Dame un segundo,
+    // déjame revisarlo.", "Un momento, que compruebo los huecos
+    // disponibles.") como si fueran respuestas reales -- con solo 2
+    // mensajes reales del cliente ya había 4 "respuestas" contadas (2
+    // reales + 2 de relleno), cortando la conversación antes de que
+    // Carolina llegara a proponer fecha, y repitiendo el mismo cierre en
+    // el siguiente mensaje real (porque el contador nunca bajaba). Contar
+    // turnos reales del CLIENTE (role "user") es robusto de verdad: cada
+    // mensaje real que manda el cliente es un turno, sin importar cuántas
+    // rondas de relleno/herramientas haya por dentro.
+    const respuestasReales = conversation.messages.filter((m) => m.role === "user").length;
     if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD) {
       // Cierre enriquecido con datos reales (05/11/2026, "que ponga
       // direccion de la tienda... el como llegar, numero de telefono de
@@ -316,7 +329,7 @@ export async function handleChatMessage(
   // sigue sin esto -- no se ha pedido ahí.
   const brevityNote =
     channel === "WHATSAPP" || channel === "EMAIL"
-      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO 4 MENSAJES (petición real, 05/11/2026: "solo 4 mensajes joder" -- vuelto a 4 tras un intento a 5; hay además un tope DURO por código, ver MAX_RESPUESTAS_BREVEDAD más arriba, que corta la conversación aunque este texto se ignore): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en 4 mensajes tuyos como máximo. Flujo real pedido (mismo para WhatsApp y correo): (1) en cuanto el cliente te diga qué coche le interesa, responde con calidez y pregunta directamente "¿qué día y hora te viene bien para la visita?" -- no esperes a que él lo pida; (2) cuando te dé el día/hora, llama a get_appointment_slots para comprobar la disponibilidad real de verdad; (3) si está disponible, agéndala con create_appointment usando exactamente lo que dijo (si no está disponible, dilo con naturalidad y ofrece el siguiente hueco real o sigue la sección VEHÍCULO NO DISPONIBLE); (4) en el último mensaje, cierra con naturalidad confirmando la cita e incluye siempre estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto (Ramón o José). No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No repitas los tres datos de cierre en cada mensaje, solo en el de cierre real.`
+      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO 4 MENSAJES (petición real, 05/11/2026: "solo 4 mensajes joder" -- vuelto a 4 tras un intento a 5; hay además un tope DURO por código, ver MAX_RESPUESTAS_BREVEDAD más arriba, que corta la conversación aunque este texto se ignore): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en 4 mensajes tuyos como máximo. Flujo real pedido (mismo para WhatsApp y correo): (1) en cuanto el cliente te diga qué coche le interesa, responde con calidez y pregunta directamente "¿qué día y hora te viene bien para la visita?" -- no esperes a que él lo pida; (2) cuando te dé el día/hora, llama a get_appointment_slots para comprobar la disponibilidad real de verdad -- FALLO REAL detectado probándolo: si el cliente responde con algo como "dime tú", "no sé", o no da un día/hora concreto, NUNCA te quedes solo repitiendo la pregunta ni sin hacer nada -- llama tú mismo a get_appointment_slots ya y propón UN hueco real concreto ("Tengo hueco el [día] a las [hora], ¿te viene bien?"); (3) si está disponible, agéndala con create_appointment usando exactamente lo que dijo (si no está disponible, dilo con naturalidad y ofrece el siguiente hueco real o sigue la sección VEHÍCULO NO DISPONIBLE); (4) en el último mensaje, cierra con naturalidad confirmando la cita e incluye siempre estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto (Ramón o José). No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No repitas los tres datos de cierre en cada mensaje, solo en el de cierre real.`
       : "";
   const knownFacts = conversation.known_facts ?? {};
   const knownFactsNote = [
