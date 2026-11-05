@@ -15,7 +15,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import {
@@ -663,6 +663,20 @@ app.post("/admin/fix_lead_origin", requireAdminToken, (req, res) => {
 });
 
 app.get("/debug/team_notifications", requireAdminToken, debugSlice("team_notifications", 200));
+// Diagnóstico temporal (05/11/2026): get_appointment_slots está devolviendo
+// cero huecos en los últimos 10 días a pesar de haber agenda real libre --
+// esta ruta llama a calendarBusy directamente y devuelve el error real en
+// vez de tragárselo, para encontrar la causa real.
+app.get("/debug/calendar_busy_raw", requireAdminToken, async (_req, res) => {
+  try {
+    const now = new Date();
+    const in3Days = new Date(now.getTime() + 3 * 24 * 3600 * 1000);
+    const busy = await calendarBusy(now.toISOString(), in3Days.toISOString());
+    res.json({ ok: true, timeMin: now.toISOString(), timeMax: in3Days.toISOString(), busy });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err), descripcion: describeGoogleError(err) });
+  }
+});
 app.get("/debug/email_poller_errors", requireAdminToken, debugSlice("email_poller_errors", 50));
 app.get("/debug/whatsapp_errors", requireAdminToken, debugSlice("whatsapp_errors", 50));
 // Diagnóstico real de verdad (03/11/2026, incidente real: el sondeo no
