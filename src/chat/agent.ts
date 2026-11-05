@@ -225,6 +225,39 @@ export async function handleChatMessage(
     return { reply: LIMIT_REACHED_REPLY, tool_runs: 0 };
   }
 
+  // FALLO REAL grave detectado (05/11/2026, "estan enviando por persona
+  // unos 20 mensajes y te dije que vaya al grano y que sean 4 mensajes" --
+  // comprobado con datos reales: 34 de 2000 conversaciones reales superaban
+  // las 4 respuestas, una llegó a 35). El tope de "4-5 mensajes" solo vivía
+  // en el texto del prompt (BREVEDAD_REAL más abajo) -- el modelo puede
+  // ignorarlo, y de hecho lo ignoraba en el 1,7% de las conversaciones
+  // reales. Ahora hay un tope DURO por código, solo para WhatsApp/correo
+  // (Carolina/Daniel): al llegar a la 4ª respuesta real del agente, no se
+  // vuelve a llamar a la IA en esta conversación -- se corta con un cierre
+  // fijo y un aviso real al equipo, en vez de depender de que el modelo
+  // "se acuerde" de parar.
+  const MAX_RESPUESTAS_BREVEDAD = 4;
+  if (channel === "WHATSAPP" || channel === "EMAIL") {
+    const respuestasReales = conversation.messages.filter((m) => m.role === "assistant" && m.content?.trim()).length;
+    if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD) {
+      const cierre =
+        "Para no alargarlo más, lo mejor es que hables directo con el equipo -- te paso con ellos. ¡Gracias por escribirnos!";
+      await dispatchTool("create_handoff", {
+        reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (petición real de ir al grano) -- revisar si el cliente sigue necesitando algo.`,
+        notes: `Canal ${channel}, sesión ${sessionId}.`,
+        urgency: "normal",
+        channel,
+      });
+      saveConversation({
+        id: sessionId,
+        messages: trimToTurns([...conversation.messages, { role: "user", content: userText }, { role: "assistant", content: cierre }]),
+        updated_at: new Date().toISOString(),
+        user_turn_count: userTurnCount,
+      });
+      return { reply: cierre, tool_runs: 0 };
+    }
+  }
+
   // El identificador de sesión del canal es el teléfono del cliente. Se registra
   // el lead en el primer contacto: sin él no se pueden hacer seguimientos ni
   // consultar el historial del cliente.
@@ -257,7 +290,7 @@ export async function handleChatMessage(
   // sigue sin esto -- no se ha pedido ahí.
   const brevityNote =
     channel === "WHATSAPP" || channel === "EMAIL"
-      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO 5 MENSAJES (petición real, 04/11/2026: "recuerda solo 5 mensajes máximo de Daniel y Carolina"): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en 5 mensajes tuyos como máximo: identificar lo que pide, dar el dato real o la disponibilidad con calidez, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No lo repitas en cada mensaje, solo en el de cierre real.`
+      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO 4 MENSAJES (petición real, 05/11/2026: "solo 4 mensajes joder" -- vuelto a 4 tras un intento a 5; hay además un tope DURO por código, ver MAX_RESPUESTAS_BREVEDAD más arriba, que corta la conversación aunque este texto se ignore): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en 4 mensajes tuyos como máximo: identificar lo que pide, dar el dato real o la disponibilidad con calidez, y seguir con la cita/reserva si toca, directo a cerrar. No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. ÚLTIMO MENSAJE DE LA CONVERSACIÓN: cuando cierres (porque ya se resolvió, porque ya quedó la cita/reserva, o porque no hay más que añadir), el último mensaje tiene que incluir siempre, con naturalidad, estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No lo repitas en cada mensaje, solo en el de cierre real.`
       : "";
   const knownFacts = conversation.known_facts ?? {};
   const knownFactsNote = [
