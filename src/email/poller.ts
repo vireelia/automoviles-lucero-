@@ -53,7 +53,7 @@ let running = false;
 const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
 let quotaCooldownUntil = 0;
 function looksLikeQuotaError(message: string | undefined): boolean {
-  return Boolean(message) && /llm_http_429|insufficient_quota|rate_limit/i.test(message!);
+  return Boolean(message) && /llm_http_429|insufficient_quota|rate_limit|daily_llm_budget_exceeded/i.test(message!);
 }
 
 // Revisa la bandeja del negocio cada 30 segundos. Sin Google conectado no hace nada.

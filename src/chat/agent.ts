@@ -127,7 +127,47 @@ function apiKeyForChannel(channel: Channel): string | undefined {
   return perChannel[channel] ?? process.env.OPENAI_API_KEY;
 }
 
+// Cortafuegos de coste real (05/11/2026, "se esta gastando demasiado
+// dinero" -- gasto real confirmado del día: 18,47 USD, 8.165 solicitudes,
+// causa real identificada: pruebas en vivo contra producción, no un bug).
+// Mismo cálculo orientativo que /debug/llm_usage_resumen (precio público
+// de gpt-4.1-mini) -- nunca el cobro real de OpenAI, pero sí sirve para
+// cortar ANTES de seguir gastando si algo se descontrola. Tope diario
+// GLOBAL (todos los canales juntos), en euros, variable de entorno --
+// nunca hardcodeado. Por defecto 15 € (dentro del objetivo real de
+// "10-20 € mensuales" -- este es el tope de UN SOLO día, deliberadamente
+// amplio para no cortar un día real ajetreado, solo un descontrol real).
+const DAILY_BUDGET_EUR = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR ?? 15);
+const PRECIO_INPUT_POR_1M = 0.4;
+const PRECIO_CACHED_POR_1M = 0.1;
+const PRECIO_OUTPUT_POR_1M = 1.6;
+
+function estimatedSpendTodayEur(): number {
+  try {
+    const log = readCollection<LlmUsage & { at: string }>("llm_usage_logs");
+    const today = new Date().toISOString().slice(0, 10);
+    let total = 0;
+    for (const r of log) {
+      if (!r.at.startsWith(today)) continue;
+      const sinCache = Math.max(0, r.prompt_tokens - r.cached_tokens);
+      total += (sinCache / 1_000_000) * PRECIO_INPUT_POR_1M + (r.cached_tokens / 1_000_000) * PRECIO_CACHED_POR_1M + (r.completion_tokens / 1_000_000) * PRECIO_OUTPUT_POR_1M;
+    }
+    return total;
+  } catch {
+    return 0; // Nunca bloquear una respuesta real por no poder leer el propio registro de coste.
+  }
+}
+
+export class DailyBudgetExceeded extends Error {
+  constructor() {
+    super("daily_llm_budget_exceeded");
+  }
+}
+
 async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
+  if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
+    throw new DailyBudgetExceeded();
+  }
   const apiKey = apiKeyForChannel(channel);
   if (!apiKey) throw new LlmNotConfigured();
   const body: Record<string, unknown> = { model: MODEL, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
