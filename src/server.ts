@@ -1142,6 +1142,22 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       });
       return;
     }
+    // Interruptor temporal real (05/11/2026, "que solo me responda a mi al
+    // 632570373, para que no haya fallos" -- mientras se prueba el cambio
+    // de hoy en vivo, nunca se deja a un cliente real sin respuesta en
+    // silencio: se avisa al equipo igual que en una pausa normal, para que
+    // puedan atenderlo a mano mientras dura la prueba). Variable de
+    // entorno, nunca hardcodeada -- quitar WHATSAPP_SOLO_RESPONDER_A para
+    // volver a responder a todos.
+    const soloResponderA = process.env.WHATSAPP_SOLO_RESPONDER_A?.trim().replace(/^\+/, "");
+    if (soloResponderA && phone.replace(/^\+/, "") !== soloResponderA) {
+      raiseAlert({
+        kind: "handoff_urgente",
+        lead_phone: phone,
+        reason: `WhatsApp: Carolina está en modo de prueba (solo responde a un número) -- el cliente escribió "${text.trim().slice(0, 300)}" y no se le ha respondido todavía. Atiéndelo a mano mientras dura la prueba, o quita WHATSAPP_SOLO_RESPONDER_A cuando termine.`,
+      });
+      return;
+    }
 
     // Petición real (23/10/2026, "que responda con sentido" -- tras
     // reenviar mensajes reales atascados días por el webhook caído): si el
