@@ -7,6 +7,8 @@ import { deliverEmail, sendPendingDailyCapEmails } from "./email/agent.js";
 import { notifyVisitUpcoming } from "./tools/team-notify.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { googleStatus } from "./integrations/google.js";
+import { createAutoTask } from "./tools/tasks.js";
+import { runSeguimientoComercial } from "./chat/followup-comercial.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -29,6 +31,7 @@ type Appointment = {
   reminder_6h_sent?: boolean;
   reminder_1h_sent?: boolean;
   team_reminder_30m_sent?: boolean;
+  channel?: string | null;
 };
 
 // FALLO REAL detectado (21/10/2026, "no podemos perder reservas" -- el aviso
@@ -313,6 +316,32 @@ async function checkTechnicalHealth() {
   }
 }
 
+// FASE 11 (09/11/2026): una confirmación por WhatsApp no es una visita
+// realizada. Resultado real antes de esto: 1 de 202 visitas tenía resultado
+// registrado, así que no se podía medir ninguna conversión. Pasadas
+// HORAS_TRAS_VISITA de la hora de la cita, si sigue en "confirmed" nadie ha
+// dicho todavía qué pasó -- se crea una tarea para que Ramón o José lo
+// marquen. Nunca se asume que el cliente no vino.
+const HORAS_TRAS_VISITA = 2;
+function checkVisitOutcomes() {
+  const appointments = readCollection<Appointment>("appointments", []);
+  const now = Date.now();
+  for (const appt of appointments) {
+    if (appt.status !== "confirmed") continue;
+    const when = parseAppointmentDateTime(appt);
+    if (!when) continue;
+    const horas = (now - when.getTime()) / 3600_000;
+    if (horas < HORAS_TRAS_VISITA || horas > 72) continue; // nunca reabrir visitas muy antiguas
+    createAutoTask({
+      lead_phone: appt.lead_phone ?? null,
+      type: "verificar_asistencia",
+      reason: `La visita del ${appt.requested_date ?? ""} a las ${appt.requested_time ?? ""} ya pasó y nadie ha registrado si el cliente vino. Márcalo en Citas: "Vino", "Vino y compró" o "No se presentó".`,
+      source_ref: appt.id,
+      channel: appt.channel ?? null,
+    });
+  }
+}
+
 export function startScheduler() {
   setInterval(() => {
     (async () => {
@@ -332,6 +361,13 @@ export function startScheduler() {
         // a los clientes que ya compraron (y revisar el intervalo real)
         // antes de volver a activarlo.
         // checkStaleFollowups();
+        // Sustituto arreglado del seguimiento de arriba (FASE 6, 09/11/2026):
+        // solo clientes con intención comercial comprobada, máximo 2, texto
+        // fijo sin IA, nunca si ya hay cita o reserva. Apagado salvo
+        // LUCERO_FOLLOWUP_ENABLED=1.
+        checkVisitOutcomes();
+        const seg = await runSeguimientoComercial();
+        if (seg.enviados > 0) console.log(`[scheduler] ${seg.enviados} seguimiento(s) comercial(es) enviados`);
         await checkDailyTeamKeepalive();
         // FALLO REAL detectado (21/10/2026, "los chicos de Automóviles
         // Lucero no se van a poner a enviarles las cosas manuales"): el

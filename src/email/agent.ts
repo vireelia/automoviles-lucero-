@@ -1,7 +1,16 @@
 import crypto from "crypto";
 import dns from "dns";
 import { readCollection, writeCollection } from "../store.js";
-import { handleChatMessage } from "../chat/agent.js";
+import { handleChatMessage, recordAssistantMessage } from "../chat/agent.js";
+import { buildFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
+import { dentroDeVentana, contactoAutorizado } from "../chat/whatsapp-window.js";
+import { createAutoTask } from "../tools/tasks.js";
+
+// Interruptor del primer contacto automático: apagado salvo autorización
+// explícita (LUCERO_FIRST_CONTACT_ENABLED=1). Apagado, deja el texto como nota.
+function isFirstContactEnabled(): boolean {
+  return process.env.LUCERO_FIRST_CONTACT_ENABLED === "1";
+}
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
 import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity, isCochesNetSharedSender, extractWallapopContact } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
@@ -25,6 +34,118 @@ export type InboundEmail = {
 };
 
 type Processed = { key: string; at: string; outcome: string; threadId?: string };
+// Cola real de correos que no se pudieron redactar por tope diario (Opción A
+// aprobada, 05/11/2026 -- "se esta gastando demasiado dinero" + hallazgo real:
+// 618 correos de un solo día llamaban a la IA SABIENDO que no se iban a poder
+// enviar por tope). Guarda el correo original, SIN llamar a la IA todavía --
+// se reintenta solo (vía drainPendingEmailQueue, llamado por el poller) en
+// cuanto vuelve a haber cupo real de envío. No se marca en "email_processed"
+// al encolar (a propósito: así processInboundEmail puede reprocesarlo desde
+// cero más tarde sin que el propio dedupe lo descarte como "duplicate").
+type PendingQueueItem = {
+  key: string;
+  email: InboundEmail;
+  priority: number;
+  enqueued_at: string;
+  // Opción B aprobada (05/11/2026): reintentos con backoff ante un fallo
+  // real de la IA al reprocesar -- nunca al encolar por tope diario (eso no
+  // es un fallo, es simplemente esperar cupo).
+  ai_failure_attempts: number;
+  last_ai_error?: string;
+  next_retry_at: string; // Siempre <= ahora si no hay fallos de IA todavía.
+};
+const PENDING_QUEUE_COLLECTION = "email_pending_queue";
+const MAX_QUEUE_KEPT = 2000;
+// Backoff exponencial real, con tope (nunca un bucle infinito de reintentos
+// instantáneos): 1, 2, 4, 8, 16 minutos, luego siempre 30 min.
+const RETRY_BACKOFF_MINUTES = [1, 2, 4, 8, 16, 30];
+// A partir de este número de fallos consecutivos de IA seguidos para el
+// MISMO correo, se avisa al equipo (una vez, con el dedup real que ya tiene
+// raiseAlert) -- el correo sigue pendiente, nunca se descarta.
+const AI_FAILURE_ALERT_THRESHOLD = 3;
+const MAX_AI_FAILURE_ATTEMPTS = 6;
+
+// Prioridad real (petición: "prioriza reservas, citas, financiación y
+// clientes con intención real de compra") -- heurística por palabras clave,
+// deliberadamente sin IA (encolar no puede depender de lo que precisamente
+// no se puede llamar todavía). 2 = prioridad alta, 1 = normal.
+function pendingEmailPriority(email: InboundEmail): number {
+  return /reserva|reservar|cita|visita|financiaci[oó]n|señal|pagar|comprar|interesad[oa]/i.test(`${email.subject}\n${email.text}`) ? 2 : 1;
+}
+
+function enqueuePendingEmail(email: InboundEmail): void {
+  const key = `${email.from}|${email.messageKey}`;
+  const queue = readCollection<PendingQueueItem>(PENDING_QUEUE_COLLECTION);
+  if (queue.some((q) => q.key === key)) return; // Idempotencia real: ya está en cola, no se duplica.
+  queue.push({ key, email, priority: pendingEmailPriority(email), enqueued_at: new Date().toISOString(), ai_failure_attempts: 0, next_retry_at: new Date().toISOString() });
+  writeCollection(PENDING_QUEUE_COLLECTION, queue.slice(-MAX_QUEUE_KEPT));
+}
+
+// Re-encola tras un fallo REAL de la IA (distinto de encolar por tope
+// diario): sube el contador de intentos, calcula el próximo reintento con
+// backoff exponencial real, y avisa al equipo una sola vez al cruzar el
+// umbral -- el correo sigue en la cola, nunca se marca como resuelto.
+function requeueAfterAiFailure(item: PendingQueueItem, error: string | undefined): void {
+  const attempts = item.ai_failure_attempts + 1;
+  const minutes = RETRY_BACKOFF_MINUTES[Math.min(attempts - 1, RETRY_BACKOFF_MINUTES.length - 1)];
+  const nextRetryAt = new Date(Date.now() + minutes * 60_000).toISOString();
+  const queue = readCollection<PendingQueueItem>(PENDING_QUEUE_COLLECTION);
+  if (attempts >= MAX_AI_FAILURE_ATTEMPTS) {
+    raiseAlert({ kind: "gestion_portal", reason: `Correo de ${item.email.from} ("${item.email.subject}") sin respuesta tras ${attempts} fallos de la IA -- se saca de la cola, contéstalo a mano.` });
+    return;
+  }
+  queue.push({ ...item, ai_failure_attempts: attempts, last_ai_error: error ?? "desconocido", next_retry_at: nextRetryAt });
+  writeCollection(PENDING_QUEUE_COLLECTION, queue.slice(-MAX_QUEUE_KEPT));
+  console.warn(`[email-queue] fallo real de IA #${attempts} para ${item.key} -- próximo reintento en ${minutes} min.`);
+  if (attempts >= AI_FAILURE_ALERT_THRESHOLD) {
+    raiseAlert({
+      kind: "gestion_portal",
+      reason: `Correo en cola (tope diario) lleva ${attempts} fallos reales seguidos de la IA al reprocesarse -- sigue pendiente de verdad, revisa si el crédito/servicio de OpenAI está caído.`,
+    });
+  }
+}
+
+// Llamado por el poller de correo (ver email/poller.ts) en cada ciclo, DESPUÉS
+// de procesar la bandeja nueva -- drena la cola real mientras quede cupo de
+// envío de verdad hoy. Un solo correo a la vez, reintenta el siguiente ciclo
+// si algo falla real (nunca se pierde el correo original: se vuelve a
+// encolar en vez de descartarlo). Control de concurrencia real: el poller ya
+// serializa sus propios ciclos con su bandera "running" (ver poller.ts) -- un
+// único proceso Node, nunca dos llamadas a esto a la vez.
+export async function drainPendingEmailQueue(): Promise<void> {
+  for (;;) {
+    if (sentTodayCount() >= DAILY_SEND_CAP) return;
+    const now = Date.now();
+    // Solo candidatos cuyo backoff ya pasó -- un correo con fallos reales
+    // recientes se salta hasta que le toque, nunca se reintenta a lo loco.
+    const queue = readCollection<PendingQueueItem>(PENDING_QUEUE_COLLECTION);
+    const ready = queue.filter((q) => new Date(q.next_retry_at).getTime() <= now);
+    if (ready.length === 0) return;
+    ready.sort((a, b) => b.priority - a.priority || (a.enqueued_at < b.enqueued_at ? -1 : a.enqueued_at > b.enqueued_at ? 1 : 0));
+    const next = ready[0];
+    // Se saca de la cola ANTES de procesar -- si falla a mitad, se vuelve a
+    // encolar explícitamente abajo (con el contador de intentos ya subido),
+    // nunca se queda duplicado en la cola.
+    writeCollection(PENDING_QUEUE_COLLECTION, queue.filter((q) => q.key !== next.key));
+    try {
+      const result = await processInboundEmail(next.email, { detectAiFailureForQueue: true });
+      // FALLO REAL detectado en pruebas locales (05/11/2026): un fallo de la
+      // IA aquí NUNCA lanza una excepción -- processInboundEmail lo captura
+      // por su cuenta y devuelve el resultado como si fuera normal (ver su
+      // propio try/catch alrededor de handleChatMessage, mismo criterio que
+      // el correo directo). Un try/catch aquí nunca lo veía, así que el
+      // correo se perdía de la cola sin reintentarse jamás. Hay que mirar
+      // también el "outcome" devuelto, no solo las excepciones reales.
+      if (result.outcome === "fallo_ia_pendiente_revision") {
+        requeueAfterAiFailure(next, result.error);
+        return; // Evita un bucle rápido de reintento si el fallo es persistente (p. ej. IA caída).
+      }
+    } catch (err) {
+      requeueAfterAiFailure(next, err instanceof Error ? err.message : String(err));
+      return; // Evita un bucle rápido de reintento si el fallo es persistente (p. ej. IA caída).
+    }
+  }
+}
 type Outbox = {
   id: string;
   to: string;
@@ -203,52 +324,62 @@ async function contactLeadViaWhatsapp(
 ): Promise<{ outcome: string; reply?: string; error?: string }> {
   const waPhone = contact.phone.startsWith("+") ? contact.phone : `+${contact.phone}`;
   const vehicleLabel = [contact.make, contact.model, contact.version].filter(Boolean).join(" ");
-  upsertLead({
+  const leadRes = upsertLead({
     phone: waPhone,
     name: contact.name ?? undefined,
     channel: "WHATSAPP",
     vehicle_interest: vehicleLabel || undefined,
     notes: `Pidió explícitamente que le contacten por WhatsApp (aviso real de ${portal}).`,
-  });
-  const userText = vehicleLabel
-    ? `Hola, escribí en ${portal} preguntando por este vehículo: ${vehicleLabel}.${contact.inquiry ? ` ${contact.inquiry}` : ""}`
-    : contact.inquiry || "Me interesa un vehículo, pero no se especificó cuál.";
-  // Mismo fallo real que en processInboundEmail (03/11/2026) -- si la IA
-  // falla aquí, el cliente real que pidió explícitamente que le
-  // contacten por WhatsApp se queda invisible para siempre. Se deja
-  // constancia honesta y se avisa al equipo con el teléfono real, sin
-  // marcar email_processed (se reintenta solo en el siguiente sondeo).
-  let aiReply: string;
-  try {
-    aiReply = (await handleChatMessage(waPhone, userText, "WHATSAPP", waPhone)).reply;
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    // Aviso de este fallo desactivado (03/11/2026, "quita esa mierda del
-    // aviso" -- con la IA fallando por créditos de OpenAI agotados, cada
-    // mensaje real generaba su propio aviso nuevo, porque el motivo incluía
-    // el nombre/vehículo y nunca deduplicaba -- inundando el correo del
-    // equipo mientras ya sabían la causa real. Queda constancia igual en
-    // Pendientes vía recordInbox, solo se deja de avisar por este canal.
-    recordInbox(email, "fallo_ia_pendiente_revision", { portal, messageKey: email.messageKey });
-    return { outcome: "fallo_ia_pendiente_revision", error: errorMessage };
+  }) as { data?: { id?: string } };
+  // FASE 1 (09/11/2026): primer contacto con plantilla fija, sin IA. Antes
+  // cada aviso de portal lanzaba una conversación completa de la IA (720
+  // leads el 05/11 = la mayor parte del gasto) y, sin crédito, enviaba la
+  // disculpa genérica al cliente.
+  if (alreadyContacted(waPhone, vehicleLabel || null)) {
+    recordInbox(email, "duplicado_primer_contacto", { portal });
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "duplicado_primer_contacto", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "duplicado_primer_contacto" };
   }
-  // Petición real (28/10/2026, "para que el cliente sepa" -- SOLO para
-  // Wallapop): a diferencia de Coches.net (donde la plantilla aprobada
-  // por Meta ya se identifica como Automóviles Lucero antes de que
-  // Carolina siga la conversación), un cliente de Wallapop nunca ha
-  // hablado con este número de WhatsApp -- sin contexto, un mensaje
-  // suelto respondiendo a su pregunta de Wallapop no dice de dónde
-  // viene. Se antepone siempre la misma frase real, nunca se deja a que
-  // el modelo la redacte distinto cada vez.
-  // Sin esto, el saludo fijo de arriba y el saludo propio de Carolina se
-  // duplicaban ("Hola, te respondo... Hola, el Fiat..." -- confirmado
-  // real antes de desplegar) -- se quita el saludo inicial de su propia
-  // respuesta, nunca el resto del contenido real.
-  const aiReplyBody = aiReply
-    .replace(/^\s*(hola|buenas|buenos d[ií]as|buenas tardes)[,.!]?\s*/i, "")
-    .replace(/^[a-záéíóúñ]/, (c) => c.toUpperCase());
-  const reply = portal === "Wallapop" ? `Hola, te respondo al mensaje que dejaste en Wallapop. Soy del equipo de Automóviles Lucero.\n\n${aiReplyBody}` : aiReply;
-  const sent = isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: "whatsapp_not_connected" };
+  const firstContact = { leadId: leadRes.data?.id ?? waPhone, phone: waPhone, name: contact.name, vehicle: vehicleLabel || null, portal };
+  const reply = buildFirstContactText(firstContact);
+
+  // PUNTO 10 (09/11/2026): que la plantilla esté aprobada no autoriza a
+  // escribir a cualquiera. Si el contacto pidió no recibir mensajes o
+  // prefiere otro canal, no se le escribe: pasa a revisión humana.
+  const autorizacion = contactoAutorizado(waPhone);
+  if (!autorizacion.ok) {
+    recordInbox(email, "contacto_no_autorizado", { portal, draftNote: `No se le escribe por WhatsApp (${autorizacion.motivo}). Texto que se habría enviado:\n${reply}` });
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "contacto_no_autorizado", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    createAutoTask({
+      lead_phone: waPhone,
+      type: "contactar_whatsapp",
+      reason: `${portal}: pidió contacto por WhatsApp pero no está autorizado automáticamente (${autorizacion.motivo}). Decide tú si escribirle: https://wa.me/${contact.phone}`,
+      source_ref: `no_autorizado_${email.messageKey}`,
+      channel: "WHATSAPP",
+    });
+    return { outcome: "contacto_no_autorizado" };
+  }
+
+  if (!isFirstContactEnabled()) {
+    recordInbox(email, "modo_prueba_sin_envio", { portal, draftNote: reply });
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "modo_prueba_sin_envio", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "modo_prueba_sin_envio", reply };
+  }
+
+  // PUNTO 4 (09/11/2026): antes, cuando hacía falta la plantilla, salían DOS
+  // mensajes casi idénticos seguidos -- la plantilla de Meta ya dice "Hola,
+  // le escribe Automóviles Lucero. Vimos su interés en el {{1}}. Escríbanos
+  // por aquí... para agendar una visita", y justo detrás iba nuestro primer
+  // contacto diciendo lo mismo. Ahora se elige UNA sola vía:
+  //   - ventana de 24h abierta -> texto libre propio (más concreto)
+  //   - ventana cerrada        -> solo la plantilla (es la única que Meta deja)
+  // Nunca las dos.
+  const ventanaAbierta = dentroDeVentana(waPhone);
+  const sent = ventanaAbierta && isWhatsappConnected() ? await sendWhatsappText(waPhone, reply) : { ok: false as const, error: ventanaAbierta ? "whatsapp_not_connected" : "sin_conversacion_abierta" };
+  if (sent.ok) {
+    markContacted(firstContact);
+    recordAssistantMessage(waPhone, reply);
+  }
 
   if (sent.ok) {
     // Fallo real detectado (03/11/2026, petición real: "cuando los agentes
@@ -274,28 +405,14 @@ async function contactLeadViaWhatsapp(
   if (await isContactoInicialTemplateApproved()) {
     const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel || "el vehículo que consultaste");
     if (templateSent.ok) {
-      const replySent = await sendWhatsappText(waPhone, reply);
-      // Mismo fallo real de arriba (03/11/2026): solo se marca
-      // answered/answered_by cuando la respuesta real de verdad salió
-      // (replySent.ok) -- si solo se abrió la plantilla pero la respuesta
-      // real falló después, el aviso de abajo (raiseAlert) sigue su curso y
-      // esto NO se marca como respondido, para no mentir en el CRM.
-      recordInbox(email, "sent_whatsapp_plantilla", {
-        portal,
-        draftNote: replySent.ok ? undefined : reply,
-        answered: replySent.ok,
-        answeredBy: replySent.ok ? "ia" : undefined,
-      });
+      // La plantilla YA es el primer contacto completo (se presenta, nombra
+      // el vehículo e invita a escribir para agendar la visita), así que no
+      // se manda nada más detrás. Cuando el cliente responda, se abre la
+      // ventana de 24h y Carolina sigue la conversación con normalidad.
+      markContacted(firstContact);
+      recordAssistantMessage(waPhone, `(plantilla de primer contacto enviada sobre ${vehicleLabel || "el vehículo consultado"})`);
+      recordInbox(email, "sent_whatsapp_plantilla", { portal, answered: true, answeredBy: "ia" });
       writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
-      if (!replySent.ok) {
-        raiseAlert({
-          kind: "gestion_portal",
-          lead_phone: waPhone,
-          name: contact.name,
-          reason: `${portal}: se abrió la conversación de WhatsApp con ${contact.name ?? "el cliente"} con la plantilla, pero la respuesta real a su pregunta no se pudo enviar después: ${explainWhatsappSendError(replySent.error)}. Escríbele a mano: https://wa.me/${contact.phone}`,
-          draft_note: reply,
-        });
-      }
       return { outcome: "sent_whatsapp_plantilla" };
     }
   }
@@ -308,7 +425,15 @@ async function contactLeadViaWhatsapp(
   return { outcome: "pendiente_whatsapp_manual" };
 }
 
-export async function processInboundEmail(email: InboundEmail): Promise<{ outcome: string; reply?: string; error?: string }> {
+// Segundo parámetro (opcional, 05/11/2026, opción B aprobada): SOLO lo usa
+// drainPendingEmailQueue (ver más abajo) al reprocesar un correo que ya
+// estaba en la cola real por tope diario. El correo directo normal (el
+// camino de siempre, sin este flag) se comporta EXACTAMENTE igual que
+// antes -- nunca se toca ese caso.
+export async function processInboundEmail(
+  email: InboundEmail,
+  opts?: { detectAiFailureForQueue?: boolean },
+): Promise<{ outcome: string; reply?: string; error?: string }> {
   // FALLO REAL grave detectado (15/10/2026): el correo de prueba "Probar
   // Gmail" (que se envía desde la propia cuenta conectada A SÍ MISMA) se
   // coló como si fuera un cliente nuevo, y cada respuesta automática volvía
@@ -321,7 +446,8 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     return { outcome: "skipped_self_email" };
   }
   const processed = readCollection<Processed>("email_processed");
-  if (processed.some((p) => p.key === `${email.from}|${email.messageKey}`)) {
+  const fromQueue = opts?.detectAiFailureForQueue === true;
+  if (processed.some((p) => p.key === `${email.from}|${email.messageKey}` && !(fromQueue && p.outcome === "en_cola_fallo_ia"))) {
     return { outcome: "duplicate" };
   }
   // FALLO REAL grave detectado (16/10/2026): esto va ANTES del filtro de
@@ -460,6 +586,26 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     }
   }
 
+  // FALLO REAL grave detectado (05/11/2026, auditoría real de consumo de
+  // OpenAI -- "se esta gastando demasiado dinero"): el tope diario se
+  // comprobaba SOLO después de llamar a la IA (ver el bloque idéntico más
+  // abajo, que se queda como red de seguridad ante una carrera real entre
+  // dos correos casi simultáneos) -- confirmado con datos reales: 618
+  // correos de un solo día (05/11) llamaron a la IA sabiendo ya que no se
+  // iban a poder enviar. Ahora se comprueba ANTES -- si no hay cupo real
+  // hoy, el correo original se guarda en una cola real (nunca se pierde,
+  // nunca se redacta nada) y se reprocesa solo en cuanto vuelva a haber
+  // cupo (ver drainPendingEmailQueue, llamado por el poller).
+  if (sentTodayCount() >= DAILY_SEND_CAP) {
+    enqueuePendingEmail(email);
+    recordInbox(email, "en_cola_tope_diario", { portal: portalInfo.portal });
+    raiseAlert({
+      kind: "gestion_portal",
+      reason: `Se alcanzó el tope diario de ${DAILY_SEND_CAP} correos automáticos -- los correos nuevos quedan en cola real y se redactan/envían solos en cuanto haya cupo, sin gastar de más mientras tanto.`,
+    });
+    return { outcome: "en_cola_tope_diario" };
+  }
+
   const userText = `Asunto: ${email.subject || "(sin asunto)"}\n\n${email.text}`.trim();
   // FALLO REAL detectado (03/11/2026, incidente real: un correo directo de
   // un cliente real -- no un aviso de portal -- se quedó invisible para
@@ -476,8 +622,11 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
   // fallo es pasajero (p. ej. créditos repuestos) el siguiente sondeo lo
   // intente de verdad y, si sale bien, añada la respuesta real de verdad.
   let reply: string;
+  let aiFailedStructured = false;
   try {
-    reply = (await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey)).reply;
+    const chatResult = await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey);
+    reply = chatResult.reply;
+    aiFailedStructured = chatResult.ai_failed;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     // Aviso de este fallo desactivado (03/11/2026, "quita esa mierda del
@@ -487,6 +636,26 @@ export async function processInboundEmail(email: InboundEmail): Promise<{ outcom
     // en Pendientes vía recordInbox, solo se deja de avisar por este canal.
     recordInbox(email, "fallo_ia_pendiente_revision", { portal: portalInfo.portal, messageKey: email.messageKey });
     return { outcome: "fallo_ia_pendiente_revision", error: errorMessage };
+  }
+  // Opción B aprobada (05/11/2026), SOLO para reprocesos desde la cola real.
+  // Corregido el mismo día a petición explícita ("prefiero una señal de
+  // error estructurada y fiable, sin comparar textos"): ya no se compara el
+  // texto de la respuesta contra FALLBACK_REPLY (frágil -- cambiaría si se
+  // reescribe esa frase, o coincidiría por casualidad) -- se usa el campo
+  // real "ai_failed" que handleChatMessage ya devuelve, puesto a propósito
+  // (ver chat/agent.ts) SOLO en sus dos casos reales de fallo. Campo
+  // puramente aditivo: WhatsApp/Facebook/chat/correo directo (que no pasan
+  // este flag) ignoran "ai_failed" y siguen mandando esa misma disculpa de
+  // reserva como siempre -- esto no cambia su comportamiento en nada.
+  // FASE 1 (09/11/2026): Daniel envió la disculpa genérica 4 veces a clientes
+  // reales con OpenAI sin crédito. Ahora un fallo de la IA nunca se envía:
+  // el correo directo también entra en la cola de pendientes.
+  if (aiFailedStructured) {
+    recordInbox(email, "fallo_ia_pendiente_revision", { portal: portalInfo.portal, messageKey: email.messageKey });
+    if (opts?.detectAiFailureForQueue) return { outcome: "fallo_ia_pendiente_revision", error: "fallback_detectado_en_cola" };
+    enqueuePendingEmail(email);
+    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "en_cola_fallo_ia", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    return { outcome: "en_cola_fallo_ia", error: "ai_failed" };
   }
   const body = `${reply}\n\n${SIGNATURE}`;
   const subject = replySubject(email.subject);

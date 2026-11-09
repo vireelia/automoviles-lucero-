@@ -137,7 +137,10 @@ export async function createAppointment(args: {
     };
     appendToCollection("appointments", appointment);
     markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: una cita real es intención real, aunque sea fin de semana/festivo.
-    await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
+    // FALLO REAL detectado (05/11/2026, "que solo envie visitas o reservas
+    // confirmadas"): esto avisaba a Ramón/José por WhatsApp incluso para
+    // citas sin fecha/hora real ("fecha por confirmar") -- nunca se
+    // avisa aquí, solo cuando de verdad queda "confirmed" (ver abajo).
     createAutoTask({
       lead_phone: args.lead_phone ?? null,
       type: "confirmar_visita",
@@ -184,8 +187,13 @@ export async function createAppointment(args: {
   };
   appendToCollection("appointments", appointment);
   markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: ver nota arriba -- una cita registrada ya es intención real.
-  await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
   if (canAutoConfirm) {
+    // Petición real de Eliud: avisar a Ramón y José SOLO de visitas y
+    // reservas CONFIRMADAS. Antes se avisaba también de las que quedaban
+    // "solicitadas" (fin de semana, festivo, o sin día y hora), que no son
+    // un hecho todavía -- esas quedan en una tarea interna (ver el else),
+    // así que no se pierde ninguna, solo deja de sonar el aviso.
+    await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
     const entregado = await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
     if (!entregado) {
       raiseAlert({

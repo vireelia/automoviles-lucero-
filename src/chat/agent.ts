@@ -5,6 +5,8 @@ import { readCollection, writeCollection, appendToCollection } from "../store.js
 import { dispatchTool } from "./dispatch.js";
 import { getBusinessConfig } from "../data/business-config.js";
 import { businessInfo } from "../data/business-info.js";
+import { conversationStage, maxUserTurnsFor, esComercial, type Stage } from "./conversion.js";
+import { withPersistentLock, markOncePerWindow } from "../locks.js";
 
 // Agente de chat propio (fuera de Retell). Usa el mismo prompt (núcleo
 // común + addendum de chat) y las mismas 26 herramientas que el agente de
@@ -66,8 +68,26 @@ const LIMIT_REACHED_REPLY = "Llevamos ya un buen rato con esto -- para darte la 
 // verificar bien antes de contestar una única vez. Chat/WhatsApp son
 // conversación en vivo -- el cliente sigue ahí, así que no hace falta tanto
 // margen (y responder antes es mejor que tardar de más).
-const MAX_TOOL_ROUNDS_BY_CHANNEL: Record<Channel, number> = { EMAIL: 10, CHAT: 6, WHATSAPP: 6, FACEBOOK: 6 };
-const FALLBACK_REPLY = "Disculpa, ahora mismo no puedo responderte bien. Te paso con el equipo para que te atiendan en persona.";
+// FASE 1 (09/11/2026): 4,8 llamadas reales de media por mensaje con ~21k
+// tokens cada una -- tope a 3 rondas (la última ya fuerza texto, forceText).
+const MAX_TOOL_ROUNDS = Number(process.env.LUCERO_MAX_TOOL_ROUNDS ?? 3);
+const MAX_TOOL_ROUNDS_BY_CHANNEL: Record<Channel, number> = { EMAIL: MAX_TOOL_ROUNDS, CHAT: MAX_TOOL_ROUNDS, WHATSAPP: MAX_TOOL_ROUNDS, FACEBOOK: MAX_TOOL_ROUNDS };
+// Modelo económico para turnos simples (sin intención de cita/reserva/
+// financiación). Desactivado si la variable no está puesta.
+// El modelo capaz se reserva para lo que cierra ventas (citas, reservas,
+// financiación); una consulta de horario o dirección no lo necesita.
+const SIMPLE_MODEL = process.env.LUCERO_CHAT_MODEL_SIMPLE;
+export function pickModel(stage: Stage): string {
+  if (!SIMPLE_MODEL) return MODEL;
+  return esComercial(stage) ? MODEL : SIMPLE_MODEL;
+}
+// Exportado (05/11/2026, opción B aprobada para la cola de correo
+// pendiente): permite que email/agent.ts distinga, SOLO al reprocesar
+// desde su propia cola, una respuesta real de un fallo real de la IA
+// disfrazado de respuesta -- sin tocar este cerebro compartido ni su
+// comportamiento para WhatsApp/chat/correo directo, que sigue exactamente
+// igual (nunca se deja a un cliente real sin ninguna respuesta).
+export const FALLBACK_REPLY = "Disculpa, ahora mismo no puedo responderte bien. Te paso con el equipo para que te atiendan en persona.";
 
 export class LlmNotConfigured extends Error {
   constructor() {
@@ -164,13 +184,13 @@ export class DailyBudgetExceeded extends Error {
   }
 }
 
-async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
+async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false, model: string = MODEL): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
   if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
     throw new DailyBudgetExceeded();
   }
   const apiKey = apiKeyForChannel(channel);
   if (!apiKey) throw new LlmNotConfigured();
-  const body: Record<string, unknown> = { model: MODEL, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
+  const body: Record<string, unknown> = { model, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -200,6 +220,9 @@ function recordLlmUsage(channel: Channel, sessionId: string, usage: LlmUsage): v
 // Un turno empieza siempre en un mensaje de usuario: así nunca se corta una
 // respuesta de herramienta de su llamada original al recortar el historial.
 function trimToTurns(messages: ChatMessage[]): ChatMessage[] {
+  // Sin recorte no hay riesgo de cortar una herramienta: se conserva un primer
+  // mensaje enviado sin IA (plantilla de primer contacto).
+  if (messages.length <= MAX_TURNS_KEPT * 4) return messages;
   const kept = messages.slice(-MAX_TURNS_KEPT * 4);
   const start = kept.findIndex((m) => m.role === "user");
   return start > 0 ? kept.slice(start) : kept;
@@ -224,7 +247,25 @@ const CHANNEL_LABEL: Record<Channel, string> = {
   FACEBOOK: "Messenger de Facebook",
 };
 
-export async function handleChatMessage(
+// Mensajes simultáneos del mismo cliente se procesan uno detrás de otro: si
+// no, cada uno lee el historial antiguo y al guardar se pisan (probado: 1 de
+// 3 mensajes sobrevivía). El bloqueo es en disco (locks.ts), así que también
+// protege entre dos procesos y sobrevive a un reinicio, y la cola en memoria
+// evita tocar el disco en el caso normal de un solo proceso.
+const sessionQueues = new Map<string, Promise<unknown>>();
+export function handleChatMessage(...args: Parameters<typeof handleChatMessageUnlocked>): ReturnType<typeof handleChatMessageUnlocked> {
+  const sessionId = args[0];
+  const prev = sessionQueues.get(sessionId) ?? Promise.resolve();
+  // Espera generosa: un turno con hasta 3 rondas de IA puede tardar.
+  const run = prev.catch(() => undefined).then(() => withPersistentLock(`chat_${sessionId}`, () => handleChatMessageUnlocked(...args), 120_000));
+  sessionQueues.set(sessionId, run);
+  run.finally(() => {
+    if (sessionQueues.get(sessionId) === run) sessionQueues.delete(sessionId);
+  }).catch(() => undefined);
+  return run;
+}
+
+async function handleChatMessageUnlocked(
   sessionId: string,
   userText: string,
   channel: Channel = "CHAT",
@@ -236,7 +277,7 @@ export async function handleChatMessage(
   // verdad pasó), nunca inventado -- quien llama lo calcula con la fecha
   // real del mensaje original.
   realDelayNote?: string,
-): Promise<{ reply: string; tool_runs: number }> {
+): Promise<{ reply: string; tool_runs: number; ai_failed: boolean }> {
   const conversation = loadConversation(sessionId);
   const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
 
@@ -264,7 +305,7 @@ export async function handleChatMessage(
       updated_at: new Date().toISOString(),
       user_turn_count: 0,
     });
-    return { reply: LIMIT_REACHED_REPLY, tool_runs: 0 };
+    return { reply: LIMIT_REACHED_REPLY, tool_runs: 0, ai_failed: false };
   }
 
   // FALLO REAL grave detectado (05/11/2026, "estan enviando por persona
@@ -288,9 +329,15 @@ export async function handleChatMessage(
   // se trata como una conversación nueva para este límite (el historial
   // sigue guardado igual para que recuerde el contexto, solo no cuenta
   // para el tope de brevedad).
+  // FASE 2 (09/11/2026): el tope fijo de 4 cortaba también las
+  // conversaciones que iban camino de una visita -- 149 conversaciones
+  // reales cortadas y 134 de 202 citas quedaron sin día ni hora. El tope de
+  // 4 se mantiene para consultas informativas (ahí es donde se iba el
+  // gasto); con intención comercial real se amplía (ver conversion.ts).
   const HORAS_NUEVA_CONVERSACION = 3;
   const esConversacionNueva = Date.now() - new Date(conversation.updated_at).getTime() > HORAS_NUEVA_CONVERSACION * 3600 * 1000;
-  const MAX_RESPUESTAS_BREVEDAD = 4;
+  const stage = conversationStage(contact, userText, conversation.messages);
+  const MAX_RESPUESTAS_BREVEDAD = maxUserTurnsFor(stage);
   if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL")) {
     // FALLO REAL detectado probándolo en real (05/11/2026, captura de
     // pantalla real: "ni me dio fechas... envió el mismo mensaje dos
@@ -322,7 +369,7 @@ export async function handleChatMessage(
         "Todo nuestro catálogo: https://www.coches.net/concesionario/autolunaslagunamadrid/",
       ].join("\n");
       await dispatchTool("create_handoff", {
-        reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (petición real de ir al grano) -- revisar si el cliente sigue necesitando algo.`,
+        reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (estado comercial: ${stage}) -- revisar si el cliente sigue necesitando algo.`,
         notes: `Canal ${channel}, sesión ${sessionId}.`,
         urgency: "normal",
         channel,
@@ -333,7 +380,7 @@ export async function handleChatMessage(
         updated_at: new Date().toISOString(),
         user_turn_count: userTurnCount,
       });
-      return { reply: cierre, tool_runs: 0 };
+      return { reply: cierre, tool_runs: 0, ai_failed: false };
     }
   }
 
@@ -367,9 +414,14 @@ export async function handleChatMessage(
   // mensajes y que por último envíe directamente la integración" -- ya SÍ
   // quiere esto también en correo). Miguel (voz, prompt-voice.md aparte)
   // sigue sin esto -- no se ha pedido ahí.
+  // Texto original sin recortar, a propósito: la propuesta de reducción de
+  // prompt está preparada pero SIN activar (ver propuestas/). Lo único que
+  // cambia respecto a antes es que el número de mensajes ya no va fijo a 4
+  // -- lo pone el tope real de este estado comercial, para que el texto
+  // nunca contradiga al tope que de verdad aplica el código.
   const brevityNote =
     channel === "WHATSAPP" || channel === "EMAIL"
-      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO 4 MENSAJES (petición real, 05/11/2026: "solo 4 mensajes joder" -- vuelto a 4 tras un intento a 5; hay además un tope DURO por código, ver MAX_RESPUESTAS_BREVEDAD más arriba, que corta la conversación aunque este texto se ignore): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en 4 mensajes tuyos como máximo, y tu único objetivo real es cerrar una visita o una reserva, nunca charla de más. Flujo real pedido (mismo para WhatsApp y correo): (1) en cuanto el cliente te diga qué coche le interesa, responde con calidez y pregunta directamente "¿qué día y hora te viene bien para la visita?" -- no esperes a que él lo pida; (2) FALLO REAL detectado probándolo (05/11/2026): NUNCA propongas ni escribas una hora o día concretos (ni siquiera uno "razonable" como las 09:30) sin haberlo visto antes en el array "slots" de una respuesta real de get_appointment_slots EN ESTA MISMA CONVERSACIÓN -- inventar una hora a ojo hace que create_appointment la rechace por "slot_busy" y gasta una ronda de IA entera por nada. Así que: llama a get_appointment_slots UNA SOLA VEZ por conversación (te devuelve varios huecos reales ya ordenados); si el cliente dio un día/hora que coincide con uno de esos slots reales, confírmalo con create_appointment; si no coincide, o si dijo "dime tú"/"no sé", elige tú el PRIMER slot real de esa misma lista que ya tienes y propónlo ("Tengo hueco el [día] a las [hora] de esa lista, ¿te viene bien?"); (3) si create_appointment devuelve "slot_busy" (puede pasar si otro cliente se adelantó), NO vuelvas a llamar a get_appointment_slots otra vez -- usa el SIGUIENTE slot de la misma lista que ya tenías y agenda ese directamente, sin preguntar más vueltas; (4) en el último mensaje, cierra con naturalidad confirmando la cita e incluye siempre estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto (Ramón o José). No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No repitas los tres datos de cierre en cada mensaje, solo en el de cierre real.`
+      ? `\n\nBREVEDAD REAL -- AMABLE PERO AL GRANO, MÁXIMO ${MAX_RESPUESTAS_BREVEDAD} MENSAJES (petición real, 05/11/2026: "solo 4 mensajes joder"; hay además un tope DURO por código, ver MAX_RESPUESTAS_BREVEDAD más arriba, que corta la conversación aunque este texto se ignore -- ese tope se amplía solo cuando ya hay una visita o reserva en marcha): sigue siendo cercano y amable como siempre -- esto no es sonar cortante ni seco -- pero cada conversación real tiene que resolverse en ${MAX_RESPUESTAS_BREVEDAD} mensajes tuyos como máximo, y tu único objetivo real es cerrar una visita o una reserva, nunca charla de más. Flujo real pedido (mismo para WhatsApp y correo): (1) en cuanto el cliente te diga qué coche le interesa, responde con calidez y pregunta directamente "¿qué día y hora te viene bien para la visita?" -- no esperes a que él lo pida; (2) FALLO REAL detectado probándolo (05/11/2026): NUNCA propongas ni escribas una hora o día concretos (ni siquiera uno "razonable" como las 09:30) sin haberlo visto antes en el array "slots" de una respuesta real de get_appointment_slots EN ESTA MISMA CONVERSACIÓN -- inventar una hora a ojo hace que create_appointment la rechace por "slot_busy" y gasta una ronda de IA entera por nada. Así que: llama a get_appointment_slots UNA SOLA VEZ por conversación (te devuelve varios huecos reales ya ordenados); si el cliente dio un día/hora que coincide con uno de esos slots reales, confírmalo con create_appointment; si no coincide, o si dijo "dime tú"/"no sé", elige tú el PRIMER slot real de esa misma lista que ya tienes y propónlo ("Tengo hueco el [día] a las [hora] de esa lista, ¿te viene bien?"); (3) si create_appointment devuelve "slot_busy" (puede pasar si otro cliente se adelantó), NO vuelvas a llamar a get_appointment_slots otra vez -- usa el SIGUIENTE slot de la misma lista que ya tenías y agenda ese directamente, sin preguntar más vueltas; (4) en el último mensaje, cierra con naturalidad confirmando la cita e incluye siempre estos tres datos reales: la dirección del concesionario, el enlace del catálogo de Coches.net (https://www.coches.net/concesionario/autolunaslagunamadrid/, ver sección ENLACES) y un teléfono de contacto (Ramón o José). No alargues con preguntas de cortesía innecesarias ni repitas lo mismo con otras palabras -- la amabilidad va en el tono de cada mensaje, no en alargar la conversación. IMPORTANTE para no gastar de más: si ya llamaste a get_business_info o a get_responsable_contact antes EN ESTA MISMA CONVERSACIÓN, usa esos mismos datos reales que ya tienes -- no los vuelvas a llamar solo para el cierre, eso gasta una ronda entera de IA por nada. Solo llama a la herramienta que te falte si de verdad no la pediste todavía en esta conversación. No repitas los tres datos de cierre en cada mensaje, solo en el de cierre real.`
       : "";
   const knownFacts = conversation.known_facts ?? {};
   const knownFactsNote = [
@@ -393,7 +445,16 @@ export async function handleChatMessage(
 
   let toolRuns = 0;
   let reply: string | null = null;
+  // Señal estructurada real (05/11/2026, a petición explícita: "prefiero
+  // una señal de error estructurada y fiable, sin comparar textos") --
+  // true SOLO en los dos casos reales en que esta función cae a la
+  // disculpa de reserva (fallo real de la IA, o el modelo no devolvió
+  // contenido). Campo nuevo, puramente aditivo -- WhatsApp/Facebook/chat/
+  // correo directo siguen leyendo solo "reply" como siempre, nunca se les
+  // obliga a mirar este campo ni cambia su comportamiento.
+  let aiFailed = false;
   const maxToolRounds = MAX_TOOL_ROUNDS_BY_CHANNEL[channel];
+  const model = pickModel(stage);
 
   // FALLO REAL grave detectado (04/11/2026, auditoría real: "el cliente se
   // queda sin ninguna respuesta" -- a diferencia del correo, que SÍ captura
@@ -417,7 +478,7 @@ export async function handleChatMessage(
           },
         ]
       : messages;
-    const { message, usage } = await callLlm(callInput, channel, isLastRound);
+    const { message, usage } = await callLlm(callInput, channel, isLastRound, model);
     if (usage) recordLlmUsage(channel, sessionId, usage);
     messages.push(message);
     turn.push(message);
@@ -473,15 +534,19 @@ export async function handleChatMessage(
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[chat] fallo real de la IA (${channel}, sesión ${sessionId}):`, message);
     reply = FALLBACK_REPLY;
-    turn.push({ role: "assistant", content: reply });
+    aiFailed = true;
     await createHandoffFallback(sessionId);
   }
 
   if (reply === null) {
     reply = FALLBACK_REPLY;
-    turn.push({ role: "assistant", content: reply });
+    aiFailed = true;
     await createHandoffFallback(sessionId);
   }
+
+  // Un fallo de la IA no se guarda en el historial: el mensaje queda en la
+  // cola de pendientes y se reprocesa desde cero, sin duplicar el turno.
+  if (aiFailed) return { reply, tool_runs: toolRuns, ai_failed: true };
 
   saveConversation({
     id: sessionId,
@@ -490,10 +555,20 @@ export async function handleChatMessage(
     user_turn_count: userTurnCount,
     known_facts: knownFacts,
   });
-  return { reply, tool_runs: toolRuns };
+  return { reply, tool_runs: toolRuns, ai_failed: aiFailed };
 }
 
+// Guarda un mensaje enviado sin IA (primer contacto por plantilla) para que
+// Carolina tenga el contexto cuando el cliente conteste.
+export function recordAssistantMessage(sessionId: string, text: string): void {
+  const conversation = loadConversation(sessionId);
+  saveConversation({ ...conversation, messages: trimToTurns([...conversation.messages, { role: "assistant", content: text }]), updated_at: new Date().toISOString() });
+}
+
+// Marca en disco, no en memoria: tras un reinicio no vuelve a inundar
+// Pendientes con el mismo aviso (el apagón del 05/11 generó 5.511).
 async function createHandoffFallback(sessionId: string) {
+  if (!markOncePerWindow(`handoff_fallback_${sessionId}`, 24 * 3600 * 1000)) return;
   await dispatchTool("create_handoff", {
     reason: "El agente de chat no pudo cerrar la respuesta en el número de intentos",
     notes: `Conversación de chat ${sessionId}`,

@@ -1,5 +1,5 @@
 import { isGoogleConnected, gmailListUnread, gmailGet, gmailMarkRead } from "../integrations/google.js";
-import { processInboundEmail } from "./agent.js";
+import { processInboundEmail, drainPendingEmailQueue } from "./agent.js";
 import { readCollection, writeCollection } from "../store.js";
 
 // Bajado de 3 minutos a 30 segundos (26/10/2026, petición real: "pon
@@ -80,7 +80,7 @@ export function startEmailPoller() {
           automated: m.automated,
           receivedAt: m.received_at,
         });
-        if (result.outcome === "fallo_ia_pendiente_revision" && looksLikeQuotaError(result.error)) {
+        if (result.outcome === "en_cola_fallo_ia" || (result.outcome === "fallo_ia_pendiente_revision" && looksLikeQuotaError(result.error))) {
           quotaCooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
           console.warn(`[email] crédito de IA agotado -- pausando reintentos ${QUOTA_COOLDOWN_MS / 60000} min en vez de cada 30s.`);
           break;
@@ -115,6 +115,10 @@ export function startEmailPoller() {
           await new Promise((r) => setTimeout(r, humanSpacingMs()));
         }
       }
+      // Cola real de correos frenados por tope diario (Opción A, 05/11/2026):
+      // se drena al final de cada ciclo, después de la bandeja nueva --
+      // mismo "running" de arriba ya evita que dos ciclos se solapen.
+      await drainPendingEmailQueue();
     } catch (err) {
       // Fallo real detectado (03/11/2026, incidente real: el sondeo fallaba
       // en silencio -- un error aquí (lectura de Gmail, no solo el envío de

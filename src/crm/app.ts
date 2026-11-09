@@ -128,6 +128,9 @@ type Appointment = {
   created_at: string;
   // Canal de origen (20/10/2026, sección 11.1) -- mismo criterio que en Reservation.
   channel?: string | null;
+  // Quién registró el resultado real de la visita y cuándo (FASE 11).
+  outcome_by?: string | null;
+  outcome_at?: string | null;
 };
 type Handoff = { id: string; lead_phone: string | null; lead_name?: string | null; reason?: string; urgency?: string; notes?: string; reason_type?: string; status: string; created_at: string; channel?: string };
 // Especificación formal del agente de chat (16/10/2026, sección CRM: "...y
@@ -209,6 +212,8 @@ const APPOINTMENT_TEXT: Record<string, string> = {
   confirmed: "Confirmada",
   cancelled: "Cancelada",
   no_presentado: "No se presentó",
+  asistio: "Visita realizada",
+  comprado: "Visita realizada y comprado",
 };
 const VEHICLE_TEXT: Record<OfficialVehicleStatus, string> = {
   AVAILABLE: "Disponible",
@@ -1763,6 +1768,8 @@ function apptCard(a: Appointment): string {
   const contactPart = a.lead_phone && !a.lead_phone.includes("@") ? a.lead_phone : lead?.email ?? null;
   const actions = [
     a.status === "requested" ? button("Confirmar", "confirmar", "ok") : "",
+    a.status === "confirmed" ? button("Vino", "asistio", "ok") : "",
+    a.status === "confirmed" || a.status === "asistio" ? button("Vino y compró", "compro", "ok") : "",
     a.status === "confirmed" ? button("No se presentó", "no_presentado", "light") : "",
     a.status !== "cancelled" ? confirmButton("Cancelar", "cancelar", "danger", "¿Seguro que quieres cancelar esta visita?") : "",
     // "Devolver" (22/10/2026, petición real: "asi como hayan botones de
@@ -2275,6 +2282,15 @@ crm.post("/citas/:id", async (req, res) => {
       source_ref: a.id,
       channel: a.channel ?? null,
     });
+  } else if (accion === "asistio" || accion === "compro") {
+    // FASE 11 (09/11/2026): hasta hoy solo se podía marcar "no presentado"
+    // -- no había forma de registrar que el cliente SÍ vino. Resultado real:
+    // 1 de 202 visitas tenía resultado registrado, así que no se podía medir
+    // ninguna conversión. Una confirmación por WhatsApp no es una visita
+    // realizada: esto lo marca una persona que estuvo allí.
+    a.status = accion === "compro" ? "comprado" : "asistio";
+    a.outcome_by = me(res).email;
+    a.outcome_at = new Date().toISOString();
   } else if (accion === "cambiar") {
     const fecha = String(req.body.fecha ?? "").trim();
     const hora = String(req.body.hora ?? "").trim();
@@ -2293,7 +2309,11 @@ crm.post("/citas/:id", async (req, res) => {
           ? "Visita devuelta: vuelve a estar pendiente de confirmar"
           : accion === "no_presentado"
             ? "Marcada como no presentado"
-            : "Día y hora cambiados",
+            : accion === "asistio"
+              ? "Marcada como visita realizada"
+              : accion === "compro"
+                ? "Marcada como visita realizada con compra"
+                : "Día y hora cambiados",
   );
 });
 
@@ -2479,6 +2499,7 @@ crm.post("/reservas-masivo", (req, res) => {
 
 // ---------- Seguimiento comercial ----------
 const TASK_TYPE_LABEL: Record<TaskType, string> = {
+  verificar_asistencia: "Registrar si el cliente vino",
   llamar: "Llamar a cliente",
   responder_mensaje: "Responder mensaje",
   responder_correo: "Responder correo",
@@ -5080,7 +5101,13 @@ crm.get("/informes", (req, res) => {
     return p !== "nuevo" && p !== "pendiente_contactar";
   }).length;
   const visitasConcertadas = appts.length;
-  const visitasRealizadas = appts.filter((a) => a.status === "confirmed" && (a.requested_date ?? "") < today).length;
+  const visitasConfirmadas = appts.filter((a) => a.status === "confirmed" || a.status === "asistio" || a.status === "comprado").length;
+  // FASE 11 (09/11/2026): antes esto contaba como "realizada" cualquier
+  // visita confirmada cuya fecha ya hubiera pasado -- una suposición, no un
+  // hecho: nadie había comprobado si el cliente vino. Ahora solo cuenta lo
+  // que una persona registró de verdad en Citas.
+  const visitasRealizadas = appts.filter((a) => a.status === "asistio" || a.status === "comprado").length;
+  const visitasSinVerificar = appts.filter((a) => a.status === "confirmed" && (a.requested_date ?? "") < today).length;
   const visitasNoPresentado = appts.filter((a) => a.status === "no_presentado").length;
   const reservasCreadas = resv.length;
   const reservasConfirmadas = resv.filter((r) => r.status === "confirmed").length;
@@ -5120,6 +5147,20 @@ crm.get("/informes", (req, res) => {
     .filter((c) => matchesDateFilter(dateFilter, c.created_at, today));
   const voiceCostEur = voiceCalls.reduce((sum, c) => sum + (c.cost_cents ?? 0), 0) / 100;
   const costePorLlamada = voiceCalls.length > 0 ? voiceCostEur / voiceCalls.length : null;
+
+  // Coste de OpenAI (WhatsApp/chat/correo), a partir de los tokens reales que
+  // devuelve la propia API en cada llamada. Nunca se mezcla con el de Retell,
+  // que es un proveedor y una tarifa distintos. El importe es orientativo
+  // (precio público del modelo), nunca el cobro real de OpenAI.
+  const usoLlm = readCollection<{ channel: string; session_id: string; at: string; prompt_tokens: number; completion_tokens: number; cached_tokens: number }>("llm_usage_logs").filter((u) =>
+    matchesDateFilter(dateFilter, u.at, today),
+  );
+  const llmCostEur = usoLlm.reduce((s, u) => s + ((u.prompt_tokens - u.cached_tokens) / 1e6) * 0.4 + (u.cached_tokens / 1e6) * 0.1 + (u.completion_tokens / 1e6) * 1.6, 0);
+  const llmConversaciones = new Set(usoLlm.map((u) => u.session_id)).size;
+  const llmCostePorConversacion = llmConversaciones > 0 ? llmCostEur / llmConversaciones : null;
+  const llmLlamadasPorConversacion = llmConversaciones > 0 ? usoLlm.length / llmConversaciones : null;
+  const llmTokensPorConversacion = llmConversaciones > 0 ? usoLlm.reduce((s, u) => s + u.prompt_tokens, 0) / llmConversaciones : null;
+  const costePorVisitaRealizada = visitasRealizadas > 0 ? (llmCostEur + voiceCostEur) / visitasRealizadas : null;
 
   // Atribución: primera captación (Lead.origin, nunca se sobrescribe) vs
   // canal de conversión (el canal real de la reserva que llevó a la venta,
@@ -5186,7 +5227,9 @@ ${stat(leadsNuevos, "leads nuevos")}
 ${stat(leadsContactados, "leads contactados")}
 ${stat(leadsCalientes, "leads calientes")}
 ${stat(visitasConcertadas, "visitas concertadas")}
-${stat(visitasRealizadas, "visitas realizadas")}
+${stat(visitasConfirmadas, "visitas confirmadas")}
+${stat(visitasRealizadas, "visitas realizadas (verificadas)")}
+${stat(visitasSinVerificar, "pendientes de verificar")}
 ${stat(visitasNoPresentado, "no presentado")}
 ${stat(reservasCreadas, "reservas creadas")}
 ${stat(reservasConfirmadas, "reservas pagadas y verificadas")}
@@ -5202,7 +5245,12 @@ ${funnelChart([{ label: "Leads", count: leadsNuevos }, { label: "Visitas", count
 </div>
 <div class="box"><h3 style="margin-top:0">Coste real -- agente de voz</h3>
 <p>Llamadas: <b>${voiceCalls.length}</b> · Coste total: <b>${voiceCostEur.toFixed(2)} $</b> · Coste por llamada: <b>${costePorLlamada !== null ? `${costePorLlamada.toFixed(2)} $` : "sin datos"}</b></p>
-<p class="sub">WhatsApp, chat y correo todavía no tienen coste medido por canal -- no se muestra un número para no inventarlo.</p>
+</div>
+<div class="box"><h3 style="margin-top:0">Coste de OpenAI -- WhatsApp, chat y correo</h3>
+<p>Conversaciones: <b>${llmConversaciones}</b> · Llamadas al modelo: <b>${usoLlm.length}</b> · Coste estimado: <b>${llmCostEur.toFixed(2)} €</b></p>
+<p>Por conversación: <b>${llmCostePorConversacion !== null ? `${llmCostePorConversacion.toFixed(4)} €` : "sin datos"}</b> · Llamadas por conversación: <b>${llmLlamadasPorConversacion !== null ? llmLlamadasPorConversacion.toFixed(1) : "sin datos"}</b> · Tokens de entrada por conversación: <b>${llmTokensPorConversacion !== null ? Math.round(llmTokensPorConversacion).toLocaleString("es-ES") : "sin datos"}</b></p>
+<p>Coste por visita realizada (OpenAI + voz): <b>${costePorVisitaRealizada !== null ? `${costePorVisitaRealizada.toFixed(2)} €` : "sin visitas verificadas en el periodo"}</b></p>
+<p class="sub">Importe orientativo, calculado con los tokens reales que devuelve la API y el precio público del modelo -- nunca es el cobro real de OpenAI. El coste de voz (Retell) se muestra aparte porque es otro proveedor y otra tarifa.</p>
 </div>
 ${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos de venta perdida</h3>${[...motivosPerdida.entries()].map(([m, n]) => `<p>${esc(m)}: <b>${n}</b></p>`).join("")}</div>` : ""}
 <div class="box"><h3 style="margin-top:0">Leads por canal de primera captación</h3>${hBarChart([...porOrigen.entries()].sort((a, b) => b[1] - a[1]))}</div>

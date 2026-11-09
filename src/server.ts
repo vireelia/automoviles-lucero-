@@ -13,7 +13,7 @@ import { verifyRetellSignature } from "./integrations/retell-signature.js";
 import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
-import { readCollection, writeCollection } from "./store.js";
+import { readCollection, writeCollection, claimOnce } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
@@ -39,6 +39,29 @@ import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
+import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
+import { withPersistentLockOrSkip } from "./locks.js";
+
+// Reintento de respuestas pendientes por fallo de la IA, con las mismas
+// protecciones que el mensaje entrante (agente/chat pausado, modo prueba).
+setInterval(async () => {
+  // Bloqueo en disco: si otra instancia ya está drenando, este ciclo se
+  // salta en vez de enviar dos veces el mismo mensaje.
+  await withPersistentLockOrSkip("drain_pending_replies", async () => {
+    await drainPendingReplies(async (item) => {
+      if (item.channel === "WHATSAPP") {
+        const solo = process.env.WHATSAPP_SOLO_RESPONDER_A?.trim().replace(/^\+/, "");
+        if (!isWhatsappZernioAgentEnabled() || isWhatsappChatPaused(item.contact) || (solo && item.contact.replace(/^\+/, "") !== solo)) {
+          return { ok: false, error: "agente_pausado_o_modo_prueba" };
+        }
+      }
+      const result = await handleChatMessage(item.contact, item.text, item.channel, item.contact);
+      if (result.ai_failed) return { ok: false, error: "ai_failed" };
+      const sent = item.channel === "WHATSAPP" ? await sendWhatsappText(item.contact, result.reply) : await sendFacebookText(item.contact, result.reply);
+      return sent.ok ? { ok: true } : { ok: false, error: String(sent.error) };
+    });
+  }).catch((err) => console.error("[pending-replies]", err instanceof Error ? err.message : err));
+}, 60_000);
 import { getBusinessConfig } from "./data/business-config.js";
 import { processInboundEmail, deliverEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
@@ -293,6 +316,31 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
 // antes de que raiseAlert las auto-resolviera (ver alerts.ts) -- se marcan
 // aquí una sola vez como atendidas, sin borrarlas, para que el conteo de
 // "Llamar ya" refleje de verdad llamadas pendientes, no avisos ya enviados.
+// Limpieza del ruido del apagón de IA (09/11/2026). createHandoffFallback
+// creaba un pendiente por CADA mensaje que la IA no pudo contestar: 5.511
+// pendientes con el mismo motivo, que enterraban los 244 reales y dejaban la
+// pantalla de Pendientes inservible. Ya no se vuelven a generar así (ahora
+// como máximo uno al día por conversación), pero los acumulados siguen ahí.
+// Nunca borra: marca status "done" con una nota, así que es reversible y
+// filtrable. Solo toca los que coinciden EXACTAMENTE con ese motivo; con
+// ?dry=1 solo cuenta, sin escribir nada.
+const MOTIVO_RUIDO_IA = "no pudo cerrar la respuesta";
+app.post("/admin/archive_ia_outage_handoffs", requireAdminToken, (req, res) => {
+  const soloContar = String(req.query.dry ?? "") === "1";
+  const handoffs = readCollection<{ reason?: string; status: string; done_at?: string | null; notes?: string }>("handoffs");
+  const afectados = handoffs.filter((h) => h.status !== "done" && (h.reason ?? "").toLowerCase().includes(MOTIVO_RUIDO_IA));
+  const intactos = handoffs.filter((h) => h.status !== "done" && !(h.reason ?? "").toLowerCase().includes(MOTIVO_RUIDO_IA)).length;
+  if (!soloContar && afectados.length > 0) {
+    for (const h of afectados) {
+      h.status = "done";
+      h.done_at = new Date().toISOString();
+      h.notes = `${h.notes ? `${h.notes} -- ` : ""}Archivado en bloque: ruido del apagón de IA del 05/11/2026, nunca fue una gestión real.`;
+    }
+    writeCollection("handoffs", handoffs);
+  }
+  res.json({ status: "ok", dry_run: soloContar, archivados: afectados.length, pendientes_reales_intactos: intactos });
+});
+
 app.post("/admin/resolve_routine_alerts", requireAdminToken, (_req, res) => {
   const SELF_RESOLVING = new Set(["visita_agendada", "visita_proxima", "visita_cancelada"]);
   const alerts = readCollection<{ kind: string; status: string; done_at: string | null }>("alerts");
@@ -980,8 +1028,10 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
   const messageId = typeof b.message_id === "string" && b.message_id ? b.message_id : crypto.randomUUID();
   const dedupeKey = `${from}|${messageId}`;
 
-  const processed = readCollection<{ key: string; at: string }>("whatsapp_processed");
-  if (processed.some((p) => p.key === dedupeKey)) {
+  // Reclamo atómico entre procesos (09/11/2026): antes se leía, se
+  // comprobaba y más abajo se escribía -- con dos instancias, las dos
+  // podían no encontrar la clave y procesar el mismo mensaje dos veces.
+  if (!(await claimOnce("whatsapp_processed", dedupeKey, MAX_WHATSAPP_PROCESSED_KEPT))) {
     res.json({ ok: true, deduped: true });
     return;
   }
@@ -998,10 +1048,7 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
   // ese timeout.
   res.json({ ok: true, queued: true });
 
-  writeCollection(
-    "whatsapp_processed",
-    [...processed, { key: dedupeKey, at: new Date().toISOString() }].slice(-MAX_WHATSAPP_PROCESSED_KEPT),
-  );
+  // (la clave ya quedó reclamada arriba con claimOnce)
 
   // Módulo CRM mensajes/clientes (18/10/2026): registrar el mensaje entrante
   // para que se vea en /crm/whatsapp -- puramente aditivo, en su propio
@@ -1020,6 +1067,10 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
 
   try {
     const result = await handleChatMessage(from, text, "WHATSAPP", from);
+    if (result.ai_failed) {
+      enqueuePendingReply("WHATSAPP", from, text);
+      return;
+    }
     let delivered = false;
     if (isWhatsappConnected()) {
       const sent = await sendWhatsappText(from, result.reply);
@@ -1073,12 +1124,8 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     if (process.env.ZERNIO_WHATSAPP_ACCOUNT_ID && body.account?.accountId !== process.env.ZERNIO_WHATSAPP_ACCOUNT_ID) return;
 
     const eventId = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
-    const processed = readCollection<{ key: string; at: string }>("zernio_whatsapp_processed");
-    if (processed.some((p) => p.key === eventId)) return;
-    writeCollection(
-      "zernio_whatsapp_processed",
-      [...processed, { key: eventId, at: new Date().toISOString() }].slice(-MAX_ZERNIO_WHATSAPP_PROCESSED_KEPT),
-    );
+    // Reclamo atómico entre procesos (09/11/2026), igual que WhatsApp directo.
+    if (!(await claimOnce("zernio_whatsapp_processed", eventId, MAX_ZERNIO_WHATSAPP_PROCESSED_KEPT))) return;
 
     const conversationId: string | undefined = body.conversation?.id;
     const phone: string | undefined = body.message?.sender?.participantId ?? body.message?.sender?.id ?? body.message?.sender?.phone;
@@ -1212,6 +1259,10 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
         ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
         : undefined;
     const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone, realDelayNote);
+    if (result.ai_failed) {
+      enqueuePendingReply("WHATSAPP", phone, text.trim().slice(0, 2000));
+      return;
+    }
     const sent = await sendWhatsappText(phone, result.reply);
     if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta:", sent.error);
     try {
@@ -1274,8 +1325,6 @@ app.post("/channels/facebook/webhook", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
 
   const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
-  const processed = readCollection<{ key: string; at: string }>("facebook_processed");
-  const newlyProcessed: { key: string; at: string }[] = [];
 
   for (const entry of entries) {
     const messaging = Array.isArray(entry.messaging) ? entry.messaging : [];
@@ -1286,11 +1335,15 @@ app.post("/channels/facebook/webhook", async (req, res) => {
       if (!psid || !text || !text.trim() || event?.message?.is_echo) continue;
 
       const dedupeKey = `${psid}|${messageId ?? text}`;
-      if (processed.some((p) => p.key === dedupeKey) || newlyProcessed.some((p) => p.key === dedupeKey)) continue;
+      // Reclamo atómico entre procesos (09/11/2026), igual que los otros canales.
+      if (!(await claimOnce("facebook_processed", dedupeKey, MAX_FACEBOOK_PROCESSED_KEPT))) continue;
 
       try {
         const result = await handleChatMessage(psid, text.trim().slice(0, 2000), "FACEBOOK", psid);
-        newlyProcessed.push({ key: dedupeKey, at: new Date().toISOString() });
+        if (result.ai_failed) {
+          enqueuePendingReply("FACEBOOK", psid, text.trim().slice(0, 2000));
+          continue;
+        }
         if (isFacebookConnected()) {
           const sent = await sendFacebookText(psid, result.reply);
           if (!sent.ok) console.error("[facebook] no se pudo enviar la respuesta:", sent.error);
@@ -1303,9 +1356,7 @@ app.post("/channels/facebook/webhook", async (req, res) => {
     }
   }
 
-  if (newlyProcessed.length > 0) {
-    writeCollection("facebook_processed", [...processed, ...newlyProcessed].slice(-MAX_FACEBOOK_PROCESSED_KEPT));
-  }
+  // (las claves ya quedaron reclamadas una a una con claimOnce)
 });
 
 // Teléfono real (Fase 1-2 de la conexión telefónica, 13/10/2026): Twilio

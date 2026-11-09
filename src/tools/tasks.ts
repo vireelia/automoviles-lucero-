@@ -27,6 +27,8 @@ export type TaskType =
   // que el aviso real y honesto es para el equipo: contactar por WhatsApp
   // en cuanto se pueda, nunca un envío automático que Meta bloquearía.
   | "contactar_whatsapp"
+  // Resultado real de una visita ya pasada (FASE 11, 09/11/2026).
+  | "verificar_asistencia"
   | "otra";
 
 export type Task = {
