@@ -1,6 +1,7 @@
 import { isGoogleConnected, gmailListUnread, gmailGet, gmailMarkRead } from "../integrations/google.js";
 import { processInboundEmail, drainPendingEmailQueue } from "./agent.js";
 import { readCollection, writeCollection } from "../store.js";
+import { withPersistentLockOrSkip } from "../locks.js";
 
 // Bajado de 3 minutos a 30 segundos (26/10/2026, petición real: "pon
 // todos los gmail en tiempo real"). Esto es sondeo (polling), no un
@@ -64,6 +65,10 @@ export function startEmailPoller() {
     if (running || !isGoogleConnected()) return;
     if (Date.now() < quotaCooldownUntil) return;
     running = true;
+    // Bloqueo en disco además de la bandera de memoria (09/11/2026): con dos
+    // procesos, los dos sondearían Gmail a la vez y podrían procesar el mismo
+    // correo. Si otro ya está sondeando, este ciclo se salta.
+    const tomado = await withPersistentLockOrSkip("email_poller", async () => {
     try {
       const list = await gmailListUnread();
       const items = list.slice(0, BATCH);
@@ -120,6 +125,7 @@ export function startEmailPoller() {
       // mismo "running" de arriba ya evita que dos ciclos se solapen.
       await drainPendingEmailQueue();
     } catch (err) {
+      // (el bloqueo en disco se libera solo al salir del callback)
       // Fallo real detectado (03/11/2026, incidente real: el sondeo fallaba
       // en silencio -- un error aquí (lectura de Gmail, no solo el envío de
       // la respuesta) solo se veía en console.error, invisible desde fuera
@@ -135,8 +141,9 @@ export function startEmailPoller() {
         // el console.error de arriba ya se intentó, no se vuelve a fallar
         // en cascada por culpa del propio registro del fallo.
       }
-    } finally {
-      running = false;
     }
+    });
+    if (tomado === null) console.log("[email] otro proceso ya está sondeando, se salta este ciclo.");
+    running = false;
   }, INTERVAL_MS);
 }

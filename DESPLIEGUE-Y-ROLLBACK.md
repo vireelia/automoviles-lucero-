@@ -50,15 +50,55 @@ colección concreta basta con copiar su `.json` dentro de esa carpeta y
 reiniciar el servicio: el almacén lee los archivos tal cual. No hay
 migraciones ni esquema, así que no hay nada irreversible que deshacer.
 
+## 2.bis Variables de entorno
+
+### Nuevas en esta rama (las tres vienen APAGADAS)
+
+| Variable | Qué hace | Valor para desplegar |
+|---|---|---|
+| `LUCERO_FIRST_CONTACT_ENABLED` | Envía de verdad el primer contacto de portales. Apagada, deja el texto como nota en Pendientes | **sin poner** |
+| `LUCERO_CHAT_MODEL_SIMPLE` | Modelo económico para consultas informativas (p. ej. `gpt-4.1-nano`). Sin poner, todo usa el modelo capaz | **sin poner** |
+| `LUCERO_FOLLOWUP_ENABLED` | Seguimiento comercial (máximo 2, texto fijo) | **sin poner** |
+| `LUCERO_MAX_TOOL_ROUNDS` | Tope de rondas de herramientas por mensaje | sin poner = 3 |
+
+### Existentes que importan ahora
+
+| Variable | Estado para desplegar |
+|---|---|
+| `WHATSAPP_SOLO_RESPONDER_A` | Dejarla puesta para la prueba inicial y **quitarla en el paso 6** |
+| `LUCERO_DAILY_LLM_BUDGET_EUR` | Sin poner = 15 € |
+| `GMAIL_DAILY_SEND_CAP` | Sin poner = 60 |
+| `OPENAI_API_KEY`, `OPENAI_API_KEY_WHATSAPP`, `OPENAI_API_KEY_EMAIL` | **Recargar crédito antes de desplegar** |
+| `N8N_VOZ_WEBHOOK_URL` | Sin cambios. Ahora, si falla, el aviso se reintenta y acaba en una tarea en vez de perderse |
+
+No hay variables nuevas obligatorias: la rama se despliega sin tocar ninguna.
+
+## 2.ter Migraciones
+
+**No hay migraciones.** El almacén son archivos JSON sin esquema y todos los
+campos nuevos son opcionales (`outcome_by`, `outcome_at` en citas) o
+colecciones nuevas que se crean vacías al usarse por primera vez
+(`chat_pending_replies`, `followups_comerciales`, `first_contact_sent`,
+`n8n_voz_outbox`, `.locks/`). Un rollback de código no deja datos
+inservibles: los estados de cita nuevos (`asistio`, `comprado`) simplemente
+dejarían de tener botón en el CRM, pero el dato se conserva.
+
 ## 3. Orden de despliegue
 
 Los tres interruptores nuevos vienen **apagados**. Desplegar no cambia por
 sí solo el comportamiento de cara al cliente, salvo las correcciones de
 fiabilidad (que son las que interesan).
 
-1. Apagar `email_auto_send` en el CRM (para el goteo de disculpas).
-2. Recargar crédito de OpenAI.
-3. Desplegar esta rama (`deployAppService` en EasyPanel).
+1. Recargar crédito de OpenAI.
+2. Desplegar esta rama (`deployAppService` en EasyPanel). **El goteo de
+   disculpas se corta con el propio despliegue**: el drenaje de la cola ya no
+   envía un borrador que sea la disculpa genérica, lo retiene y crea una
+   tarea. Ya no hace falta apagar `email_auto_send`, que habría dejado
+   también sin enviar los 11 borradores legítimos y sin responder a los
+   correos nuevos.
+3. Contener de golpe los que ya están en cola, sin esperar al ciclo:
+   `POST /admin/retener_borradores_disculpa?dry=1` (solo cuenta) y luego sin
+   `dry`. Debe reportar ~375 retenidos y ~11 legítimos intactos.
 4. Comprobar `/debug/llm_usage_resumen` y `/debug/alerts`: ninguna disculpa
    nueva, ninguna avalancha de pendientes.
 5. Probar con un número propio, con `WHATSAPP_SOLO_RESPONDER_A` todavía puesto.
@@ -85,15 +125,24 @@ rollback de código es un redespliegue limpio, sin pasos intermedios.
 
 ## 5. Riesgos conocidos que quedan
 
-- **Bloqueo entre procesos**: los bloqueos nuevos son archivos en el propio
-  volumen (`DATA_DIR/.locks`). Protegen entre procesos de la misma máquina y
-  sobreviven a un reinicio, pero no servirían entre dos máquinas distintas
-  con volúmenes separados. Hoy EasyPanel corre una sola réplica.
-- **Serialización parcial**: el reclamo atómico (`claimOnce`) cubre la
-  deduplicación de los tres webhooks y `mutateCollection` las escrituras que
-  pasan por ahí. El resto del código sigue el patrón
-  `readCollection` + `writeCollection`, que entre dos procesos es
+- **Bloqueo entre procesos**: los bloqueos son archivos en el propio volumen
+  (`DATA_DIR/.locks`). Protegen entre procesos de la misma máquina y
+  sobreviven a un reinicio (probado: un bloqueo huérfano de hace 10 minutos
+  se rompe por plazo y no deja el sistema colgado). No servirían entre dos
+  máquinas con volúmenes separados. Hoy EasyPanel corre una sola réplica.
+- **Serialización parcial**: `claimOnce` cubre la deduplicación de los
+  webhooks de WhatsApp, Zernio, Facebook y Gmail; `mutateCollection`, las
+  escrituras que pasan por ahí; y hay bloqueo propio en citas, programador,
+  sondeo de correo y reintento de WhatsApp. El resto del código sigue el
+  patrón `readCollection` + `writeCollection`, que entre dos procesos es
   "gana el último". Con una sola réplica no es un problema real.
+- **`loginAttempts` del CRM sigue en memoria**: el bloqueo por intentos
+  fallidos de acceso se reinicia con el proceso y no se comparte entre
+  instancias. Debilita algo la protección contra fuerza bruta, pero no
+  afecta a mensajes, citas ni reservas. Pendiente, no bloqueante.
+- **`lastCheckedAt` del programador sigue en memoria**: solo lo usa
+  `checkTechnicalHealth`, que está desactivado. Al reiniciar, como mucho
+  repite una comprobación.
 - **El modelo barato (`gpt-4.1-nano`) no se ha probado con tráfico real**,
   solo con un LLM simulado. Por eso va apagado.
 - **La reducción del prompt está preparada pero NO activa** (ver

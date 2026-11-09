@@ -8,6 +8,8 @@ import { notifyVisitUpcoming } from "./tools/team-notify.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { googleStatus } from "./integrations/google.js";
 import { createAutoTask } from "./tools/tasks.js";
+import { withPersistentLockOrSkip } from "./locks.js";
+import { drainN8nVozOutbox } from "./integrations/n8n.js";
 import { runSeguimientoComercial } from "./chat/followup-comercial.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
@@ -345,6 +347,11 @@ function checkVisitOutcomes() {
 export function startScheduler() {
   setInterval(() => {
     (async () => {
+      // Bloqueo en disco (09/11/2026): con dos procesos, los dos recorrerían
+      // las citas a la vez y el mismo recordatorio podría salir dos veces al
+      // cliente (la marca reminder_24h_sent se escribe DESPUÉS de enviar).
+      // Si otro proceso ya está en el ciclo, este se salta.
+      const tomado = await withPersistentLockOrSkip("scheduler_tick", async () => {
       try {
         await checkAppointmentReminders();
         checkTeamUpcomingVisits();
@@ -377,9 +384,15 @@ export function startScheduler() {
         // siempre el mismo tope diario de seguridad (nunca manda de más).
         const sent = await sendPendingDailyCapEmails();
         if (sent > 0) console.log(`[scheduler] ${sent} correo(s) del backlog de tope diario enviados solos`);
+        // Reintento del aviso de voz a n8n (quien crea el lead con origen
+        // VOZ): sin esto, un fallo de n8n dejaba al cliente sin lead.
+        const vozReenviados = await drainN8nVozOutbox();
+        if (vozReenviados > 0) console.log(`[scheduler] ${vozReenviados} aviso(s) de voz reenviados a n8n`);
       } catch (err) {
         console.error("[scheduler] error:", err);
       }
+      });
+      if (tomado === null) console.log("[scheduler] otro proceso ya está en el ciclo, se salta este.");
     })();
   }, CHECK_INTERVAL_MS);
   console.log(`[scheduler] activo, revisa cada ${CHECK_INTERVAL_MS / 60000} minutos`);

@@ -12,6 +12,7 @@
 // correo (src/email/poller.ts, MIN/MAX_SPACING_MS) para no parecer un
 // patrón de ráfaga ante Meta ni ante los propios clientes.
 import { readCollection, writeCollection } from "../store.js";
+import { withPersistentLockOrSkip } from "../locks.js";
 import { markAlertDone } from "./alerts.js";
 import type { Alert } from "./alerts.js";
 import { isWhatsappConnected, sendWhatsappText, explainWhatsappSendError } from "../integrations/whatsapp.js";
@@ -94,6 +95,10 @@ function saveJob(job: WhatsappRetryJob): void {
 // GET /debug/whatsapp_retry_jobs.
 async function runRetryBatch(job: WhatsappRetryJob, alerts: Alert[]): Promise<void> {
   running = true;
+  // Bloqueo en disco además de la bandera de memoria (09/11/2026): con dos
+  // procesos, los dos podrían reenviar el mismo lote y el cliente recibiría
+  // el mensaje dos veces. Si otro ya está con el lote, este no lo repite.
+  const tomado = await withPersistentLockOrSkip("whatsapp_retry", async () => {
   try {
     for (let i = 0; i < alerts.length; i++) {
       const alert = alerts[i];
@@ -139,8 +144,10 @@ async function runRetryBatch(job: WhatsappRetryJob, alerts: Alert[]): Promise<vo
     job.terminado = true;
     job.finished_at = new Date().toISOString();
     saveJob(job);
-    running = false;
   }
+  });
+  if (tomado === null) console.log("[whatsapp-retry] otro proceso ya está con el lote, no se repite.");
+  running = false;
 }
 
 export type StartRetryResult =

@@ -5161,6 +5161,19 @@ crm.get("/informes", (req, res) => {
   const llmLlamadasPorConversacion = llmConversaciones > 0 ? usoLlm.length / llmConversaciones : null;
   const llmTokensPorConversacion = llmConversaciones > 0 ? usoLlm.reduce((s, u) => s + u.prompt_tokens, 0) / llmConversaciones : null;
   const costePorVisitaRealizada = visitasRealizadas > 0 ? (llmCostEur + voiceCostEur) / visitasRealizadas : null;
+  // Coste por agente (el panel de OpenAI no separa el gasto por canal; esto
+  // sí, con los tokens reales de cada llamada). Carolina = WhatsApp y
+  // Messenger, Daniel = correo, chat web aparte.
+  const AGENTE_POR_CANAL: Record<string, string> = { whatsapp: "Carolina (WhatsApp)", facebook: "Carolina (Messenger)", email: "Daniel (correo)", chat: "Chat web" };
+  const costePorAgente = new Map<string, { eur: number; llamadas: number; conversaciones: Set<string> }>();
+  for (const u of usoLlm) {
+    const agente = AGENTE_POR_CANAL[u.channel] ?? u.channel;
+    const row = costePorAgente.get(agente) ?? { eur: 0, llamadas: 0, conversaciones: new Set<string>() };
+    row.eur += ((u.prompt_tokens - u.cached_tokens) / 1e6) * 0.4 + (u.cached_tokens / 1e6) * 0.1 + (u.completion_tokens / 1e6) * 1.6;
+    row.llamadas++;
+    row.conversaciones.add(u.session_id);
+    costePorAgente.set(agente, row);
+  }
 
   // Atribución: primera captación (Lead.origin, nunca se sobrescribe) vs
   // canal de conversión (el canal real de la reserva que llevó a la venta,
@@ -5250,6 +5263,7 @@ ${funnelChart([{ label: "Leads", count: leadsNuevos }, { label: "Visitas", count
 <p>Conversaciones: <b>${llmConversaciones}</b> · Llamadas al modelo: <b>${usoLlm.length}</b> · Coste estimado: <b>${llmCostEur.toFixed(2)} €</b></p>
 <p>Por conversación: <b>${llmCostePorConversacion !== null ? `${llmCostePorConversacion.toFixed(4)} €` : "sin datos"}</b> · Llamadas por conversación: <b>${llmLlamadasPorConversacion !== null ? llmLlamadasPorConversacion.toFixed(1) : "sin datos"}</b> · Tokens de entrada por conversación: <b>${llmTokensPorConversacion !== null ? Math.round(llmTokensPorConversacion).toLocaleString("es-ES") : "sin datos"}</b></p>
 <p>Coste por visita realizada (OpenAI + voz): <b>${costePorVisitaRealizada !== null ? `${costePorVisitaRealizada.toFixed(2)} €` : "sin visitas verificadas en el periodo"}</b></p>
+${costePorAgente.size > 0 ? `<table><thead><tr><th>Agente</th><th>Conversaciones</th><th>Llamadas</th><th>Coste</th><th>Por conversación</th></tr></thead><tbody>${[...costePorAgente.entries()].sort((a, b) => b[1].eur - a[1].eur).map(([agente, r]) => `<tr><td>${esc(agente)}</td><td>${r.conversaciones.size}</td><td>${r.llamadas}</td><td>${r.eur.toFixed(2)} €</td><td>${(r.eur / r.conversaciones.size).toFixed(4)} €</td></tr>`).join("")}</tbody></table>` : ""}
 <p class="sub">Importe orientativo, calculado con los tokens reales que devuelve la API y el precio público del modelo -- nunca es el cobro real de OpenAI. El coste de voz (Retell) se muestra aparte porque es otro proveedor y otra tarifa.</p>
 </div>
 ${ventasPerdidas.length > 0 ? `<div class="box"><h3 style="margin-top:0">Motivos de venta perdida</h3>${[...motivosPerdida.entries()].map(([m, n]) => `<p>${esc(m)}: <b>${n}</b></p>`).join("")}</div>` : ""}

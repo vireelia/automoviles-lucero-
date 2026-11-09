@@ -41,6 +41,7 @@ import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
 import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
 import { withPersistentLockOrSkip } from "./locks.js";
+import { createAutoTask } from "./tools/tasks.js";
 
 // Reintento de respuestas pendientes por fallo de la IA, con las mismas
 // protecciones que el mensaje entrante (agente/chat pausado, modo prueba).
@@ -324,6 +325,36 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
 // Nunca borra: marca status "done" con una nota, así que es reversible y
 // filtrable. Solo toca los que coinciden EXACTAMENTE con ese motivo; con
 // ?dry=1 solo cuenta, sin escribir nada.
+// CONTENCIÓN del goteo de disculpas (09/11/2026). Aparta ya, sin esperar al
+// ciclo del programador, los borradores de la cola del tope diario que son la
+// disculpa genérica de la IA caída. NO borra nada: cambian de estado a
+// "retenido_para_revision", conservan su texto y generan una tarea para
+// contestar a mano. Los borradores legítimos NO se tocan: siguen en cola y se
+// envían con normalidad. Con ?dry=1 solo cuenta.
+app.post("/admin/retener_borradores_disculpa", requireAdminToken, (req, res) => {
+  const soloContar = String(req.query.dry ?? "") === "1";
+  const inbox = readCollection<{ id: string; from: string; subject: string; outcome: string; answered?: boolean; draft_note?: string; created_at: string }>("email_inbox");
+  const enCola = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
+  const esDisculpa = (m: { draft_note?: string }) => (m.draft_note ?? "").includes("no puedo responderte bien");
+  const defectuosos = enCola.filter(esDisculpa);
+  const legitimos = enCola.filter((m) => !esDisculpa(m));
+  if (!soloContar && defectuosos.length > 0) {
+    for (const m of defectuosos) {
+      m.outcome = "retenido_para_revision";
+      m.draft_note = `NO ENVIADO (disculpa_generica_de_ia_caida). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
+      createAutoTask({
+        lead_phone: m.from,
+        type: "responder_correo",
+        reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador era la disculpa de la IA caída. Contéstale a mano.`,
+        source_ref: `retenido_${m.id}`,
+        channel: "EMAIL",
+      });
+    }
+    writeCollection("email_inbox", inbox);
+  }
+  res.json({ status: "ok", dry_run: soloContar, retenidos: defectuosos.length, legitimos_intactos: legitimos.length });
+});
+
 const MOTIVO_RUIDO_IA = "no pudo cerrar la respuesta";
 app.post("/admin/archive_ia_outage_handoffs", requireAdminToken, (req, res) => {
   const soloContar = String(req.query.dry ?? "") === "1";
@@ -634,6 +665,7 @@ app.get("/debug/call_analyses", requireAdminToken, debugSlice("call_analyses", 5
 app.get("/debug/studio_jobs", requireAdminToken, debugSlice("studio_jobs", 50));
 app.get("/debug/alerts", requireAdminToken, debugSlice("alerts", 50));
 app.get("/debug/whatsapp_retry_jobs", requireAdminToken, debugSlice("whatsapp_retry_jobs", 20));
+app.get("/debug/n8n_voz_outbox", requireAdminToken, debugSlice("n8n_voz_outbox", 100));
 // Reintento real del backlog de 199 alertas de HOY (03/11/2026, ver
 // src/alerts/whatsapp-retry.ts para el detalle completo del porqué): el
 // bug que las causó ya está corregido en src/email/agent.ts, esto solo

@@ -1,9 +1,10 @@
 import crypto from "crypto";
 import dns from "dns";
 import { readCollection, writeCollection } from "../store.js";
-import { handleChatMessage, recordAssistantMessage } from "../chat/agent.js";
+import { handleChatMessage, recordAssistantMessage, FALLBACK_REPLY } from "../chat/agent.js";
 import { buildFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
 import { dentroDeVentana, contactoAutorizado } from "../chat/whatsapp-window.js";
+import { withPersistentLock } from "../locks.js";
 import { createAutoTask } from "../tools/tasks.js";
 
 // Interruptor del primer contacto automático: apagado salvo autorización
@@ -447,7 +448,16 @@ export async function processInboundEmail(
   }
   const processed = readCollection<Processed>("email_processed");
   const fromQueue = opts?.detectAiFailureForQueue === true;
-  if (processed.some((p) => p.key === `${email.from}|${email.messageKey}` && !(fromQueue && p.outcome === "en_cola_fallo_ia"))) {
+  // Reclamo atómico entre procesos (09/11/2026): si dos sondeos coinciden
+  // (dos instancias), leer-comprobar-escribir por separado dejaba procesar y
+  // CONTESTAR el mismo correo dos veces. El bloqueo cubre la comprobación y
+  // la marca juntas. Un reproceso desde la cola sí puede volver a entrar.
+  const yaProcesado = await withPersistentLock(
+    "col_email_processed",
+    () => readCollection<Processed>("email_processed").some((p) => p.key === `${email.from}|${email.messageKey}` && !(fromQueue && p.outcome === "en_cola_fallo_ia")),
+    15_000,
+  ).catch(() => processed.some((p) => p.key === `${email.from}|${email.messageKey}` && !(fromQueue && p.outcome === "en_cola_fallo_ia")));
+  if (yaProcesado) {
     return { outcome: "duplicate" };
   }
   // FALLO REAL grave detectado (16/10/2026): esto va ANTES del filtro de
@@ -768,12 +778,57 @@ export async function processInboundEmail(
 // nunca se salta el límite que protege la cuenta de Gmail de un bloqueo por
 // Google). Se llama desde el scheduler (cada 5 min), así que el backlog se
 // vacía solo, un poco cada día, sin que nadie tenga que entrar a hacer clic.
+// CONTENCIÓN (09/11/2026). Este proceso vacía solo la cola del tope diario
+// enviando el borrador YA GUARDADO, así que no necesita OpenAI: con la IA
+// caída el 06/11 se guardaron 386 borradores, 375 de ellos con el texto de
+// disculpa, y desde entonces se estaban enviando a clientes reales hasta
+// 60/día (confirmado: los "sent" del 7, 8 y 9/11).
+//
+// La contención es quirúrgica a propósito: NO se apaga el envío (eso dejaría
+// también sin enviar los 11 borradores legítimos ni responder a correos
+// nuevos). Lo que se hace es no enviar NUNCA un borrador que sea la disculpa
+// genérica, ni uno caducado, y pasarlos a revisión humana. No se borra
+// ningún correo: cambian de estado y quedan en Pendientes con su texto.
+const HORAS_BORRADOR_CADUCADO = 48;
+
+function borradorDefectuoso(m: InboxItem): string | null {
+  const draft = m.draft_note ?? "";
+  if (draft.includes(FALLBACK_REPLY) || draft.includes("no puedo responderte bien")) return "disculpa_generica_de_ia_caida";
+  const horas = (Date.now() - new Date(m.created_at).getTime()) / 3600_000;
+  if (horas > HORAS_BORRADOR_CADUCADO) return `borrador_de_hace_${Math.round(horas)}h`;
+  return null;
+}
+
 export async function sendPendingDailyCapEmails(): Promise<number> {
   if (!isEmailAutoSendEnabled()) return 0; // mismo interruptor de pruebas que el resto del envío automático.
   const inbox = readCollection<InboxItem>("email_inbox");
-  const pending = inbox
-    .filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const candidatos = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
+
+  // Primero se apartan los defectuosos, antes de enviar nada.
+  let apartados = 0;
+  for (const m of candidatos) {
+    const motivo = borradorDefectuoso(m);
+    if (!motivo) continue;
+    m.outcome = "retenido_para_revision";
+    m.draft_note = `NO ENVIADO (${motivo}). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
+    apartados++;
+    createAutoTask({
+      lead_phone: m.from,
+      type: "responder_correo",
+      reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador automático era defectuoso (${motivo}). Contéstale a mano.`,
+      source_ref: `retenido_${m.id}`,
+      channel: "EMAIL",
+    });
+  }
+  if (apartados > 0) {
+    writeCollection("email_inbox", inbox);
+    raiseAlert({
+      kind: "gestion_portal",
+      reason: `${apartados} correo(s) en cola tenían un borrador defectuoso (disculpa de la IA caída o caducado) y NO se han enviado -- quedan en Tareas para contestar a mano.`,
+    });
+  }
+
+  const pending = candidatos.filter((m) => m.outcome === "tope_diario_alcanzado").sort((a, b) => a.created_at.localeCompare(b.created_at));
   let sentCount = 0;
   for (const m of pending) {
     if (sentTodayCount() >= DAILY_SEND_CAP) break;
