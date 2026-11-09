@@ -1,4 +1,5 @@
 import { readCollection, writeCollection } from "../store.js";
+import { withPersistentLockSync } from "../locks.js";
 
 // Estado interno de reserva por vehículo (Sección 9 y 25-27 del encargo).
 // Independiente del `stock_status` de vehicles-seed.ts, que es una
@@ -30,7 +31,7 @@ export function getOfficialStatus(vehicleId: string): OfficialVehicleStatus {
   return row?.status ?? "AVAILABLE";
 }
 
-export function setOfficialStatus(vehicleId: string, status: OfficialVehicleStatus, reservationId: string | null) {
+function setOfficialStatus_sinBloqueo(vehicleId: string, status: OfficialVehicleStatus, reservationId: string | null) {
   const rows = all();
   const existing = rows.find((r) => r.vehicle_id === vehicleId);
   if (existing) {
@@ -41,4 +42,11 @@ export function setOfficialStatus(vehicleId: string, status: OfficialVehicleStat
     rows.push({ vehicle_id: vehicleId, status, reservation_id: reservationId, updated_at: now() });
   }
   writeCollection("vehicle_state", rows);
+}
+
+// Bloqueo entre procesos (09/11/2026): el estado oficial del vehículo es lo
+// que impide vender o reservar dos veces el mismo coche. Dos escrituras
+// simultáneas podían perder una.
+export function setOfficialStatus(...a: Parameters<typeof setOfficialStatus_sinBloqueo>): ReturnType<typeof setOfficialStatus_sinBloqueo> {
+  return withPersistentLockSync("col_vehicle_state", () => setOfficialStatus_sinBloqueo(...a));
 }

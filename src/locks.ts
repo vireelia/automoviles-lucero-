@@ -99,6 +99,43 @@ export async function withPersistentLockOrSkip<T>(name: string, fn: () => Promis
   }
 }
 
+// Variante SÍNCRONA (09/11/2026). Casi todo el código hace
+// `readCollection(...)` → modificar → `writeCollection(...)` en funciones
+// síncronas; convertirlas a async cambiaría firmas por medio sistema. Esto
+// permite envolver esa secuencia sin tocar ninguna firma. Bloquea el bucle
+// de eventos mientras espera, así que SOLO vale para trabajos muy cortos
+// (leer, modificar y escribir un JSON pequeño), nunca para una llamada de
+// red. Si no consigue el bloqueo, ejecuta igualmente antes que perder el
+// dato de un cliente real, y deja constancia.
+function dormirSync(ms: number): void {
+  // Espera real sin ocupar la CPU: Atomics.wait sobre un buffer compartido.
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const hasta = Date.now() + ms;
+    while (Date.now() < hasta) {
+      /* respaldo si Atomics.wait no está disponible */
+    }
+  }
+}
+
+export function withPersistentLockSync<T>(name: string, fn: () => T, timeoutMs = 5000): T {
+  mkdirSync(LOCK_DIR, { recursive: true });
+  const hasta = Date.now() + timeoutMs;
+  while (!tryAcquire(name)) {
+    if (Date.now() >= hasta) {
+      console.error(`[locks] sin bloqueo para "${name}" en ${timeoutMs} ms; se continúa para no perder el dato.`);
+      return fn();
+    }
+    dormirSync(WAIT_STEP_MS);
+  }
+  try {
+    return fn();
+  } finally {
+    release(name);
+  }
+}
+
 // Marca persistente "esto ya se hizo una vez en esta ventana", en disco en
 // vez de un Map que se pierde al reiniciar. Devuelve true solo la primera
 // vez dentro de la ventana.

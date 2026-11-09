@@ -13,7 +13,7 @@ import { verifyRetellSignature } from "./integrations/retell-signature.js";
 import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
-import { readCollection, writeCollection, claimOnce } from "./store.js";
+import { readCollection, writeCollection, claimOnce, mutateCollectionSync } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
@@ -333,43 +333,69 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
 // envían con normalidad. Con ?dry=1 solo cuenta.
 app.post("/admin/retener_borradores_disculpa", requireAdminToken, (req, res) => {
   const soloContar = String(req.query.dry ?? "") === "1";
-  const inbox = readCollection<{ id: string; from: string; subject: string; outcome: string; answered?: boolean; draft_note?: string; created_at: string }>("email_inbox");
-  const enCola = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
   const esDisculpa = (m: { draft_note?: string }) => (m.draft_note ?? "").includes("no puedo responderte bien");
-  const defectuosos = enCola.filter(esDisculpa);
-  const legitimos = enCola.filter((m) => !esDisculpa(m));
-  if (!soloContar && defectuosos.length > 0) {
-    for (const m of defectuosos) {
-      m.outcome = "retenido_para_revision";
-      m.draft_note = `NO ENVIADO (disculpa_generica_de_ia_caida). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
-      createAutoTask({
-        lead_phone: m.from,
-        type: "responder_correo",
-        reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador era la disculpa de la IA caída. Contéstale a mano.`,
-        source_ref: `retenido_${m.id}`,
-        channel: "EMAIL",
-      });
-    }
-    writeCollection("email_inbox", inbox);
+  let retenidos = 0;
+  let legitimosIntactos = 0;
+  if (soloContar) {
+    // Solo lectura, sin bloqueo: un recuento no necesita exclusión -- pero sí
+    // lee el estado real del disco en este instante, nunca un caché.
+    const enCola = readCollection<{ outcome: string; answered?: boolean; draft_note?: string }>("email_inbox").filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
+    retenidos = enCola.filter(esDisculpa).length;
+    legitimosIntactos = enCola.length - retenidos;
+  } else {
+    // Bajo el mismo bloqueo "col_email_inbox" que recordInbox y
+    // sendPendingDailyCapEmails (09/11/2026): sin esto, esta ruta podía
+    // pisar un correo que el sondeo acababa de registrar, o viceversa.
+    mutateCollectionSync<{ id: string; from: string; subject: string; outcome: string; answered?: boolean; draft_note?: string; created_at: string }>("email_inbox", (inbox) => {
+      const enCola = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
+      const defectuosos = enCola.filter(esDisculpa);
+      legitimosIntactos = enCola.length - defectuosos.length;
+      for (const m of defectuosos) {
+        m.outcome = "retenido_para_revision";
+        m.draft_note = `NO ENVIADO (disculpa_generica_de_ia_caida). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
+        createAutoTask({
+          lead_phone: m.from,
+          type: "responder_correo",
+          reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador era la disculpa de la IA caída. Contéstale a mano.`,
+          source_ref: `retenido_${m.id}`,
+          channel: "EMAIL",
+        });
+      }
+      retenidos = defectuosos.length;
+      return inbox;
+    });
   }
-  res.json({ status: "ok", dry_run: soloContar, retenidos: defectuosos.length, legitimos_intactos: legitimos.length });
+  res.json({ status: "ok", dry_run: soloContar, retenidos, legitimos_intactos: legitimosIntactos });
 });
 
 const MOTIVO_RUIDO_IA = "no pudo cerrar la respuesta";
 app.post("/admin/archive_ia_outage_handoffs", requireAdminToken, (req, res) => {
   const soloContar = String(req.query.dry ?? "") === "1";
-  const handoffs = readCollection<{ reason?: string; status: string; done_at?: string | null; notes?: string }>("handoffs");
-  const afectados = handoffs.filter((h) => h.status !== "done" && (h.reason ?? "").toLowerCase().includes(MOTIVO_RUIDO_IA));
-  const intactos = handoffs.filter((h) => h.status !== "done" && !(h.reason ?? "").toLowerCase().includes(MOTIVO_RUIDO_IA)).length;
-  if (!soloContar && afectados.length > 0) {
-    for (const h of afectados) {
-      h.status = "done";
-      h.done_at = new Date().toISOString();
-      h.notes = `${h.notes ? `${h.notes} -- ` : ""}Archivado en bloque: ruido del apagón de IA del 05/11/2026, nunca fue una gestión real.`;
-    }
-    writeCollection("handoffs", handoffs);
+  const esRuido = (h: { reason?: string; status: string }) => h.status !== "done" && (h.reason ?? "").toLowerCase().includes(MOTIVO_RUIDO_IA);
+  let archivados = 0;
+  let pendientesRealesIntactos = 0;
+  if (soloContar) {
+    const handoffs = readCollection<{ reason?: string; status: string }>("handoffs");
+    archivados = handoffs.filter(esRuido).length;
+    pendientesRealesIntactos = handoffs.filter((h) => h.status !== "done" && !esRuido(h)).length;
+  } else {
+    // Bajo bloqueo (09/11/2026): un archivado masivo que relee y reescribe
+    // la lista entera podía perder un handoff creado por un cliente real
+    // justo mientras se ejecutaba (createAutoTask/create_handoff van por
+    // appendToCollection, que ya toma este mismo bloqueo).
+    mutateCollectionSync<{ reason?: string; status: string; done_at?: string | null; notes?: string }>("handoffs", (handoffs) => {
+      pendientesRealesIntactos = handoffs.filter((h) => h.status !== "done" && !esRuido(h)).length;
+      for (const h of handoffs) {
+        if (!esRuido(h)) continue;
+        h.status = "done";
+        h.done_at = new Date().toISOString();
+        h.notes = `${h.notes ? `${h.notes} -- ` : ""}Archivado en bloque: ruido del apagón de IA del 05/11/2026, nunca fue una gestión real.`;
+        archivados++;
+      }
+      return handoffs;
+    });
   }
-  res.json({ status: "ok", dry_run: soloContar, archivados: afectados.length, pendientes_reales_intactos: intactos });
+  res.json({ status: "ok", dry_run: soloContar, archivados, pendientes_reales_intactos: pendientesRealesIntactos });
 });
 
 app.post("/admin/resolve_routine_alerts", requireAdminToken, (_req, res) => {
@@ -827,14 +853,19 @@ app.post("/admin/reset_appointment_reminder", requireAdminToken, (req, res) => {
     res.status(400).json({ error: "appointment_id y field (reminder_24h_sent|reminder_6h_sent|reminder_1h_sent) requeridos" });
     return;
   }
-  const appts = readCollection<Record<string, unknown>>("appointments");
-  const appt = appts.find((a) => a.id === appointment_id);
-  if (!appt) {
+  let existia = false;
+  mutateCollectionSync<Record<string, unknown>>("appointments", (appts) => {
+    const appt = appts.find((a) => a.id === appointment_id);
+    if (appt) {
+      appt[field] = false;
+      existia = true;
+    }
+    return appts;
+  });
+  if (!existia) {
     res.status(404).json({ error: "cita no encontrada" });
     return;
   }
-  appt[field] = false;
-  writeCollection("appointments", appts);
   res.json({ ok: true, appointment_id, field });
 });
 // Envío inmediato real (04/11/2026, "y recuerdales la visita" -- la ventana
@@ -1090,9 +1121,12 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
   // solo deja constancia de lo que ya se mandó o se intentó mandar.
   const whatsappInboxId = crypto.randomUUID();
   try {
-    const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
-    inbox.push({ id: whatsappInboxId, phone: from, text, read: false, answered: false, archived: false, created_at: new Date().toISOString() });
-    writeCollection("whatsapp_inbox", inbox.slice(-500));
+    // Bajo bloqueo (09/11/2026): dos mensajes entrantes casi simultáneos
+    // leían la misma lista y al escribir se perdía uno de los dos.
+    mutateCollectionSync<WhatsappInboxRecord>("whatsapp_inbox", (inbox) => {
+      inbox.push({ id: whatsappInboxId, phone: from, text, read: false, answered: false, archived: false, created_at: new Date().toISOString() });
+      return inbox.slice(-500);
+    });
   } catch (err) {
     console.error("[whatsapp] no se pudo registrar el mensaje entrante en el CRM:", err instanceof Error ? err.message : err);
   }
@@ -1221,18 +1255,20 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       else console.warn(`[zernio-whatsapp] no se pudo descargar ${audioAttachment ? "la nota de voz" : "la foto"}:`, downloaded.error);
     }
     try {
-      const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
-      inbox.push({
-        id: whatsappInboxId,
-        phone,
-        text: text.trim().slice(0, 2000),
-        read: false,
-        answered: false,
-        archived: false,
-        created_at: new Date().toISOString(),
-        ...(mediaPath ? { media_path: mediaPath, media_type: audioAttachment ? ("audio" as const) : ("image" as const) } : {}),
+      // Bajo bloqueo (09/11/2026): mismo motivo que en WhatsApp directo.
+      mutateCollectionSync<WhatsappInboxRecord>("whatsapp_inbox", (inbox) => {
+        inbox.push({
+          id: whatsappInboxId,
+          phone,
+          text: text.trim().slice(0, 2000),
+          read: false,
+          answered: false,
+          archived: false,
+          created_at: new Date().toISOString(),
+          ...(mediaPath ? { media_path: mediaPath, media_type: audioAttachment ? ("audio" as const) : ("image" as const) } : {}),
+        });
+        return inbox.slice(-500);
       });
-      writeCollection("whatsapp_inbox", inbox.slice(-500));
     } catch (err) {
       console.error("[zernio-whatsapp] no se pudo registrar el mensaje entrante en el CRM:", err instanceof Error ? err.message : err);
     }

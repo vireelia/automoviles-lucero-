@@ -1,4 +1,5 @@
 // Seguimiento comercial (20/10/2026, mejora integral del CRM, sección 14):
+import { withPersistentLockSync } from "../locks.js";
 // tareas reales con responsable/vencimiento/prioridad/resultado, nunca un
 // campo libre que nadie puede filtrar. Se crean solas en los puntos reales
 // donde el encargo pide una automatización -- nunca al abrir una página (a
@@ -123,7 +124,7 @@ export function createManualTask(args: {
   return task;
 }
 
-export function completeTask(id: string, completedBy: string, result?: string, nextAction?: string): boolean {
+function completeTask_sinBloqueo(id: string, completedBy: string, result?: string, nextAction?: string): boolean {
   const tasks = listTasks();
   const t = tasks.find((x) => x.id === id);
   if (!t) return false;
@@ -136,11 +137,22 @@ export function completeTask(id: string, completedBy: string, result?: string, n
   return true;
 }
 
-export function assignTask(id: string, assignedTo: string | null): boolean {
+function assignTask_sinBloqueo(id: string, assignedTo: string | null): boolean {
   const tasks = listTasks();
   const t = tasks.find((x) => x.id === id);
   if (!t) return false;
   t.assigned_to = assignedTo;
   writeCollection("tasks", tasks);
   return true;
+}
+
+// Bloqueo entre procesos (09/11/2026): completar o asignar una tarea leía la
+// lista entera y la reescribía; dos acciones casi simultáneas del equipo
+// podían perder una. createAutoTask/createManualTask ya van protegidas por
+// appendToCollection, que ahora también toma el bloqueo.
+export function completeTask(...a: Parameters<typeof completeTask_sinBloqueo>): ReturnType<typeof completeTask_sinBloqueo> {
+  return withPersistentLockSync("col_tasks", () => completeTask_sinBloqueo(...a));
+}
+export function assignTask(...a: Parameters<typeof assignTask_sinBloqueo>): ReturnType<typeof assignTask_sinBloqueo> {
+  return withPersistentLockSync("col_tasks", () => assignTask_sinBloqueo(...a));
 }

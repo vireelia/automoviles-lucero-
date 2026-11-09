@@ -1,4 +1,5 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
+import { withPersistentLockSync, withPersistentLock } from "../locks.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
 import { getOfficialStatus, setOfficialStatus } from "./vehicle-state.js";
@@ -82,7 +83,7 @@ function readReservations() {
   return readCollection<Reservation>("reservations", []);
 }
 
-export async function createReservationPending(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
+async function createReservationPending_sinBloqueo(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
   const currentStatus = getOfficialStatus(args.vehicle_id);
   if (currentStatus === "RESERVED" || currentStatus === "SOLD") {
     return envelope({
@@ -118,7 +119,14 @@ export async function createReservationPending(args: { vehicle_id: string; lead_
     verified_by: null,
     verified_at: null,
   };
-  appendToCollection("reservations", reservation);
+  // Mismo fallo real que en upsertLead (09/11/2026, auditoría de
+  // concurrencia): esta función ya corre bajo el bloqueo "col_reservations"
+  // (ver el wrapper exportado abajo) -- appendToCollection volvería a
+  // pedirlo, autodeadlock no reentrante. Push + writeCollection directo, sin
+  // tomar lock de nuevo.
+  const reservations = readCollection<Reservation>("reservations");
+  reservations.push(reservation);
+  writeCollection("reservations", reservations);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
   markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: una reserva real es la intención real por excelencia.
   await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount, channel: args.channel ?? null });
@@ -133,7 +141,7 @@ export async function createReservationPending(args: { vehicle_id: string; lead_
   return envelope({ status: "ok", data: reservation, source: "registro interno", conflicts });
 }
 
-export function submitPaymentReceipt(args: { reservation_id: string; note?: string }) {
+function submitPaymentReceipt_sinBloqueo(args: { reservation_id: string; note?: string }) {
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
@@ -167,7 +175,7 @@ export function submitPaymentReceipt(args: { reservation_id: string; note?: stri
 // validación"). Se exponen por una ruta administrativa separada, protegida
 // por un token simple, para que Ramón/José/el equipo las use manualmente --
 // no están en la lista de tools que se declaran a Retell.
-export async function confirmReservation(args: { reservation_id: string; verified_by: string }) {
+async function confirmReservation_sinBloqueo(args: { reservation_id: string; verified_by: string }) {
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
@@ -206,7 +214,7 @@ export async function confirmReservation(args: { reservation_id: string; verifie
   });
 }
 
-export function cancelReservation(args: { reservation_id: string; reason?: string }) {
+function cancelReservation_sinBloqueo(args: { reservation_id: string; reason?: string }) {
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
@@ -224,7 +232,7 @@ export function cancelReservation(args: { reservation_id: string; reason?: strin
 // reserva nueva, nunca el plazo ya vencido de la cancelada). No se puede
 // devolver si el coche ya quedó vendido mientras tanto -- no se pisa una
 // venta real.
-export function reopenReservation(args: { reservation_id: string }) {
+function reopenReservation_sinBloqueo(args: { reservation_id: string }) {
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
@@ -242,4 +250,27 @@ export function reopenReservation(args: { reservation_id: string }) {
   setOfficialStatus(reservation.vehicle_id, "RESERVATION_PENDING", reservation.id);
 
   return envelope({ status: "ok", data: reservation, source: "acción manual del equipo" });
+}
+
+// Bloqueo entre procesos (09/11/2026, auditoría de concurrencia): estas cinco
+// funciones leían la lista de reservas, la modificaban y la volvían a
+// escribir. Dos operaciones casi simultáneas sobre el mismo vehículo podían
+// pisarse -- el caso grave es dos reservas confirmadas del mismo coche, o un
+// pago verificado que se pierde. Sin cambiar ninguna firma.
+export function submitPaymentReceipt(...a: Parameters<typeof submitPaymentReceipt_sinBloqueo>): ReturnType<typeof submitPaymentReceipt_sinBloqueo> {
+  return withPersistentLockSync("col_reservations", () => submitPaymentReceipt_sinBloqueo(...a));
+}
+export function cancelReservation(...a: Parameters<typeof cancelReservation_sinBloqueo>): ReturnType<typeof cancelReservation_sinBloqueo> {
+  return withPersistentLockSync("col_reservations", () => cancelReservation_sinBloqueo(...a));
+}
+export function reopenReservation(...a: Parameters<typeof reopenReservation_sinBloqueo>): ReturnType<typeof reopenReservation_sinBloqueo> {
+  return withPersistentLockSync("col_reservations", () => reopenReservation_sinBloqueo(...a));
+}
+// Estas dos son async (tocan calendario/avisos), así que usan el bloqueo
+// asíncrono, que espera sin bloquear el bucle de eventos.
+export function createReservationPending(...a: Parameters<typeof createReservationPending_sinBloqueo>): ReturnType<typeof createReservationPending_sinBloqueo> {
+  return withPersistentLock("col_reservations", () => createReservationPending_sinBloqueo(...a), 30_000);
+}
+export function confirmReservation(...a: Parameters<typeof confirmReservation_sinBloqueo>): ReturnType<typeof confirmReservation_sinBloqueo> {
+  return withPersistentLock("col_reservations", () => confirmReservation_sinBloqueo(...a), 30_000);
 }

@@ -1,4 +1,5 @@
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
+import { withPersistentLockSync } from "../locks.js";
 import { envelope } from "../response.js";
 import { businessInfo } from "../data/business-info.js";
 import { raiseAlert } from "../alerts/alerts.js";
@@ -126,7 +127,7 @@ function hasRealVisitOrReservationIntent(phone: string | null): boolean {
 // y el teléfono se registran con upsert_lead antes de cerrar cita/reserva,
 // ver prompt-core.md) no se crea nada aquí -- esto solo desarchiva, nunca
 // inventa un lead nuevo sin los demás datos reales que upsert_lead ya pide.
-export function markLeadRealIntent(phone: string | null): void {
+function markLeadRealIntent_sinBloqueo(phone: string | null): void {
   if (!phone) return;
   const normalized = normalizePhone(phone);
   const leads = readLeads();
@@ -137,7 +138,7 @@ export function markLeadRealIntent(phone: string | null): void {
   }
 }
 
-export function upsertLead(args: {
+function upsertLead_sinBloqueo(args: {
   phone?: string;
   email?: string;
   name?: string;
@@ -209,7 +210,18 @@ export function upsertLead(args: {
       updated_at: now(),
       last_contact: now(),
     };
-    appendToCollection("leads", lead);
+    // FALLO REAL detectado (09/11/2026, auditoría de concurrencia):
+    // appendToCollection toma su propio bloqueo "col_leads" por dentro. Esta
+    // función ya se ejecuta bajo ESE MISMO bloqueo (ver el wrapper exportado
+    // más abajo) -- llamar aquí a appendToCollection era pedir un bloqueo no
+    // reentrante contra uno mismo: la petición se quedaba esperando sus
+    // propios 5 segundos completos antes de rendirse y continuar igualmente
+    // (nunca perdía el dato, pero congelaba TODO el proceso -- con 3 leads
+    // nuevos simultáneos, 15 segundos de bloqueo total, confirmado en
+    // pruebas). Aquí basta con `leads` + `writeCollection`, sin tomar lock
+    // de nuevo: el wrapper de fuera ya protege todo el bloque.
+    leads.push(lead);
+    writeCollection("leads", leads);
   }
 
   if (isNewPhoneFromOtherChannel && normalizedPhone) {
@@ -219,7 +231,7 @@ export function upsertLead(args: {
   return envelope({ status: "ok", data: lead, source: "registro interno" });
 }
 
-export function updateContactPreferences(args: { phone: string; do_not_contact?: boolean; preferred_channel?: string }) {
+function updateContactPreferences_sinBloqueo(args: { phone: string; do_not_contact?: boolean; preferred_channel?: string }) {
   const leads = readLeads();
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
@@ -268,7 +280,7 @@ export function getCustomerHistory(args: { phone: string }) {
 // esta herramienta solo persiste + dispara aviso si es HOT. La
 // clasificación NUNCA se muestra al cliente -- eso es una regla de prompt,
 // no de esta función.
-export function scoreLead(args: { phone: string; temperature: Temperature; objection?: string }) {
+function scoreLead_sinBloqueo(args: { phone: string; temperature: Temperature; objection?: string }) {
   const leads = readLeads();
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
@@ -306,7 +318,7 @@ export function scoreLead(args: { phone: string; temperature: Temperature; objec
 // automáticos por lead. No es esta función la que envía el mensaje (no hay
 // canal de envío real conectado, ver delivery.ts) -- solo lleva la cuenta
 // para que nunca se supere el máximo.
-export function createFollowup(args: { phone: string; reason?: string }) {
+function createFollowup_sinBloqueo(args: { phone: string; reason?: string }) {
   const leads = readLeads();
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
@@ -396,4 +408,28 @@ export function mergeLeads(args: { keep_id: string; remove_id: string; admin_ema
   moveToTrash("leads", remove, `Duplicado fusionado en ${keep.id}: ${remove.name || remove.phone || remove.email || "sin nombre"}`, args.admin_email);
   writeCollection("leads", leads.filter((l) => l.id !== remove.id));
   return envelope({ status: "ok", data: keep, source: "registro interno" });
+}
+
+// Bloqueo entre procesos para el patrón leer-modificar-escribir de leads
+// (09/11/2026, auditoría de concurrencia). Estas cinco funciones leían la
+// lista completa, la modificaban y la volvían a escribir: con dos mensajes
+// casi simultáneos (dos canales, o dos instancias) una de las dos
+// actualizaciones se perdía -- y perder un upsertLead es perder el teléfono,
+// el nombre o el vehículo de interés de un cliente real. Se envuelven sin
+// cambiar ninguna firma: por fuera siguen siendo exactamente las mismas
+// funciones síncronas que antes.
+export function upsertLead(...args: Parameters<typeof upsertLead_sinBloqueo>): ReturnType<typeof upsertLead_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => upsertLead_sinBloqueo(...args));
+}
+export function scoreLead(...args: Parameters<typeof scoreLead_sinBloqueo>): ReturnType<typeof scoreLead_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => scoreLead_sinBloqueo(...args));
+}
+export function markLeadRealIntent(...args: Parameters<typeof markLeadRealIntent_sinBloqueo>): ReturnType<typeof markLeadRealIntent_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => markLeadRealIntent_sinBloqueo(...args));
+}
+export function updateContactPreferences(...args: Parameters<typeof updateContactPreferences_sinBloqueo>): ReturnType<typeof updateContactPreferences_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => updateContactPreferences_sinBloqueo(...args));
+}
+export function createFollowup(...args: Parameters<typeof createFollowup_sinBloqueo>): ReturnType<typeof createFollowup_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => createFollowup_sinBloqueo(...args));
 }

@@ -123,6 +123,32 @@ fiabilidad (que son las que interesan).
 No hay migraciones de base de datos ni cambios de esquema, así que el
 rollback de código es un redespliegue limpio, sin pasos intermedios.
 
+## 4.bis Plan para los 168 WhatsApp y 1.132 correos sin atender
+
+Esto **no es un envío masivo**: es ponerle a Ramón y José una lista para que
+decidan y escriban ellos, uno a uno, a su ritmo. El sistema no contacta a
+nadie por su cuenta.
+
+1. **Nunca automático.** No existe ningún proceso que reenvíe estos mensajes
+   solo. Lo único que toca este atasco es `/admin/archive_ia_outage_handoffs`,
+   y solo limpia el RUIDO (los avisos duplicados del fallo de IA), nunca
+   envía nada a un cliente.
+2. **Lista para el equipo, no cola de envío.** Generar un informe (CSV o
+   vista en el CRM) con los 168 WhatsApp y 1.132 correos: teléfono/correo,
+   fecha, texto original, y si hay o no una cita/reserva asociada. Ramón y
+   José priorizan y contestan desde WhatsApp Web o Gmail directamente, fuera
+   del sistema automático.
+3. **Sin consumo de IA**: esa lista se genera leyendo `whatsapp_inbox` y
+   `email_inbox`, sin volver a llamar a `handleChatMessage` para ninguno de
+   ellos. Coste: cero.
+4. **Si se quisiera automatizar algún día** (no autorizado, no planeado):
+   tendría que ser con el mismo criterio que ya hay para el primer
+   contacto -- plantilla fija, deduplicado, con límite por minuto y por día,
+   nunca reabriendo IA sobre 1.300 conversaciones muertas de golpe. Eso es
+   justo lo que el seguimiento comercial (`LUCERO_FOLLOWUP_ENABLED`) NO hace
+   con este atasco: solo actúa sobre conversaciones de los últimos días, no
+   sobre este histórico.
+
 ## 5. Riesgos conocidos que quedan
 
 - **Bloqueo entre procesos**: los bloqueos son archivos en el propio volumen

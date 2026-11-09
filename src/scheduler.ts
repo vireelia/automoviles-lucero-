@@ -8,7 +8,7 @@ import { notifyVisitUpcoming } from "./tools/team-notify.js";
 import { raiseAlert } from "./alerts/alerts.js";
 import { googleStatus } from "./integrations/google.js";
 import { createAutoTask } from "./tools/tasks.js";
-import { withPersistentLockOrSkip } from "./locks.js";
+import { withPersistentLockOrSkip, withPersistentLock, withPersistentLockSync } from "./locks.js";
 import { drainN8nVozOutbox } from "./integrations/n8n.js";
 import { runSeguimientoComercial } from "./chat/followup-comercial.js";
 
@@ -112,7 +112,13 @@ async function sendApptReminder(appt: Appointment, message: string): Promise<boo
 async function checkAppointmentReminders() {
   const appointments = readCollection<Appointment>("appointments", []);
   const now = Date.now();
-  let changed = false;
+  // Marcas reales por cita, aplicadas al final BAJO BLOQUEO (09/11/2026,
+  // auditoría de concurrencia): esta función hace envíos de red dentro del
+  // bucle y antes reescribía toda la lista leída al principio -- un cambio
+  // hecho por otro proceso mientras tanto (una cita nueva, una cancelación)
+  // se perdía. Ahora solo se aplican los campos de recordatorio, releyendo
+  // dentro del bloqueo, a cada cita que de verdad cambió.
+  const marcas = new Map<string, Partial<Appointment>>();
 
   for (const appt of appointments) {
     if (appt.status === "cancelled") continue;
@@ -124,8 +130,7 @@ async function checkAppointmentReminders() {
     if (!appt.reminder_24h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.long)) {
       const ok = await sendApptReminder(appt, `Recordatorio: mañana tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
       if (ok) {
-        appt.reminder_24h_sent = true;
-        changed = true;
+        marcas.set(appt.id, { reminder_24h_sent: true });
         console.log(`[scheduler] recordatorio 24h entregado de verdad para ${appt.id}`);
       }
       continue;
@@ -133,8 +138,7 @@ async function checkAppointmentReminders() {
     if (appt.reminder_24h_sent && !appt.reminder_6h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.mid)) {
       const ok = await sendApptReminder(appt, `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`);
       if (ok) {
-        appt.reminder_6h_sent = true;
-        changed = true;
+        marcas.set(appt.id, { reminder_6h_sent: true });
         console.log(`[scheduler] recordatorio 6h entregado de verdad para ${appt.id}`);
       }
       continue;
@@ -142,13 +146,21 @@ async function checkAppointmentReminders() {
     if (!appt.reminder_24h_sent && !appt.reminder_1h_sent && withinWindow(msUntil, businessInfo.reminder.hours_before.short)) {
       const ok = await sendApptReminder(appt, `Recordatorio: en 1 hora tienes una cita en Automóviles Lucero (a las ${appt.requested_time}).`);
       if (ok) {
-        appt.reminder_1h_sent = true;
-        changed = true;
+        marcas.set(appt.id, { reminder_1h_sent: true });
         console.log(`[scheduler] recordatorio 1h (cita de última hora) entregado de verdad para ${appt.id}`);
       }
     }
   }
-  if (changed) writeCollection("appointments", appointments);
+  if (marcas.size > 0) {
+    await withPersistentLock("col_appointments", () => {
+      const frescos = readCollection<Appointment>("appointments", []);
+      for (const [id, parche] of marcas) {
+        const i = frescos.findIndex((a) => a.id === id);
+        if (i >= 0) frescos[i] = { ...frescos[i], ...parche };
+      }
+      writeCollection("appointments", frescos);
+    }, 10_000);
+  }
 }
 
 // Aviso al equipo 30 min antes de cada visita (21/10/2026, petición real:
@@ -161,7 +173,7 @@ async function checkAppointmentReminders() {
 function checkTeamUpcomingVisits() {
   const appointments = readCollection<Appointment>("appointments", []);
   const now = Date.now();
-  let changed = false;
+  const marcadas: string[] = [];
 
   for (const appt of appointments) {
     if (appt.status === "cancelled" || appt.team_reminder_30m_sent) continue;
@@ -172,12 +184,22 @@ function checkTeamUpcomingVisits() {
 
     if (withinWindow(msUntil, 0.5)) {
       void notifyVisitUpcoming({ lead_phone: appt.lead_phone ?? null, vehicle_id: appt.vehicle_id, requested_time: appt.requested_time });
-      appt.team_reminder_30m_sent = true;
-      changed = true;
+      marcadas.push(appt.id);
       console.log(`[scheduler] aviso de 30 min al equipo encolado para ${appt.id}`);
     }
   }
-  if (changed) writeCollection("appointments", appointments);
+  // Bajo bloqueo, solo el flag de esta cita (09/11/2026): mismo motivo que
+  // en checkAppointmentReminders.
+  if (marcadas.length > 0) {
+    withPersistentLockSync("col_appointments", () => {
+      const frescos = readCollection<Appointment>("appointments", []);
+      for (const id of marcadas) {
+        const i = frescos.findIndex((a) => a.id === id);
+        if (i >= 0) frescos[i] = { ...frescos[i], team_reminder_30m_sent: true };
+      }
+      writeCollection("appointments", frescos);
+    });
+  }
 }
 
 // Aviso de "buen final de día" al equipo (22/10/2026, a petición real:

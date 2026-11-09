@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import dns from "dns";
-import { readCollection, writeCollection } from "../store.js";
+import { readCollection, writeCollection, mutateCollection, mutateCollectionSync } from "../store.js";
 import { handleChatMessage, recordAssistantMessage, FALLBACK_REPLY } from "../chat/agent.js";
 import { buildFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
 import { dentroDeVentana, contactoAutorizado } from "../chat/whatsapp-window.js";
@@ -70,6 +70,22 @@ const MAX_AI_FAILURE_ATTEMPTS = 6;
 // clientes con intención real de compra") -- heurística por palabras clave,
 // deliberadamente sin IA (encolar no puede depender de lo que precisamente
 // no se puede llamar todavía). 2 = prioridad alta, 1 = normal.
+// Marca un correo como procesado de forma transaccional (09/11/2026,
+// auditoría de concurrencia). Antes había 14 sitios haciendo
+// `writeCollection("email_processed", [...processed, nuevo])` con un
+// `processed` leído al principio de la función: si entre la lectura y la
+// escritura otro correo se marcaba, esa marca se perdía -- y un correo sin
+// marca se vuelve a procesar y se le CONTESTA OTRA VEZ al cliente.
+// mutateCollection relee dentro del bloqueo, así que ninguna marca se pierde.
+async function marcarProcesado(email: InboundEmail, outcome: string): Promise<void> {
+  await mutateCollection<Processed>("email_processed", (items) => {
+    const key = `${email.from}|${email.messageKey}`;
+    const sinEsta = items.filter((p) => p.key !== key);
+    sinEsta.push({ key, at: new Date().toISOString(), outcome, threadId: email.threadId });
+    return sinEsta.slice(-MAX_PROCESSED_KEPT);
+  });
+}
+
 function pendingEmailPriority(email: InboundEmail): number {
   return /reserva|reservar|cita|visita|financiaci[oó]n|señal|pagar|comprar|interesad[oa]/i.test(`${email.subject}\n${email.text}`) ? 2 : 1;
 }
@@ -278,7 +294,12 @@ function recordInbox(
   outcome: string,
   extra?: { portal?: string | null; draftNote?: string; answered?: boolean; answeredBy?: "ia" | "equipo"; messageKey?: string },
 ) {
-  const inbox = readCollection<InboxItem>("email_inbox");
+  // Bajo bloqueo (09/11/2026, auditoría de concurrencia): recordInbox,
+  // sendPendingDailyCapEmails y la ruta de contención de disculpas escriben
+  // los tres "email_inbox" desde ciclos distintos (sondeo de correo,
+  // programador, admin). Sin un bloqueo compartido, uno podía reescribir
+  // encima de un correo que el otro acababa de añadir o retener.
+  mutateCollectionSync<InboxItem>("email_inbox", (inbox) => {
   inbox.push({
     id: crypto.randomUUID(),
     from: email.from,
@@ -308,7 +329,8 @@ function recordInbox(
     // confundir "procesado hoy" con "llegado hoy".
     received_at: email.receivedAt ?? null,
   });
-  writeCollection("email_inbox", inbox.slice(-500));
+  return inbox.slice(-500);
+  });
 }
 
 // Factorizado (28/10/2026, "que Daniel coja ese número y los datos del
@@ -338,7 +360,7 @@ async function contactLeadViaWhatsapp(
   // disculpa genérica al cliente.
   if (alreadyContacted(waPhone, vehicleLabel || null)) {
     recordInbox(email, "duplicado_primer_contacto", { portal });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "duplicado_primer_contacto", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "duplicado_primer_contacto");
     return { outcome: "duplicado_primer_contacto" };
   }
   const firstContact = { leadId: leadRes.data?.id ?? waPhone, phone: waPhone, name: contact.name, vehicle: vehicleLabel || null, portal };
@@ -350,7 +372,7 @@ async function contactLeadViaWhatsapp(
   const autorizacion = contactoAutorizado(waPhone);
   if (!autorizacion.ok) {
     recordInbox(email, "contacto_no_autorizado", { portal, draftNote: `No se le escribe por WhatsApp (${autorizacion.motivo}). Texto que se habría enviado:\n${reply}` });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "contacto_no_autorizado", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "contacto_no_autorizado");
     createAutoTask({
       lead_phone: waPhone,
       type: "contactar_whatsapp",
@@ -363,7 +385,7 @@ async function contactLeadViaWhatsapp(
 
   if (!isFirstContactEnabled()) {
     recordInbox(email, "modo_prueba_sin_envio", { portal, draftNote: reply });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "modo_prueba_sin_envio", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "modo_prueba_sin_envio");
     return { outcome: "modo_prueba_sin_envio", reply };
   }
 
@@ -392,7 +414,7 @@ async function contactLeadViaWhatsapp(
     // correo más abajo (outcome "sent"): solo se marca cuando de verdad se
     // entregó, nunca al fallar.
     recordInbox(email, "sent_whatsapp_automatico", { portal, answered: true, answeredBy: "ia" });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_automatico", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "sent_whatsapp_automatico");
     return { outcome: "sent_whatsapp_automatico", reply };
   }
 
@@ -413,7 +435,7 @@ async function contactLeadViaWhatsapp(
       markContacted(firstContact);
       recordAssistantMessage(waPhone, `(plantilla de primer contacto enviada sobre ${vehicleLabel || "el vehículo consultado"})`);
       recordInbox(email, "sent_whatsapp_plantilla", { portal, answered: true, answeredBy: "ia" });
-      writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "sent_whatsapp_plantilla", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+      await marcarProcesado(email, "sent_whatsapp_plantilla");
       return { outcome: "sent_whatsapp_plantilla" };
     }
   }
@@ -421,7 +443,7 @@ async function contactLeadViaWhatsapp(
   const failReason = explainWhatsappSendError(sent.error);
   const draftNote = `El envío automático por WhatsApp falló: ${failReason} -- escribirle a mano: https://wa.me/${contact.phone}\n\nRespuesta ya redactada, lista para copiar:\n${reply}`;
   recordInbox(email, "pendiente_whatsapp_manual", { portal, draftNote });
-  writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_whatsapp_manual", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+  await marcarProcesado(email, "pendiente_whatsapp_manual");
   raiseAlert({ kind: "gestion_portal", lead_phone: waPhone, name: contact.name, reason: `${portal}: cliente pidió contacto SOLO por WhatsApp -- el envío automático falló: ${failReason}. Escribirle a mano: https://wa.me/${contact.phone}`, draft_note: draftNote });
   return { outcome: "pendiente_whatsapp_manual" };
 }
@@ -533,7 +555,7 @@ export async function processInboundEmail(
         return await contactLeadViaWhatsapp(email, processed, { ...contact, phone: contact.phone }, "Wallapop");
       }
       recordInbox(email, "pendiente_gestion_portal", { portal: portalInfo.portal });
-      writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_gestion_portal", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+      await marcarProcesado(email, "pendiente_gestion_portal");
       raiseAlert({
         kind: "gestion_portal",
         reason: `Wallapop: nuevo aviso sobre "${email.subject || "tu anuncio"}" sin teléfono real detectado -- revísalo y gestiónalo directamente en Wallapop.`,
@@ -547,7 +569,7 @@ export async function processInboundEmail(
     // tal cual sería acumular justo el dato que no hace falta conservar.
     const sensitive = decision.reason === "documento_sensible_revision_humana";
     recordInbox(sensitive ? { ...email, text: "[contenido sensible -- no almacenado]" } : email, "automated_no_reply", { portal: portalInfo.portal });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "automated_no_reply", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "automated_no_reply");
     // Decisión real (03/11/2026, "solo se tiene que responder mensajes de
     // clientes y enviar avisos de reservas o visitas, no de todoooo"):
     // antes (27/10/2026, caso real del Opel Mokka) esto avisaba al equipo
@@ -664,7 +686,7 @@ export async function processInboundEmail(
     recordInbox(email, "fallo_ia_pendiente_revision", { portal: portalInfo.portal, messageKey: email.messageKey });
     if (opts?.detectAiFailureForQueue) return { outcome: "fallo_ia_pendiente_revision", error: "fallback_detectado_en_cola" };
     enqueuePendingEmail(email);
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "en_cola_fallo_ia", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "en_cola_fallo_ia");
     return { outcome: "en_cola_fallo_ia", error: "ai_failed" };
   }
   const body = `${reply}\n\n${SIGNATURE}`;
@@ -686,7 +708,7 @@ export async function processInboundEmail(
   const sinDireccionRealDeCliente = portalInfo.portal === "Coches.net" && isCochesNetSharedSender(email.from) && !cochesNetIdentity?.email;
   if (portalInfo.mustManageOnPortal || sinDireccionRealDeCliente) {
     recordInbox(email, "pendiente_gestion_portal", { portal: portalInfo.portal, draftNote: body });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pendiente_gestion_portal", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "pendiente_gestion_portal");
     // Mejora real (15/10/2026, a petición de "qué podemos hacer para mejorar
     // eso"): no hay API de mensajería de Wallapop para responder sin más --
     // así que la mejora posible es que el equipo se entere al instante y ya
@@ -710,7 +732,7 @@ export async function processInboundEmail(
   // probar cambios de prompt/reglas sin arriesgar un envío real a un cliente.
   if (!isEmailAutoSendEnabled()) {
     recordInbox(email, "modo_prueba_sin_envio", { portal: portalInfo.portal, draftNote: body });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "modo_prueba_sin_envio", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "modo_prueba_sin_envio");
     return { outcome: "modo_prueba_sin_envio", reply: body };
   }
 
@@ -721,14 +743,14 @@ export async function processInboundEmail(
   // reactiven desde su ficha en Contactos.
   if (isEmailContactPaused(email.from)) {
     recordInbox(email, "pausado_por_chat", { portal: portalInfo.portal, draftNote: body });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "pausado_por_chat", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "pausado_por_chat");
     raiseAlert({ kind: "gestion_portal", reason: `Correo: Daniel está pausado para este remitente en concreto -- "${email.subject}" no se respondió. Reactívalo desde su ficha en Contactos cuando quieras.`, draft_note: body });
     return { outcome: "pausado_por_chat", reply: body };
   }
 
   if (sentTodayCount() >= DAILY_SEND_CAP) {
     recordInbox(email, "tope_diario_alcanzado", { portal: portalInfo.portal, draftNote: body });
-    writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome: "tope_diario_alcanzado", threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+    await marcarProcesado(email, "tope_diario_alcanzado");
     // Fallo real detectado (03/11/2026, "arregla eso, me llegó 3 mensajes
     // así"): el motivo incluía el asunto del correo (`"${email.subject}"`),
     // así que cada cliente nuevo que llegaba tras alcanzar el tope
@@ -761,7 +783,7 @@ export async function processInboundEmail(
   // Solo "sent" cuenta como respondido de verdad; "send_failed" y
   // "queued_no_google" NO se marcan (no llegó al cliente).
   recordInbox(email, outcome, { portal: portalInfo.portal, answered: outcome === "sent", answeredBy: "ia" });
-  writeCollection("email_processed", [...processed, { key: `${email.from}|${email.messageKey}`, at: new Date().toISOString(), outcome, threadId: email.threadId }].slice(-MAX_PROCESSED_KEPT));
+  await marcarProcesado(email, outcome);
 
   return { outcome, reply: body, error };
 }
@@ -801,49 +823,60 @@ function borradorDefectuoso(m: InboxItem): string | null {
 
 export async function sendPendingDailyCapEmails(): Promise<number> {
   if (!isEmailAutoSendEnabled()) return 0; // mismo interruptor de pruebas que el resto del envío automático.
-  const inbox = readCollection<InboxItem>("email_inbox");
-  const candidatos = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
 
-  // Primero se apartan los defectuosos, antes de enviar nada.
+  // Fase 1, retención: solo lectura/escritura de disco (sin red), bajo el
+  // mismo bloqueo "col_email_inbox" que usa recordInbox -- ningún correo
+  // nuevo que llegue a mitad se pierde ni se pisa.
   let apartados = 0;
-  for (const m of candidatos) {
-    const motivo = borradorDefectuoso(m);
-    if (!motivo) continue;
-    m.outcome = "retenido_para_revision";
-    m.draft_note = `NO ENVIADO (${motivo}). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
-    apartados++;
-    createAutoTask({
-      lead_phone: m.from,
-      type: "responder_correo",
-      reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador automático era defectuoso (${motivo}). Contéstale a mano.`,
-      source_ref: `retenido_${m.id}`,
-      channel: "EMAIL",
-    });
-  }
+  let pendingIds: string[] = [];
+  mutateCollectionSync<InboxItem>("email_inbox", (inbox) => {
+    const candidatos = inbox.filter((m) => m.outcome === "tope_diario_alcanzado" && !m.answered && m.draft_note);
+    for (const m of candidatos) {
+      const motivo = borradorDefectuoso(m);
+      if (!motivo) continue;
+      m.outcome = "retenido_para_revision";
+      m.draft_note = `NO ENVIADO (${motivo}). El cliente sigue sin respuesta: contéstale a mano.\n\nTexto que se habría enviado:\n${m.draft_note ?? ""}`;
+      apartados++;
+      createAutoTask({
+        lead_phone: m.from,
+        type: "responder_correo",
+        reason: `Correo de ${m.from} ("${m.subject || "sin asunto"}") sin responder: el borrador automático era defectuoso (${motivo}). Contéstale a mano.`,
+        source_ref: `retenido_${m.id}`,
+        channel: "EMAIL",
+      });
+    }
+    pendingIds = candidatos.filter((m) => m.outcome === "tope_diario_alcanzado").sort((a, b) => a.created_at.localeCompare(b.created_at)).map((m) => m.id);
+    return inbox;
+  });
   if (apartados > 0) {
-    writeCollection("email_inbox", inbox);
     raiseAlert({
       kind: "gestion_portal",
       reason: `${apartados} correo(s) en cola tenían un borrador defectuoso (disculpa de la IA caída o caducado) y NO se han enviado -- quedan en Tareas para contestar a mano.`,
     });
   }
 
-  const pending = candidatos.filter((m) => m.outcome === "tope_diario_alcanzado").sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // Fase 2, envío real: hay red por medio (deliverEmail), así que cada envío
+  // se marca en su propio bloqueo, releyendo el estado fresco de ESE correo
+  // justo antes de mandarlo -- si otro proceso ya lo marcó entretanto
+  // (p. ej. una respuesta manual desde el CRM), no se reenvía por duplicado.
   let sentCount = 0;
-  for (const m of pending) {
+  for (const id of pendingIds) {
     if (sentTodayCount() >= DAILY_SEND_CAP) break;
+    const actual = readCollection<InboxItem>("email_inbox").find((m) => m.id === id);
+    if (!actual || actual.outcome !== "tope_diario_alcanzado" || actual.answered) continue; // ya resuelto por otra vía mientras tanto
     const delivery = await deliverEmail(
-      m.from,
-      replySubject(m.subject),
-      m.draft_note!,
-      m.thread_id && m.in_reply_to ? { threadId: m.thread_id, inReplyTo: m.in_reply_to } : undefined,
+      actual.from,
+      replySubject(actual.subject),
+      actual.draft_note!,
+      actual.thread_id && actual.in_reply_to ? { threadId: actual.thread_id, inReplyTo: actual.in_reply_to } : undefined,
     );
     if (delivery.status !== "sent") break; // Google desconectado u otro fallo real -- no tiene sentido seguir intentando esta pasada.
-    m.outcome = "sent";
-    m.answered = true;
-    m.answered_by = "ia";
+    mutateCollectionSync<InboxItem>("email_inbox", (inbox) => {
+      const i = inbox.findIndex((m) => m.id === id);
+      if (i >= 0) inbox[i] = { ...inbox[i], outcome: "sent", answered: true, answered_by: "ia" };
+      return inbox;
+    });
     sentCount++;
   }
-  if (sentCount > 0) writeCollection("email_inbox", inbox);
   return sentCount;
 }

@@ -1,4 +1,4 @@
-import { appendToCollection, readCollection, writeCollection } from "../store.js";
+import { appendToCollection, readCollection, writeCollection, mutateCollectionSync } from "../store.js";
 import { envelope } from "../response.js";
 import { isGoogleConnected, calendarBusy, calendarCreateEvent, calendarDeleteEvent } from "../integrations/google.js";
 import { deliverEmail } from "../email/agent.js";
@@ -236,7 +236,15 @@ export function updateAppointment(args: { appointment_id: string; requested_date
   appt.requested_time = args.requested_time ?? appt.requested_time;
   appt.notes = args.notes ?? appt.notes;
   appt.status = "requested";
-  writeCollection("appointments", appointments);
+  // Bajo bloqueo y releyendo dentro (09/11/2026): antes se reescribía la
+  // lista entera leída al principio, así que cualquier cambio hecho por
+  // otro proceso en ese hueco (p. ej. la marca de recordatorio enviado del
+  // programador) se perdía. Ahora solo se toca ESTA cita.
+  mutateCollectionSync<typeof appt>("appointments", (items) => {
+    const i = items.findIndex((a) => a.id === appt.id);
+    if (i >= 0) items[i] = { ...items[i], requested_date: appt.requested_date, requested_time: appt.requested_time, notes: appt.notes, status: "requested" };
+    return items;
+  });
 
   return envelope({ status: "ok", data: appt, source: "registro interno", conflicts: ["Cambio registrado como nueva solicitud -- sigue pendiente de confirmación del negocio."] });
 }
@@ -264,7 +272,12 @@ export async function cancelAppointment(args: { appointment_id: string; reason?:
 
   appt.status = "cancelled";
   appt.cancel_reason = args.reason ?? null;
-  writeCollection("appointments", appointments);
+  // Mismo criterio que en updateAppointment: solo esta cita, bajo bloqueo.
+  mutateCollectionSync<typeof appt>("appointments", (items) => {
+    const i = items.findIndex((a) => a.id === appt.id);
+    if (i >= 0) items[i] = { ...items[i], status: "cancelled", cancel_reason: args.reason ?? null };
+    return items;
+  });
   await notifyVisitCancelled({ lead_phone: appt.lead_phone, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time, channel: appt.channel ?? null });
 
   return envelope({ status: "ok", data: appt, source: "registro interno" });
@@ -448,8 +461,14 @@ export async function createAppointmentWithCalendar(args: Parameters<typeof crea
       endLocal: `${args.requested_date}T${eh}:${em}:00`,
     });
 
-    const all = readCollection<{ id: string; google_event_id?: string }>("appointments");
-    writeCollection("appointments", all.map((a) => (a.id === registered.data!.id ? { ...a, google_event_id: event.id } : a)));
+    // Bajo bloqueo, solo este campo de esta cita (09/11/2026): antes se
+    // reescribía la lista entera leída al principio de la función, pudiendo
+    // perder un cambio concurrente (cancelación, recordatorio marcado).
+    mutateCollectionSync<{ id: string; google_event_id?: string }>("appointments", (items) => {
+      const i = items.findIndex((a) => a.id === registered.data!.id);
+      if (i >= 0) items[i] = { ...items[i], google_event_id: event.id };
+      return items;
+    });
     return result;
   });
 }

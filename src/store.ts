@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 import path from "path";
-import { withPersistentLock } from "./locks.js";
+import { withPersistentLock, withPersistentLockSync } from "./locks.js";
 
 // Almacén mínimo por archivos JSON. Suficiente para la fase de validación
 // (Sección 25.2 del encargo: "algo ligero, solo para validar con Retell")
@@ -55,11 +55,29 @@ export async function claimOnce(collection: string, key: string, maxKept = 500):
   }, 15_000);
 }
 
+// Leer-añadir-escribir bajo bloqueo entre procesos (09/11/2026, auditoría de
+// concurrencia): sin esto, dos añadidos casi simultáneos a la misma
+// colección se pisaban y uno se perdía. Afecta a lo que de verdad importa
+// (citas, avisos al equipo, tareas, registros de llamadas).
 export function appendToCollection<T>(collection: string, item: T, seed: T[] = []): T[] {
-  const items = readCollection<T>(collection, seed);
-  items.push(item);
-  writeCollection(collection, items);
-  return items;
+  return withPersistentLockSync(`col_${collection}`, () => {
+    const items = readCollection<T>(collection, seed);
+    items.push(item);
+    writeCollection(collection, items);
+    return items;
+  });
+}
+
+// Misma idea que mutateCollection pero síncrona, para las funciones que ya
+// eran síncronas y cuya firma no conviene cambiar. Ver la nota de
+// withPersistentLockSync: solo para modificar un JSON, nunca con red dentro.
+export function mutateCollectionSync<T>(collection: string, mutate: (items: T[]) => T[] | void, seed: T[] = []): T[] {
+  return withPersistentLockSync(`col_${collection}`, () => {
+    const items = readCollection<T>(collection, seed);
+    const result = mutate(items) ?? items;
+    writeCollection(collection, result);
+    return result;
+  });
 }
 
 // Cola de escritura por colección (25/10/2026, encargo de fiabilidad: "dos
