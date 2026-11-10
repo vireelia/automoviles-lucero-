@@ -9,7 +9,7 @@ import { createReservationPending, confirmReservation, cancelReservation, reopen
 import { getOfficialStatus, setOfficialStatus, type OfficialVehicleStatus } from "../tools/vehicle-state.js";
 import { deliverEmail } from "../email/agent.js";
 import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
-import { moveToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
+import { moveToTrash, moveManyToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
 import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
@@ -2788,10 +2788,11 @@ crm.post("/avisos-masivo", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm/incidencias", "Solo el administrador puede eliminar avisos");
   const ids = ([] as string[]).concat(req.body.ids ?? []);
   if (ids.length === 0) return back(res, "/crm/incidencias", "No seleccionaste ningún aviso");
+  const idSet = new Set(ids);
   const items = list<Handoff>("handoffs");
-  const targets = items.filter((h) => ids.includes(h.id));
-  for (const h of targets) moveToTrash("handoffs", h, `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})`, me(res).email);
-  save("handoffs", items.filter((h) => !ids.includes(h.id)));
+  const targets = items.filter((h) => idSet.has(h.id));
+  moveManyToTrash(targets.map((h) => ({ collection: "handoffs", record: h, label: `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})` })), me(res).email);
+  save("handoffs", items.filter((h) => !idSet.has(h.id)));
   back(res, "/crm/incidencias", targets.length === 0 ? "No había nada que hacer" : `${targets.length} aviso(s) movido(s) a la papelera`);
 });
 

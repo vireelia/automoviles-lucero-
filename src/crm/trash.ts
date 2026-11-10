@@ -28,6 +28,23 @@ export function moveToTrash(collection: string, record: unknown, label: string, 
   });
 }
 
+// FALLO REAL de rendimiento (10/11/2026): un borrado masivo real de
+// cientos de incidencias llamaba a moveToTrash() una vez por cada una --
+// cada llamada vuelve a leer y a escribir el archivo ENTERO de la
+// papelera, así que con cientos seleccionadas de golpe eso eran cientos
+// de lecturas/escrituras completas en una sola petición, bloqueando el
+// servidor mientras duraba. Esta versión hace UNA sola lectura y UNA
+// sola escritura para todo el lote.
+export function moveManyToTrash(items: { collection: string; record: unknown; label: string }[], deletedBy: string): void {
+  if (items.length === 0) return;
+  const trash = readCollection<TrashedItem>("trash");
+  const now = new Date().toISOString();
+  for (const it of items) {
+    trash.push({ id: crypto.randomUUID(), collection: it.collection, label: it.label, record: it.record, deleted_by: deletedBy, deleted_at: now });
+  }
+  writeCollection("trash", trash);
+}
+
 export function listTrash(): TrashedItem[] {
   return readCollection<TrashedItem>("trash").sort((a, b) => b.deleted_at.localeCompare(a.deleted_at));
 }
