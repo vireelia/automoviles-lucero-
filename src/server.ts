@@ -312,6 +312,22 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", changed: report });
 });
 
+// Reiniciar una conversación de prueba (10/11/2026, "resetea mi
+// conversacion que le volvi a escribir y me volvio a enviar un texto" --
+// al tocar el tope de turnos, el cierre fijo se repite hasta que el
+// contador real se reinicia solo pasadas HORAS_NUEVA_CONVERSACION; esto
+// lo hace al momento para seguir probando). Solo borra el HISTORIAL de
+// chat de ese contacto -- nunca toca leads, citas ni reservas reales.
+app.post("/admin/reset_conversation", requireAdminToken, (req, res) => {
+  const contact = String(req.body?.contact ?? "").trim();
+  if (!contact) return res.status(400).json({ error: "falta_contact" });
+  const conversations = readCollection<{ id: string }>("chat_conversations");
+  const antes = conversations.length;
+  const restantes = conversations.filter((c) => normalizePhone(c.id) !== normalizePhone(contact) && c.id !== contact);
+  writeCollection("chat_conversations", restantes);
+  res.json({ status: "ok", borradas: antes - restantes.length });
+});
+
 // Limpieza puntual (21/10/2026, misma auditoría -- "no sé a qué 84 clientes
 // tengo que llamar ya"): las alertas ya existentes de visita_agendada/
 // visita_proxima/visita_cancelada se habían acumulado como "pendiente" desde
