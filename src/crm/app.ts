@@ -39,7 +39,13 @@ import {
 } from "../integrations/google.js";
 
 export const crm = express.Router();
-crm.use(express.urlencoded({ extended: false, limit: "100kb" }));
+// FALLO REAL (10/11/2026, "Payload Too Large" al intentar seleccionar
+// muchas incidencias de golpe para el borrado masivo): 100kb se queda
+// corto en cuanto la lista de IDs seleccionados crece -- con miles de
+// registros reales acumulados, es justo el caso de uso real de hoy.
+// Subido a un límite generoso para formularios con muchos IDs, sin
+// llegar a ser un límite "sin límite" que pudiera usarse para abusar.
+crm.use(express.urlencoded({ extended: false, limit: "5mb" }));
 
 // ---------- datos ----------
 type Lead = {
