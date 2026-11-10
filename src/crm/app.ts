@@ -314,6 +314,29 @@ function findPossibleDuplicate(lead: Lead, allLeads: Lead[]): Lead | null {
   const key = normalizePhone(lead.phone);
   return allLeads.find((other) => other.id !== lead.id && other.phone && normalizePhone(other.phone) === key) ?? null;
 }
+// FALLO REAL de rendimiento (10/11/2026, "hay que seguir mejorando la
+// fluidez"): /crm/clientes llamaba a findPossibleDuplicate (un recorrido
+// completo de TODOS los leads) por cada tarjeta renderizada -- con miles
+// de leads reales, eso son millones de comparaciones en una sola carga de
+// página. Este índice se construye una sola vez (O(n)) y cada búsqueda de
+// duplicado pasa a ser O(1).
+function buildDuplicateIndex(allLeads: Lead[]): Map<string, Lead[]> {
+  const index = new Map<string, Lead[]>();
+  for (const l of allLeads) {
+    if (!l.phone) continue;
+    const key = normalizePhone(l.phone);
+    const grupo = index.get(key);
+    if (grupo) grupo.push(l);
+    else index.set(key, [l]);
+  }
+  return index;
+}
+function findPossibleDuplicateIndexed(lead: Lead, index: Map<string, Lead[]>): Lead | null {
+  if (!lead.phone) return null;
+  const grupo = index.get(normalizePhone(lead.phone));
+  if (!grupo) return null;
+  return grupo.find((other) => other.id !== lead.id) ?? null;
+}
 // Contactos Pro (25/10/2026, "que ningún cliente se escape"): cruza un
 // mensaje/llamada/correo entrante con su ficha real -- por teléfono
 // normalizado (voz/WhatsApp) o por email (correo, mismo criterio que ya
@@ -4672,6 +4695,43 @@ ${filtered.length === 0 ? `<div class="empty">Nada en esta vista.</div>` : `<div
 // secreto real que no debería andar circulando). Con esto, cualquier
 // admin ya logueado en el CRM (Ramón/José) lo descarga él mismo, con su
 // sesión normal -- nunca hace falta compartir ningún token.
+const CLIENTES_PAGE_SIZE = 50;
+function clientesPager(t: string, dateFilter: string, pageNum: number, totalPages: number, total: number, count: number): string {
+  if (total === 0) return "";
+  const from = (pageNum - 1) * CLIENTES_PAGE_SIZE + 1;
+  const to = from + count - 1;
+  const link = (p: number, label: string, on = false) => `<a href="/crm/clientes?t=${t}&d=${dateFilter}&page=${p}" class="${on ? "on" : ""}">${label}</a>`;
+  const nums: string[] = [];
+  for (let p = 1; p <= totalPages; p++) {
+    if (p === 1 || p === totalPages || Math.abs(p - pageNum) <= 1) nums.push(link(p, String(p), p === pageNum));
+    else if (nums[nums.length - 1] !== "…") nums.push("…");
+  }
+  return `<div class="cpager"><span>Mostrando ${from}-${to} de ${total}</span><div>${pageNum > 1 ? link(pageNum - 1, "‹") : ""}${nums.join(" ")}${pageNum < totalPages ? link(pageNum + 1, "›") : ""}</div></div>`;
+}
+// Limpieza real de leads viejos sin interés real (10/11/2026, "esos leads
+// son de incidencias que se acumulan... y hacen que explote" / "limpia
+// leads"): mueve a la Papelera (recuperable, nunca borrado permanente) los
+// leads ARCHIVADOS (ya marcados sin visita/reserva real, invariante que ya
+// mantiene el propio sistema) que no tengan un aviso (handoff) todavía sin
+// atender -- misma protección que ya usa el archivado masivo de arriba,
+// para nunca perder una oportunidad real solo porque no tiene cita/reserva
+// registrada todavía. Con ?dry=1 solo cuenta, no mueve nada.
+crm.post("/clientes/limpiar-antiguos", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede limpiar clientes");
+  const soloContar = String(req.query.dry ?? req.body.dry ?? "") === "1";
+  const leads = list<Lead>("leads");
+  const openHandoffPhones = new Set(list<Handoff>("handoffs").filter((h) => h.status === "requested" && h.lead_phone).map((h) => h.lead_phone as string));
+  const candidatos = leads.filter((l) => l.archived && !(l.phone && openHandoffPhones.has(l.phone)));
+  if (soloContar) {
+    return res.json({ status: "ok", dry_run: true, candidatos: candidatos.length, total_leads: leads.length });
+  }
+  for (const l of candidatos) {
+    moveToTrash("leads", l, l.name || l.phone || l.email || l.id, me(res).email);
+  }
+  const restantes = leads.filter((l) => !candidatos.some((c) => c.id === l.id));
+  save("leads", restantes);
+  return back(res, "/crm/clientes", `${candidatos.length} cliente(s) sin interés real movido(s) a la Papelera -- recuperables ahí si hace falta.`);
+});
 crm.get("/clientes/exportar.json", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm/clientes", "Solo el administrador puede exportar clientes");
   const all = list<Lead>("leads");
@@ -4690,12 +4750,19 @@ crm.get("/clientes", (req, res) => {
   const reservations = list<Reservation>("reservations");
   const financing = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const archivedCount = all.filter((l) => l.archived).length;
-  const leads = all
+  const leadsFiltrados = all
     .filter((l) => (t === "archivados" ? l.archived : !l.archived && !l.marketing_list && (t === "todos" || l.temperature === t)))
     .filter((l) => matchesDateFilter(dateFilter, l.created_at, today))
     // Petición real (23/10/2026, "organizalos de primeros a ultimos segun las
     // fechas"): de más antiguo a más reciente (antes era al revés).
     .sort((a, b) => (a.updated_at ?? a.created_at).localeCompare(b.updated_at ?? b.created_at));
+  // Paginación real (10/11/2026, "seguir mejorando la fluidez"): con miles
+  // de leads reales, dibujar todos de golpe (sin límite) era lento de
+  // verdad -- mismo patrón ya usado en /crm/contactos e /crm/incidencias.
+  const pageNum = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const totalPages = Math.max(1, Math.ceil(leadsFiltrados.length / CLIENTES_PAGE_SIZE));
+  const leads = leadsFiltrados.slice((pageNum - 1) * CLIENTES_PAGE_SIZE, pageNum * CLIENTES_PAGE_SIZE);
+  const duplicateIndex = buildDuplicateIndex(all);
   // Barra de pastillas finas en vez de 5 tarjetas grandes + desplegable
   // de fecha en vez de 7 píldoras sueltas (26/10/2026, "E" de las ideas
   // de diseño: "esto también lo quiero diferente" -- mucho espacio para
@@ -4732,6 +4799,7 @@ ${tempPill("archivados", "Archivados", "#9aa1ad", archivedCount)}
 <div style="display:flex;align-items:center;gap:10px">
 ${dateDropdown}
 ${isAdmin ? `<a class="btn light noprint" href="/crm/clientes/exportar.json" download style="white-space:nowrap;margin:0">⬇️ Exportar (JSON)</a>` : ""}
+${isAdmin ? `<form method="post" action="/crm/clientes/limpiar-antiguos" style="margin:0" onsubmit="return confirm('¿Mover a la Papelera los clientes archivados sin visita ni reserva real? Se pueden recuperar luego desde ahí -- nunca se borran para siempre.')"><button class="btn light noprint" type="submit" style="white-space:nowrap;margin:0">🧹 Limpiar sin interés real</button></form>` : ""}
 </div>
 </div>
 <details class="box" style="padding:0">
@@ -4743,7 +4811,8 @@ ${isAdmin ? `<a class="btn light noprint" href="/crm/clientes/exportar.json" dow
 <button class="btn ok" type="submit">Añadir cliente</button></form>
 </details>
 ${bulk}
-${leads.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicate(l, all), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}`;
+${leadsFiltrados.length === 0 ? `<div class="empty">${t === "archivados" ? "No hay clientes archivados." : "No hay clientes en esta lista para ese periodo -- prueba a quitar el filtro de fecha."}</div>` : `<div class="cards-grid">${leads.map((l) => leadCard(l, me(res), leadPhase(l, appts, reservations, today, financing), findPossibleDuplicateIndexed(l, duplicateIndex), appts, `/crm/clientes?t=${t}&d=${dateFilter}`)).join("")}</div>`}
+${clientesPager(t, dateFilter, pageNum, totalPages, leadsFiltrados.length, leads.length)}`;
   res.type("html").send(page("Clientes y oportunidades", me(res), body, msgOf(req)));
 });
 
