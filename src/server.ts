@@ -328,6 +328,27 @@ app.post("/admin/reset_conversation", requireAdminToken, (req, res) => {
   res.json({ status: "ok", borradas: antes - restantes.length });
 });
 
+// Cierre masivo de avisos ya confirmados como ruido real (10/11/2026,
+// auditoría real: 5.672 de 5.772 avisos eran "no pudo cerrar la respuesta"
+// o "cortada al tope de respuestas" del apagón de presupuesto/Gmail/host
+// ya diagnosticado y arreglado -- verificado con los logs reales de
+// llamadas a herramientas, no supuesto). Marca como "done" (nunca borra,
+// reversible reabriendo desde el CRM) solo las que siguen "requested" y
+// coinciden con esos dos textos exactos -- nunca toca ninguna otra.
+app.post("/admin/cerrar_avisos_ruido_confirmado", requireAdminToken, (req, res) => {
+  const soloContar = String(req.query.dry ?? "") === "1";
+  const patron = /no pudo cerrar la respuesta|Conversaci[oó]n cortada al llegar al tope/;
+  const handoffs = readCollection<{ id: string; status: string; reason?: string | null; done_at?: string | null }>("handoffs");
+  const candidatos = handoffs.filter((h) => h.status === "requested" && patron.test(String(h.reason ?? "")));
+  if (soloContar) return res.json({ status: "ok", dry_run: true, candidatos: candidatos.length });
+  for (const h of candidatos) {
+    h.status = "done";
+    h.done_at = new Date().toISOString();
+  }
+  writeCollection("handoffs", handoffs);
+  res.json({ status: "ok", cerrados: candidatos.length });
+});
+
 // Limpieza puntual (21/10/2026, misma auditoría -- "no sé a qué 84 clientes
 // tengo que llamar ya"): las alertas ya existentes de visita_agendada/
 // visita_proxima/visita_cancelada se habían acumulado como "pendiente" desde
