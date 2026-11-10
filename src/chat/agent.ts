@@ -278,6 +278,22 @@ async function handleChatMessageUnlocked(
   // real del mensaje original.
   realDelayNote?: string,
 ): Promise<{ reply: string; tool_runs: number; ai_failed: boolean }> {
+  // FALLO REAL de producción (10/11/2026, caída repetida con la CPU al
+  // ~105% sostenido): con el presupuesto diario agotado por una avalancha
+  // real de mensajes, cada uno todavía hacía TODO el trabajo pesado
+  // (leer y analizar la conversación completa, leer leads/citas/reservas
+  // para clasificar el estado comercial) antes de llegar al único punto
+  // donde se comprobaba el presupuesto, ya dentro de callLlm. Multiplicado
+  // por decenas de mensajes casi simultáneos, eso es lo que agotaba la
+  // CPU -- no una sola llamada cara, sino muchísimas haciendo trabajo de
+  // sobra para acabar rechazadas igual. Comprobarlo aquí, lo primero de
+  // todo, antes de tocar ninguna colección, hace que un rechazo cueste
+  // casi nada en vez de todo el trabajo previo.
+  if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
+    console.error(`[chat] presupuesto diario agotado, rechazo inmediato sin trabajo previo (${channel}, sesión ${sessionId})`);
+    await createHandoffFallback(sessionId);
+    return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
+  }
   const conversation = loadConversation(sessionId);
   const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
 
