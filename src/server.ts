@@ -18,6 +18,7 @@ import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
+import { esAnteriorAlCorte } from "./deploy-safety.js";
 import {
   verifyZernioSignature,
   rememberWhatsappConversation,
@@ -1131,6 +1132,16 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
     console.error("[whatsapp] no se pudo registrar el mensaje entrante en el CRM:", err instanceof Error ? err.message : err);
   }
 
+  // Barrera de activación (10/11/2026): esta ruta (n8n) no tiene tráfico
+  // real desde que se conectó Zernio, pero si n8n llega a mandar la fecha
+  // real del mensaje (sent_at/timestamp), se respeta igual que en los
+  // demás canales.
+  const sentAtRaw = typeof b.sent_at === "string" ? b.sent_at : typeof b.timestamp === "string" ? b.timestamp : undefined;
+  if (esAnteriorAlCorte(sentAtRaw)) {
+    console.warn(`[whatsapp] mensaje de ${from} anterior a la fecha de activación -- no se responde en automático.`);
+    return;
+  }
+
   try {
     const result = await handleChatMessage(from, text, "WHATSAPP", from);
     if (result.ai_failed) {
@@ -1322,6 +1333,19 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     // en vez de responder como si acabara de llegar.
     const sentAtMs = typeof body.message?.sentAt === "string" ? new Date(body.message.sentAt).getTime() : NaN;
     const delayHours = Number.isFinite(sentAtMs) ? (Date.now() - sentAtMs) / 3600000 : 0;
+    // Barrera de activación (10/11/2026): este es el canal real de entrada
+    // de WhatsApp (Zernio) -- mira la fecha REAL del mensaje (sentAt),
+    // nunca la de llegada al servidor. Un mensaje reenviado o un backlog
+    // que llega hoy pero fue escrito antes del corte nunca dispara una
+    // respuesta automática.
+    if (esAnteriorAlCorte(body.message?.sentAt)) {
+      raiseAlert({
+        kind: "gestion_portal",
+        lead_phone: phone,
+        reason: `WhatsApp: mensaje de ${phone} anterior a la fecha de activación (LUCERO_NO_AUTO_BEFORE) -- no se ha respondido en automático. Revísalo a mano si corresponde: "${text.trim().slice(0, 300)}"`,
+      });
+      return;
+    }
     const realDelayNote =
       delayHours >= 1
         ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
@@ -1405,6 +1429,16 @@ app.post("/channels/facebook/webhook", async (req, res) => {
       const dedupeKey = `${psid}|${messageId ?? text}`;
       // Reclamo atómico entre procesos (09/11/2026), igual que los otros canales.
       if (!(await claimOnce("facebook_processed", dedupeKey, MAX_FACEBOOK_PROCESSED_KEPT))) continue;
+
+      // Barrera de activación (10/11/2026): Messenger manda un timestamp
+      // real (ms desde epoch) por evento -- un mensaje reenviado o un
+      // backlog de Meta que llega hoy pero es de antes del corte nunca
+      // debe disparar una respuesta automática.
+      const eventTimestampIso = typeof event?.timestamp === "number" ? new Date(event.timestamp).toISOString() : undefined;
+      if (esAnteriorAlCorte(eventTimestampIso)) {
+        console.warn(`[facebook] mensaje de ${psid} anterior a la fecha de activación -- no se responde en automático.`);
+        continue;
+      }
 
       try {
         const result = await handleChatMessage(psid, text.trim().slice(0, 2000), "FACEBOOK", psid);

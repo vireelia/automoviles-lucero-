@@ -3,6 +3,7 @@ import { readCollection, writeCollection } from "../store.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { createAutoTask } from "../tools/tasks.js";
 import { lastInboundAt } from "./whatsapp-window.js";
+import { esAnteriorAlCorte } from "../deploy-safety.js";
 
 // Nada se descarta en silencio: cuando un mensaje agota los reintentos o se
 // sale de la ventana de WhatsApp, pasa a revisión humana con una tarea real
@@ -87,7 +88,10 @@ export async function drainPendingReplies(handler: ReplyHandler, now = Date.now(
     }
   }
   if (changed) writeCollection(COLLECTION, all);
-  const ready = all.filter((p) => p.status === "pendiente" && new Date(p.next_retry_at).getTime() <= now);
+  // Barrera de activación (10/11/2026, LUCERO_NO_AUTO_BEFORE): nunca
+  // reintentar solo nada recibido antes del corte -- queda en la cola,
+  // para revisión humana, nunca se contesta sin que alguien lo mire.
+  const ready = all.filter((p) => p.status === "pendiente" && new Date(p.next_retry_at).getTime() <= now && !esAnteriorAlCorte(p.received_at));
   if (ready.length === 0) return 0;
   ready.sort((a, b) => Number(URGENT.test(b.text)) - Number(URGENT.test(a.text)) || a.received_at.localeCompare(b.received_at));
   const item = ready[0];

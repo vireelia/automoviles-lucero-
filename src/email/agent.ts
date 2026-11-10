@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import dns from "dns";
 import { readCollection, writeCollection, mutateCollection, mutateCollectionSync } from "../store.js";
+import { esAnteriorAlCorte } from "../deploy-safety.js";
 import { handleChatMessage, recordAssistantMessage, FALLBACK_REPLY } from "../chat/agent.js";
 import { buildFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
 import { dentroDeVentana, contactoAutorizado } from "../chat/whatsapp-window.js";
@@ -136,7 +137,9 @@ export async function drainPendingEmailQueue(): Promise<void> {
     // Solo candidatos cuyo backoff ya pasó -- un correo con fallos reales
     // recientes se salta hasta que le toque, nunca se reintenta a lo loco.
     const queue = readCollection<PendingQueueItem>(PENDING_QUEUE_COLLECTION);
-    const ready = queue.filter((q) => new Date(q.next_retry_at).getTime() <= now);
+    // Barrera de activación (10/11/2026, LUCERO_NO_AUTO_BEFORE): nunca
+    // reenviar solo nada encolado antes del corte.
+    const ready = queue.filter((q) => new Date(q.next_retry_at).getTime() <= now && !esAnteriorAlCorte(q.enqueued_at));
     if (ready.length === 0) return;
     ready.sort((a, b) => b.priority - a.priority || (a.enqueued_at < b.enqueued_at ? -1 : a.enqueued_at > b.enqueued_at ? 1 : 0));
     const next = ready[0];
@@ -481,6 +484,17 @@ export async function processInboundEmail(
   ).catch(() => processed.some((p) => p.key === `${email.from}|${email.messageKey}` && !(fromQueue && p.outcome === "en_cola_fallo_ia")));
   if (yaProcesado) {
     return { outcome: "duplicate" };
+  }
+  // Barrera de activación (10/11/2026, LUCERO_NO_AUTO_BEFORE): antes de
+  // cualquier respuesta o primer contacto automático, usando la fecha REAL
+  // de recepción del correo (receivedAt, internalDate de Gmail) -- nunca la
+  // fecha en que el poller lo procesó. Un correo anterior al corte nunca se
+  // contesta solo ni dispara un primer contacto -- queda registrado para
+  // revisión humana, nunca se pierde ni se borra.
+  if (esAnteriorAlCorte(email.receivedAt)) {
+    recordInbox(email, "retenido_anterior_al_corte", { draftNote: "No contestado automáticamente: este correo es anterior a la fecha de corte de activación (LUCERO_NO_AUTO_BEFORE). Revísalo y respóndelo a mano si corresponde." });
+    await marcarProcesado(email, "retenido_anterior_al_corte");
+    return { outcome: "retenido_anterior_al_corte" };
   }
   // FALLO REAL grave detectado (16/10/2026): esto va ANTES del filtro de
   // automáticos a propósito -- la dirección de origen de este tipo de aviso
