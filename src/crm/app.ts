@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
+import { markOncePerWindow } from "../locks.js";
 import { userForSession, createSession, destroySession, verifyPassword, hashPassword, listUsers, saveUsers, type CrmUser } from "./auth.js";
 import { vehiclesSeed } from "../data/vehicles-seed.js";
 import { currentVehicles } from "../data/vehicles-current.js";
@@ -508,7 +509,17 @@ function leadDisplayName(l: Lead): string {
 // Clientes. Reversible con un clic ("Desarchivar"). Configurable por si
 // el tope de días hace falta ajustarlo sin tocar código.
 const LEAD_ARCHIVE_INACTIVE_DAYS = Number(process.env.LEAD_ARCHIVE_INACTIVE_DAYS ?? 45);
+// FALLO REAL de rendimiento (10/11/2026, "al ir a las secciones principales
+// no me carga"): esto recorría TODOS los leads y TODOS los handoffs
+// (miles de registros reales) en CADA carga de /crm/clientes, de cualquier
+// persona, sin ningún límite de frecuencia -- con el volumen real
+// acumulado, eso bloqueaba la página entera varias veces por minuto. El
+// archivado por inactividad (45 días por defecto) no necesita mirarse más
+// de una vez cada 10 minutos para seguir siendo correcto -- nadie se
+// vuelve "frío e inactivo" en el minuto exacto que alguien recarga la
+// página.
 function autoArchiveColdLeads(): void {
+  if (!markOncePerWindow("auto_archive_cold_leads", 10 * 60 * 1000)) return;
   const leads = list<Lead>("leads");
   const cutoff = Date.now() - LEAD_ARCHIVE_INACTIVE_DAYS * 24 * 60 * 60 * 1000;
   // FALLO REAL detectado (20/10/2026): nunca archivar -- ni a mano en masa ni
