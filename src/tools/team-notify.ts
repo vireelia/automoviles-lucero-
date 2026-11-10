@@ -13,7 +13,7 @@
 // correo -- nunca se pierde en silencio solo porque la ventana de WhatsApp
 // no estuviera abierta.
 import crypto from "crypto";
-import { readCollection, appendToCollection } from "../store.js";
+import { readCollection, appendToCollection, mutateCollectionSync } from "../store.js";
 import { getBusinessConfig } from "../data/business-config.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
@@ -85,8 +85,32 @@ function technicalAlertExtraRecipient(): { name: string; phone: string } | null 
   return phone ? { name: "Aviso técnico", phone } : null;
 }
 
+// Petición real (10/11/2026, "el equipo de Automóviles Lucero nunca entra
+// al sistema... que se marque por enviado a Ramón y José, solo la visita o
+// reserva"): como Ramón/José nunca abren el CRM para marcar un aviso como
+// "atendido" a mano, los avisos (handoffs) abiertos de ese mismo teléfono
+// se cierran solos en cuanto se les avisa de verdad de una visita agendada
+// o una reserva -- eso SÍ es una señal real de que el motivo del aviso ya
+// se resolvió, aunque nadie haya tocado el CRM. Nunca para otros tipos de
+// aviso (cancelación, recordatorio, gestión de portal, fallo técnico):
+// esos no son una resolución real del problema original.
+function resolverAvisosAbiertos(leadPhone: string | null): void {
+  if (!leadPhone) return;
+  mutateCollectionSync<{ id: string; lead_phone?: string | null; status: string; done_at?: string | null }>("handoffs", (items) => {
+    for (const h of items) {
+      if (h.status === "requested" && h.lead_phone === leadPhone) {
+        h.status = "done";
+        h.done_at = new Date().toISOString();
+      }
+    }
+    return items;
+  });
+}
 async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: string | null, name?: string | null, channel?: string | null): Promise<void> {
   raiseAlert({ kind, lead_phone: leadPhone, name: name ?? null, channel: channel ?? null, reason: whatsappText });
+  if (kind === "visita_agendada" || kind === "reserva_pendiente") {
+    resolverAvisosAbiertos(leadPhone);
+  }
   // El aviso ya queda registrado en el CRM (raiseAlert, arriba) para TODOS
   // los tipos -- pero el envío real por WhatsApp/llamada solo se dispara
   // para visitas y reservas (petición real 04/11/2026, ver
