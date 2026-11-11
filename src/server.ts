@@ -36,6 +36,7 @@ import {
   clientReminderTemplateStatus,
   getClientReminderTemplateId,
 } from "./integrations/zernio.js";
+import { notifyVisitScheduled } from "./tools/team-notify.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
@@ -521,6 +522,27 @@ app.get("/admin/zernio/client-reminder-template-status", requireAdminToken, rout
   const id = getClientReminderTemplateId();
   if (!id) return { ok: false, error: "plantilla_no_creada_todavia" };
   return { ok: true, templateId: id, status: await clientReminderTemplateStatus(id) };
+}));
+// Catch-up puntual (11/11/2026, "las citas de hoy que quedaron sin aviso"):
+// notifyVisitScheduled solo se dispara UNA VEZ al crear la cita -- las
+// citas de hoy creadas antes de que la plantilla de aviso interno existiera
+// (03-04/11) nunca llegaron a avisar a Ramón/José. Reenvía solo las citas
+// confirmadas de hoy que todavía no tengan ningún "sent" de hoy mismo.
+app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string; channel?: string | null }>("appointments");
+  const notifs = readCollection<{ lead_phone?: string | null; delivery_status: string; created_at: string }>("team_notifications");
+  const citasHoy = appts.filter((a) => a.requested_date === hoy && a.status === "confirmed");
+  const yaAvisadas = new Set(
+    notifs.filter((n) => n.delivery_status === "sent" && n.created_at.startsWith(hoy)).map((n) => n.lead_phone ?? ""),
+  );
+  const reenviadas: string[] = [];
+  for (const appt of citasHoy) {
+    if (yaAvisadas.has(appt.lead_phone ?? "")) continue;
+    await notifyVisitScheduled({ lead_phone: appt.lead_phone ?? null, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time, channel: appt.channel ?? null });
+    reenviadas.push(appt.lead_phone ?? appt.id);
+  }
+  return { ok: true, fecha: hoy, total_citas_hoy: citasHoy.length, reenviadas };
 }));
 app.post("/admin/zernio/team-alert-template-status", requireAdminToken, route(async (a: { template_id: string }) => ({
   status: await teamAlertTemplateStatus(a.template_id),
