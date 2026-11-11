@@ -609,14 +609,13 @@ app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
   const saltadas: { lead_phone?: string; motivo: string }[] = [];
   for (const appt of citasHoy) {
     if (yaAvisadas.has(appt.lead_phone ?? "")) continue;
-    // Petición real (11/11/2026, "si sale vendido no envíes nada"): si el
-    // vehículo de la cita ya no existe en el catálogo real (vendido o
-    // retirado del feed), no se envía el aviso -- se deja para revisión a
-    // mano en vez de avisar a Ramón/José con un vehículo que ya no existe.
-    if (appt.vehicle_id && !currentVehicles().some((v) => v.id === appt.vehicle_id)) {
-      saltadas.push({ lead_phone: appt.lead_phone, motivo: `vehículo ${appt.vehicle_id} ya no está en el catálogo (vendido o retirado) -- revisar a mano` });
-      continue;
-    }
+    // FALLO REAL propio corregido (11/11/2026): este filtro comparaba
+    // vehicle_id contra currentVehicles() para adivinar si el coche "ya no
+    // está disponible", pero el catálogo cambió de esquema de IDs tras una
+    // reimportación -- cualquier cita anterior a ese cambio daba falso
+    // "vendido" sin que el coche lo estuviera de verdad. Quitado (ver
+    // /admin/trash_citas_vehiculo_no_disponible, desactivada por el mismo
+    // motivo).
     await notifyVisitScheduled({ lead_phone: appt.lead_phone ?? null, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time, channel: appt.channel ?? null });
     reenviadas.push(appt.lead_phone ?? appt.id);
   }

@@ -28,7 +28,7 @@ Backend único (Node.js + TypeScript, Express) que da servicio a un concesionari
 - **Acciones administrativas sensibles** (`confirm_reservation`, `cancel_reservation`, `purge_leads_except`, `merge_leads`, `sync_inventory`, Studio) requieren `ADMIN_TOKEN` o sesión CRM de rol `admin`; nunca están expuestas al agente de voz/chat.
 - **`src/data/vehicles-seed.ts` se regenera con `scripts/import-dealcar.mjs`**, no se edita a mano.
 - **`.retell-state.json`** guarda los IDs de LLM/Agente de voz y chat en Retell; lo actualiza `scripts/sync-retell.mjs`, no se toca a mano.
-- El inventario real de coches viene de un feed externo (Coches.net PRO / Dealcar); `vehicle-state.ts` mantiene un estado propio (`AVAILABLE`/`RESERVATION_PENDING`/`RESERVED`/`SOLD`) independiente del feed.
+- El inventario real de coches NO viene de ningún feed automático: Automóviles Lucero sube a mano archivos XML o CSV con el formato de export de Coches.net PRO (`scripts/import-dealcar.mjs` regenera `vehicles-seed.ts` a partir de ese archivo; el nombre del script es histórico, no implica una integración real con Dealcar). Cada reimportación puede cambiar los IDs de los vehículos -- cualquier referencia vieja a un `vehicle_id` (en citas, leads, reservas) puede quedar huérfana tras una reimportación, sin que eso signifique que el coche se vendió. `vehicle-state.ts` mantiene un estado propio (`AVAILABLE`/`RESERVATION_PENDING`/`RESERVED`/`SOLD`) independiente de esto.
 
 ## Variables de entorno
 
