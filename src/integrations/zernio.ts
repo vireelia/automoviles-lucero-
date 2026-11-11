@@ -496,7 +496,10 @@ export async function createTeamAlertTemplate(): Promise<{ ok: boolean; template
       return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
     }
     const templateId = data?.template?.id;
-    if (templateId) writeCollection("zernio_template_ids", [{ id: "team_alert_template", template_id: templateId }]);
+    if (templateId) {
+      const existing = readCollection<{ id: string; template_id: string }>("zernio_template_ids").filter((r) => r.id !== "team_alert_template");
+      writeCollection("zernio_template_ids", [...existing, { id: "team_alert_template", template_id: templateId }]);
+    }
     return { ok: true, templateId };
   } catch (err) {
     if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
@@ -539,6 +542,103 @@ export async function sendTeamAlertViaTemplate(phone: string, message: string): 
         templateName: TEAM_ALERT_TEMPLATE_NAME,
         templateLanguage: "es",
         templateParams: [message],
+      },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const errMessage = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${errMessage ? ` (${errMessage})` : ""}` };
+    }
+    const messageId = data?.data?.messageId;
+    const conversationId = data?.data?.conversationId;
+    if (!messageId || !conversationId) return { ok: false, error: "zernio_sin_message_id_template" };
+    rememberWhatsappConversation(phone, conversationId, accountId);
+    return { ok: true, messageId };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Plantilla de recordatorio/confirmación de cita al CLIENTE (11/11/2026,
+// fallo real detectado: varios clientes reales de hoy reservaron por voz o
+// email/portal, nunca escribieron primero por WhatsApp, así que la ventana
+// de 24h para texto libre nunca se abrió -- sendApptReminder (scheduler.ts)
+// solo mandaba texto libre, sin alternativa, y el recordatorio se perdía en
+// silencio. Mismo patrón que TEAM_ALERT_TEMPLATE_NAME: una sola plantilla
+// genérica aprobada por Meta, con nombre/fecha/hora como variables, usada
+// como respaldo cuando el texto libre falla.
+const CLIENT_REMINDER_TEMPLATE_NAME = "recordatorio_cita_lucero";
+
+export function getClientReminderTemplateId(): string | null {
+  return readCollection<{ id: "client_reminder_template"; template_id: string }>("zernio_template_ids").find((r) => r.id === "client_reminder_template")?.template_id ?? null;
+}
+
+export async function createClientReminderTemplate(): Promise<{ ok: boolean; templateId?: string; error?: string }> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data, error } = await zernio.whatsapp.createWhatsAppTemplate({
+      body: {
+        accountId,
+        name: CLIENT_REMINDER_TEMPLATE_NAME,
+        category: "UTILITY",
+        language: "es",
+        components: [
+          {
+            type: "body",
+            text: "Hola {{1}}, te recordamos tu cita en Automóviles Lucero el {{2}} a las {{3}}. Si necesitas cambiarla, llámanos.",
+            example: { body_text: [["Marta", "2026-11-12", "11:00"]] },
+          },
+        ],
+      },
+    });
+    if (error) {
+      const code = (error as { code?: string })?.code;
+      const message = (error as { error?: string })?.error;
+      return { ok: false, error: `zernio_template_rechazada${code ? `: ${code}` : ""}${message ? ` (${message})` : ""}` };
+    }
+    const templateId = data?.template?.id;
+    if (templateId) {
+      const existing = readCollection<{ id: string; template_id: string }>("zernio_template_ids").filter((r) => r.id !== "client_reminder_template");
+      writeCollection("zernio_template_ids", [...existing, { id: "client_reminder_template", template_id: templateId }]);
+    }
+    return { ok: true, templateId };
+  } catch (err) {
+    if (err instanceof ZernioApiError) return { ok: false, error: `${err.code ?? "zernio_api_error"}: ${err.message}` };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function clientReminderTemplateStatus(templateId: string): Promise<string | null> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return null;
+  try {
+    const { data } = await zernio.whatsapp.getWhatsAppTemplateById({ path: { templateId }, query: { accountId } });
+    return data?.template?.status ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function sendClientReminderViaTemplate(phone: string, name: string, date: string, time: string): Promise<ZernioWhatsappSendResult> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  const templateId = getClientReminderTemplateId();
+  if (!templateId) return { ok: false, error: "plantilla_recordatorio_cliente_no_creada_todavia" };
+  try {
+    const status = await clientReminderTemplateStatus(templateId);
+    if (status !== "APPROVED") return { ok: false, error: `plantilla_recordatorio_cliente_no_aprobada (estado: ${status ?? "desconocido"})` };
+    const { data, error } = await zernio.messages.createInboxConversation({
+      body: {
+        accountId,
+        participantId: normalizeParticipantId(phone),
+        templateName: CLIENT_REMINDER_TEMPLATE_NAME,
+        templateLanguage: "es",
+        templateParams: [name, date, time],
       },
     });
     if (error) {

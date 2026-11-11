@@ -11,6 +11,7 @@ import { createAutoTask } from "./tools/tasks.js";
 import { withPersistentLockOrSkip, withPersistentLock, withPersistentLockSync } from "./locks.js";
 import { drainN8nVozOutbox } from "./integrations/n8n.js";
 import { runSeguimientoComercial } from "./chat/followup-comercial.js";
+import { sendClientReminderViaTemplate } from "./integrations/zernio.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -91,15 +92,24 @@ async function sendApptReminder(appt: Appointment, message: string): Promise<boo
     return result.status === "sent";
   }
   const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
-  if (result.status !== "ok") {
-    console.warn(`[scheduler] recordatorio por WhatsApp falló de verdad para ${appt.id} (${appt.lead_phone})`);
-    raiseAlert({
-      kind: "gestion_portal",
-      lead_phone: appt.lead_phone,
-      reason: `El recordatorio automático de la cita de hoy no se pudo enviar por WhatsApp. Avisa al cliente a mano si hace falta.`,
-    });
-  }
-  return result.status === "ok";
+  if (result.status === "ok") return true;
+  // FALLO REAL detectado (11/11/2026, "siempre que haya una visita o
+  // reserva ojo con eso"): el texto libre falla siempre que el cliente
+  // reservó por voz/email/portal y nunca escribió primero por WhatsApp
+  // (ventana de 24h de Meta nunca abierta) -- igual que le pasaba a
+  // notifyTeam() antes de la plantilla de aviso interno. Mismo respaldo:
+  // plantilla aprobada por Meta con nombre/fecha/hora como variables.
+  const nombre = (readCollection<{ phone: string | null; name: string | null }>("leads", []).find((l) => l.phone === appt.lead_phone)?.name) || "cliente";
+  const templateResult = await sendClientReminderViaTemplate(appt.lead_phone, nombre, appt.requested_date ?? "", appt.requested_time ?? "");
+  if (templateResult.ok) return true;
+  const motivo = result.conflicts?.[0] ?? result.error_code ?? "fallo real desconocido";
+  console.warn(`[scheduler] recordatorio por WhatsApp falló de verdad para ${appt.id} (${appt.lead_phone}): ${motivo}; plantilla también falló: ${templateResult.error}`);
+  raiseAlert({
+    kind: "gestion_portal",
+    lead_phone: appt.lead_phone,
+    reason: `El recordatorio automático de la cita de hoy no se pudo enviar por WhatsApp (${motivo}) ni por la plantilla de respaldo (${templateResult.error}). Avisa al cliente a mano si hace falta.`,
+  });
+  return false;
 }
 
 // Recordatorios escalonados (petición real, 20/10/2026: "también se le debe

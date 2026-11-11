@@ -32,6 +32,9 @@ import {
   findWhatsappConversation,
   createTeamAlertTemplate,
   teamAlertTemplateStatus,
+  createClientReminderTemplate,
+  clientReminderTemplateStatus,
+  getClientReminderTemplateId,
 } from "./integrations/zernio.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -513,6 +516,12 @@ app.post("/admin/zernio/seed-team-conversation", requireAdminToken, route((a: { 
 // de revisión de Meta (nunca instantáneo) -- usar /admin/zernio/team-alert-template-status
 // para comprobar cuándo pase a APPROVED.
 app.post("/admin/zernio/create-team-alert-template", requireAdminToken, route(async () => createTeamAlertTemplate()));
+app.post("/admin/zernio/create-client-reminder-template", requireAdminToken, route(async () => createClientReminderTemplate()));
+app.get("/admin/zernio/client-reminder-template-status", requireAdminToken, route(async () => {
+  const id = getClientReminderTemplateId();
+  if (!id) return { ok: false, error: "plantilla_no_creada_todavia" };
+  return { ok: true, templateId: id, status: await clientReminderTemplateStatus(id) };
+}));
 app.post("/admin/zernio/team-alert-template-status", requireAdminToken, route(async (a: { template_id: string }) => ({
   status: await teamAlertTemplateStatus(a.template_id),
 })));
