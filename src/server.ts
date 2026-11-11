@@ -565,17 +565,30 @@ app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
   const hoy = new Date().toISOString().slice(0, 10);
   const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string; channel?: string | null }>("appointments");
   const notifs = readCollection<{ lead_phone?: string | null; delivery_status: string; created_at: string }>("team_notifications");
-  const citasHoy = appts.filter((a) => a.requested_date === hoy && a.status === "confirmed");
+  const citasHoy = appts.filter((a) => {
+    if (a.requested_date !== hoy || a.status !== "confirmed") return false;
+    const t = a.requested_time ?? "";
+    return !/^\d{2}:\d{2}$/.test(t) || t >= "11:00";
+  });
   const yaAvisadas = new Set(
     notifs.filter((n) => n.delivery_status === "sent" && n.created_at.startsWith(hoy)).map((n) => n.lead_phone ?? ""),
   );
   const reenviadas: string[] = [];
+  const saltadas: { lead_phone?: string; motivo: string }[] = [];
   for (const appt of citasHoy) {
     if (yaAvisadas.has(appt.lead_phone ?? "")) continue;
+    // Petición real (11/11/2026, "si sale vendido no envíes nada"): si el
+    // vehículo de la cita ya no existe en el catálogo real (vendido o
+    // retirado del feed), no se envía el aviso -- se deja para revisión a
+    // mano en vez de avisar a Ramón/José con un vehículo que ya no existe.
+    if (appt.vehicle_id && !currentVehicles().some((v) => v.id === appt.vehicle_id)) {
+      saltadas.push({ lead_phone: appt.lead_phone, motivo: `vehículo ${appt.vehicle_id} ya no está en el catálogo (vendido o retirado) -- revisar a mano` });
+      continue;
+    }
     await notifyVisitScheduled({ lead_phone: appt.lead_phone ?? null, vehicle_id: appt.vehicle_id, requested_date: appt.requested_date, requested_time: appt.requested_time, channel: appt.channel ?? null });
     reenviadas.push(appt.lead_phone ?? appt.id);
   }
-  return { ok: true, fecha: hoy, total_citas_hoy: citasHoy.length, reenviadas };
+  return { ok: true, fecha: hoy, total_citas_hoy: citasHoy.length, reenviadas, saltadas };
 }));
 app.post("/admin/zernio/team-alert-template-status", requireAdminToken, route(async (a: { template_id: string }) => ({
   status: await teamAlertTemplateStatus(a.template_id),
