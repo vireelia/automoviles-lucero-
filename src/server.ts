@@ -24,6 +24,7 @@ import {
   rememberWhatsappConversation,
   listRecentWhatsappConversations,
   getRecentWhatsappMessages,
+  getRealDeliveryStatus,
   isRealCustomerConversation,
   downloadWhatsAppMedia,
   saveWhatsAppMedia,
@@ -572,6 +573,12 @@ app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async (a: {
 // pero el catálogo cambió de esquema de IDs (de UUID a "lucero-dealcar-N")
 // tras una reimportación, así que NINGUNA cita de hoy tenía de verdad el
 // coche vendido -- el aviso fue un falso positivo del propio sistema).
+app.get("/admin/zernio/estado_real_entrega", requireAdminToken, async (req, res) => {
+  const conversationId = String(req.query.conversation_id ?? "");
+  if (!conversationId) return res.status(400).json({ ok: false, error: "conversation_id_requerido" });
+  const limit = parseInt(String(req.query.limit ?? "10"), 10);
+  res.json(await getRealDeliveryStatus(conversationId, Number.isFinite(limit) ? limit : 10));
+});
 app.post("/admin/aviso_equipo_texto_libre", requireAdminToken, route(async (a: { texto: string }) => {
   const resultados: unknown[] = [];
   for (const member of team()) {

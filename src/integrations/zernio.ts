@@ -244,6 +244,34 @@ export async function getRecentWhatsappMessages(
   }
 }
 
+// Verificación real de entrega (11/11/2026, "verifica si de verdad le llegó
+// ese mensaje a Ramón"): team_notifications solo guarda si Meta ACEPTÓ el
+// envío (equivalente a deliveryStatus "sent"), no si el teléfono de verdad
+// lo recibió o lo leyó -- eso solo lo sabe Meta, vía los estados reales de
+// WhatsApp (sent/delivered/read) que Zernio expone por mensaje.
+export async function getRealDeliveryStatus(
+  conversationId: string,
+  limit = 10,
+): Promise<{ ok: true; messages: { text: string | null; direction: string; createdAt: string; deliveryStatus: string | null; deliveredAt: string | null; readAt: string | null }[] } | { ok: false; error: string }> {
+  const zernio = getClient();
+  const accountId = process.env.ZERNIO_WHATSAPP_ACCOUNT_ID;
+  if (!zernio || !accountId) return { ok: false, error: "zernio_whatsapp_no_configurado" };
+  try {
+    const { data } = await zernio.messages.getInboxConversationMessages({ path: { conversationId }, query: { accountId, limit, sortOrder: "desc" } });
+    const messages = (data.messages ?? []).map((m: { message?: string | null; direction: string; createdAt: string; deliveryStatus?: string | null; deliveredAt?: string | null; readAt?: string | null }) => ({
+      text: m.message ?? null,
+      direction: m.direction,
+      createdAt: m.createdAt,
+      deliveryStatus: m.deliveryStatus ?? null,
+      deliveredAt: m.deliveredAt ?? null,
+      readAt: m.readAt ?? null,
+    }));
+    return { ok: true, messages };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Recuerda qué conversationId de Zernio corresponde a cada número de
 // teléfono, para poder responder dentro de la ventana de 24h sin tener
 // que crear una conversación nueva (que en WhatsApp exige plantilla).
