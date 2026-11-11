@@ -567,33 +567,31 @@ app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async (a: {
 // disponible borralas mejor"): mueve a la papelera (recuperable, nunca
 // borrado permanente -- mismo criterio que todo el resto del CRM) las
 // citas de hoy cuyo vehículo ya no está en el catálogo real.
+// Rectificación puntual (11/11/2026, fallo real propio: el aviso anterior de
+// "coche vendido" se basó en comparar vehicle_id contra el catálogo actual,
+// pero el catálogo cambió de esquema de IDs (de UUID a "lucero-dealcar-N")
+// tras una reimportación, así que NINGUNA cita de hoy tenía de verdad el
+// coche vendido -- el aviso fue un falso positivo del propio sistema).
+app.post("/admin/aviso_equipo_texto_libre", requireAdminToken, route(async (a: { texto: string }) => {
+  const resultados: unknown[] = [];
+  for (const member of team()) {
+    const r = await sendTeamAlertViaTemplate(member.phone, a.texto);
+    resultados.push({ to: member.name, ok: r.ok, error: r.ok ? null : r.error });
+  }
+  return { ok: true, resultados };
+}));
+// DESACTIVADA (11/11/2026, fallo real propio): esta ruta comparaba
+// vehicle_id de la cita contra currentVehicles() para decidir si el coche
+// "ya no está disponible" -- pero el catálogo cambió de esquema de IDs (de
+// UUID a "lucero-dealcar-N") tras una reimportación, así que TODA cita
+// creada antes de ese cambio da igual un falso "no disponible", esté o no
+// vendido el coche de verdad. Se ejecutó una vez por error con este
+// criterio y avisó a Ramón/José de una venta falsa en las 6 citas de hoy --
+// ya corregido (restauradas de papelera + aviso de rectificación enviado).
+// Queda desactivada hasta tener una forma fiable de saber si un coche
+// concreto se vendió (no solo que su id viejo ya no aparece en el feed).
 app.post("/admin/trash_citas_vehiculo_no_disponible", requireAdminToken, route(async () => {
-  const hoy = new Date().toISOString().slice(0, 10);
-  const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>("appointments");
-  const citasHoy = appts.filter((a) => a.requested_date === hoy && a.status === "confirmed");
-  const movidas: { id: string; lead_phone?: string; requested_time?: string; aviso_equipo: unknown[] }[] = [];
-  for (const appt of citasHoy) {
-    if (appt.vehicle_id && !currentVehicles().some((v) => v.id === appt.vehicle_id)) {
-      // Petición real (11/11/2026, "que Carolina le diga a Ramón y José las
-      // dos visitas pero que le enseñen otro coche parecido ya que fue
-      // vendido o que la llamen para confirmar cancelación"): aviso
-      // explícito al equipo con la acción real a tomar, no solo el dato de
-      // que hay una visita -- antes de mover la cita a la papelera.
-      const texto = `⚠️ Visita de hoy a las ${appt.requested_time ?? "?"} -- el coche que venía a ver (${appt.lead_phone ?? "sin contacto"}) ya no está disponible (vendido/retirado). Enséñale un coche parecido o llámale para confirmar si cancela la visita.`;
-      const avisoEquipo: unknown[] = [];
-      for (const member of team()) {
-        const r = await sendTeamAlertViaTemplate(member.phone, texto);
-        avisoEquipo.push({ to: member.name, ok: r.ok, error: r.ok ? null : r.error });
-      }
-      moveToTrash("appointments", appt, `Visita: vehículo ${appt.vehicle_id} ya no disponible (${appt.lead_phone ?? "sin contacto"})`, "admin_token");
-      movidas.push({ id: appt.id, lead_phone: appt.lead_phone, requested_time: appt.requested_time, aviso_equipo: avisoEquipo });
-    }
-  }
-  if (movidas.length > 0) {
-    const idsMovidas = new Set(movidas.map((m) => m.id));
-    writeCollection("appointments", appts.filter((a) => !idsMovidas.has(a.id)));
-  }
-  return { ok: true, fecha: hoy, movidas_a_papelera: movidas };
+  return { ok: false, error: "ruta_desactivada_criterio_no_fiable" };
 }));
 app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
   const hoy = new Date().toISOString().slice(0, 10);
