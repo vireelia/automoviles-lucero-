@@ -37,6 +37,8 @@ import {
   getClientReminderTemplateId,
 } from "./integrations/zernio.js";
 import { notifyVisitScheduled } from "./tools/team-notify.js";
+import { sendTeamAlertViaTemplate } from "./integrations/zernio.js";
+import { currentVehicles } from "./data/vehicles-current.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
@@ -528,6 +530,37 @@ app.get("/admin/zernio/client-reminder-template-status", requireAdminToken, rout
 // citas de hoy creadas antes de que la plantilla de aviso interno existiera
 // (03-04/11) nunca llegaron a avisar a Ramón/José. Reenvía solo las citas
 // confirmadas de hoy que todavía no tengan ningún "sent" de hoy mismo.
+// Prueba a petición real (11/11/2026, "antes de nada, envíamelas a mí
+// primero"): mismo texto/formato real que recibirían Ramón/José, pero
+// enviado solo al número de pruebas (TECHNICAL_ALERT_PHONE) -- nunca toca
+// team_notifications real ni resuelve handoffs, para no mezclarse con el
+// reenvío real de /admin/avisar_citas_de_hoy.
+app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async () => {
+  const testPhone = process.env.TECHNICAL_ALERT_PHONE?.trim();
+  if (!testPhone) return { ok: false, error: "TECHNICAL_ALERT_PHONE_no_configurado" };
+  const hoy = new Date().toISOString().slice(0, 10);
+  const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>("appointments");
+  const notifs = readCollection<{ lead_phone?: string | null; delivery_status: string; created_at: string }>("team_notifications");
+  const citasHoy = appts.filter((a) => {
+    if (a.requested_date !== hoy || a.status !== "confirmed") return false;
+    const t = a.requested_time ?? "";
+    return !/^\d{2}:\d{2}$/.test(t) || t >= "11:00";
+  });
+  const yaAvisadas = new Set(notifs.filter((n) => n.delivery_status === "sent" && n.created_at.startsWith(hoy)).map((n) => n.lead_phone ?? ""));
+  const resultados: unknown[] = [];
+  for (const appt of citasHoy) {
+    if (yaAvisadas.has(appt.lead_phone ?? "")) continue;
+    const name = readCollection<{ phone: string | null; name: string | null }>("leads").find((l) => l.phone === appt.lead_phone)?.name?.trim() || "sin nombre";
+    const contact = !appt.lead_phone ? name : name === "sin nombre" ? appt.lead_phone : `${name} (${appt.lead_phone})`;
+    const vehicle = currentVehicles().find((v) => v.id === appt.vehicle_id);
+    const vehicleStr = vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.version}` : (appt.vehicle_id ?? "sin vehículo indicado");
+    const when = appt.requested_date && appt.requested_time ? `${appt.requested_date} a las ${appt.requested_time}` : appt.requested_date || "fecha por confirmar";
+    const texto = `[PRUEBA -- iría a Ramón/José] 📅 Nueva visita -- ${contact} -- ${vehicleStr} -- ${when}`;
+    const r = await sendTeamAlertViaTemplate(testPhone, texto);
+    resultados.push({ lead_phone: appt.lead_phone, texto, ok: r.ok, error: r.ok ? null : r.error });
+  }
+  return { ok: true, fecha: hoy, enviadas_a_prueba: resultados };
+}));
 app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
   const hoy = new Date().toISOString().slice(0, 10);
   const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string; channel?: string | null }>("appointments");
