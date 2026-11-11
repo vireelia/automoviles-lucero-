@@ -36,7 +36,7 @@ import {
   clientReminderTemplateStatus,
   getClientReminderTemplateId,
 } from "./integrations/zernio.js";
-import { notifyVisitScheduled } from "./tools/team-notify.js";
+import { notifyVisitScheduled, team } from "./tools/team-notify.js";
 import { sendTeamAlertViaTemplate } from "./integrations/zernio.js";
 import { currentVehicles } from "./data/vehicles-current.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
@@ -571,11 +571,22 @@ app.post("/admin/trash_citas_vehiculo_no_disponible", requireAdminToken, route(a
   const hoy = new Date().toISOString().slice(0, 10);
   const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>("appointments");
   const citasHoy = appts.filter((a) => a.requested_date === hoy && a.status === "confirmed");
-  const movidas: { id: string; lead_phone?: string; requested_time?: string }[] = [];
+  const movidas: { id: string; lead_phone?: string; requested_time?: string; aviso_equipo: unknown[] }[] = [];
   for (const appt of citasHoy) {
     if (appt.vehicle_id && !currentVehicles().some((v) => v.id === appt.vehicle_id)) {
+      // Petición real (11/11/2026, "que Carolina le diga a Ramón y José las
+      // dos visitas pero que le enseñen otro coche parecido ya que fue
+      // vendido o que la llamen para confirmar cancelación"): aviso
+      // explícito al equipo con la acción real a tomar, no solo el dato de
+      // que hay una visita -- antes de mover la cita a la papelera.
+      const texto = `⚠️ Visita de hoy a las ${appt.requested_time ?? "?"} -- el coche que venía a ver (${appt.lead_phone ?? "sin contacto"}) ya no está disponible (vendido/retirado). Enséñale un coche parecido o llámale para confirmar si cancela la visita.`;
+      const avisoEquipo: unknown[] = [];
+      for (const member of team()) {
+        const r = await sendTeamAlertViaTemplate(member.phone, texto);
+        avisoEquipo.push({ to: member.name, ok: r.ok, error: r.ok ? null : r.error });
+      }
       moveToTrash("appointments", appt, `Visita: vehículo ${appt.vehicle_id} ya no disponible (${appt.lead_phone ?? "sin contacto"})`, "admin_token");
-      movidas.push({ id: appt.id, lead_phone: appt.lead_phone, requested_time: appt.requested_time });
+      movidas.push({ id: appt.id, lead_phone: appt.lead_phone, requested_time: appt.requested_time, aviso_equipo: avisoEquipo });
     }
   }
   if (movidas.length > 0) {

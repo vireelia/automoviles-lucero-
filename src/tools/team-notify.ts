@@ -46,7 +46,7 @@ const VISIT_RESERVATION_KINDS: AlertKind[] = ["visita_agendada", "visita_cancela
 
 // Se lee en cada aviso, no en un const de módulo (26/10/2026) -- así un
 // teléfono editado desde Ajustes se usa al momento, sin reiniciar el proceso.
-function team(): { name: string; phone: string }[] {
+export function team(): { name: string; phone: string }[] {
   const cfg = getBusinessConfig();
   return [
     { name: "Ramón", phone: cfg.ramonPhone },
