@@ -535,15 +535,17 @@ app.get("/admin/zernio/client-reminder-template-status", requireAdminToken, rout
 // enviado solo al número de pruebas (TECHNICAL_ALERT_PHONE) -- nunca toca
 // team_notifications real ni resuelve handoffs, para no mezclarse con el
 // reenvío real de /admin/avisar_citas_de_hoy.
-app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async () => {
+app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async (a: { horas?: string[] }) => {
   const testPhone = process.env.TECHNICAL_ALERT_PHONE?.trim();
   if (!testPhone) return { ok: false, error: "TECHNICAL_ALERT_PHONE_no_configurado" };
   const hoy = new Date().toISOString().slice(0, 10);
   const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>("appointments");
   const notifs = readCollection<{ lead_phone?: string | null; delivery_status: string; created_at: string }>("team_notifications");
-  const citasHoy = appts.filter((a) => {
-    if (a.requested_date !== hoy || a.status !== "confirmed") return false;
-    const t = a.requested_time ?? "";
+  const horasPedidas = a.horas && a.horas.length > 0 ? new Set(a.horas) : null;
+  const citasHoy = appts.filter((x) => {
+    if (x.requested_date !== hoy || x.status !== "confirmed") return false;
+    if (horasPedidas) return horasPedidas.has(x.requested_time ?? "");
+    const t = x.requested_time ?? "";
     return !/^\d{2}:\d{2}$/.test(t) || t >= "11:00";
   });
   const yaAvisadas = new Set(notifs.filter((n) => n.delivery_status === "sent" && n.created_at.startsWith(hoy)).map((n) => n.lead_phone ?? ""));
@@ -560,6 +562,27 @@ app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async () =>
     resultados.push({ lead_phone: appt.lead_phone, texto, ok: r.ok, error: r.ok ? null : r.error });
   }
   return { ok: true, fecha: hoy, enviadas_a_prueba: resultados };
+}));
+// Petición real (11/11/2026, "las que tienen visitas del coche no
+// disponible borralas mejor"): mueve a la papelera (recuperable, nunca
+// borrado permanente -- mismo criterio que todo el resto del CRM) las
+// citas de hoy cuyo vehículo ya no está en el catálogo real.
+app.post("/admin/trash_citas_vehiculo_no_disponible", requireAdminToken, route(async () => {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const appts = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>("appointments");
+  const citasHoy = appts.filter((a) => a.requested_date === hoy && a.status === "confirmed");
+  const movidas: { id: string; lead_phone?: string; requested_time?: string }[] = [];
+  for (const appt of citasHoy) {
+    if (appt.vehicle_id && !currentVehicles().some((v) => v.id === appt.vehicle_id)) {
+      moveToTrash("appointments", appt, `Visita: vehículo ${appt.vehicle_id} ya no disponible (${appt.lead_phone ?? "sin contacto"})`, "admin_token");
+      movidas.push({ id: appt.id, lead_phone: appt.lead_phone, requested_time: appt.requested_time });
+    }
+  }
+  if (movidas.length > 0) {
+    const idsMovidas = new Set(movidas.map((m) => m.id));
+    writeCollection("appointments", appts.filter((a) => !idsMovidas.has(a.id)));
+  }
+  return { ok: true, fecha: hoy, movidas_a_papelera: movidas };
 }));
 app.post("/admin/avisar_citas_de_hoy", requireAdminToken, route(async () => {
   const hoy = new Date().toISOString().slice(0, 10);
