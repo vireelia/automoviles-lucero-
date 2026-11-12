@@ -233,9 +233,26 @@ function loadConversation(sessionId: string): ConversationRecord {
   return found ?? { id: sessionId, messages: [], updated_at: new Date().toISOString() };
 }
 
+// FALLO REAL grave encontrado 12/11/2026 (auditoría de rendimiento,
+// chat_conversations.json a 99,5 MB bloqueando el event loop de store.ts):
+// los mensajes "tool" guardan JSON.stringify(result) completo (resultados
+// de búsqueda de vehículos, hasta ~140 KB cada uno) para siempre en el
+// historial. El modelo ya usó ese resultado completo para responder EN SU
+// turno -- guardarlo íntegro no aporta nada una vez pasado el turno, solo
+// pesa en disco y en los tokens de contexto de turnos futuros. Se recorta
+// SOLO al persistir (nunca durante el razonamiento del turno en curso, que
+// sigue usando el resultado completo desde `messages`/`turn` en memoria).
+const TOOL_CONTENT_MAX_CHARS = 600;
+export function shrinkForStorage(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "tool" || !m.content || m.content.length <= TOOL_CONTENT_MAX_CHARS) return m;
+    return { ...m, content: `${m.content.slice(0, TOOL_CONTENT_MAX_CHARS)}… [recortado al guardar, resultado completo ya usado en su turno]` };
+  });
+}
+
 function saveConversation(record: ConversationRecord) {
   const others = readCollection<ConversationRecord>("chat_conversations").filter((c) => c.id !== record.id);
-  writeCollection("chat_conversations", [...others, record]);
+  writeCollection("chat_conversations", [...others, { ...record, messages: shrinkForStorage(record.messages) }]);
 }
 
 export type Channel = "CHAT" | "EMAIL" | "WHATSAPP" | "FACEBOOK";

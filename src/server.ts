@@ -49,7 +49,7 @@ import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "./tools/agent-toggle.js";
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
-import { handleChatMessage, LlmNotConfigured } from "./chat/agent.js";
+import { handleChatMessage, LlmNotConfigured, shrinkForStorage } from "./chat/agent.js";
 import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
 import { withPersistentLockOrSkip } from "./locks.js";
 import { createAutoTask } from "./tools/tasks.js";
@@ -374,6 +374,24 @@ app.get("/admin/diagnostico_conversaciones", requireAdminToken, (_req, res) => {
     .sort((a, b) => b.bytes_total - a.bytes_total)
     .slice(0, 15);
   res.json({ status: "ok", top_15_mas_pesadas: porConversacion });
+});
+
+// Migración puntual: aplica a lo ya guardado el mismo recorte que ahora se
+// aplica solo a partir de ahora en saveConversation (chat/agent.ts) --
+// nunca borra mensajes ni conversaciones completas, solo recorta el
+// contenido de los mensajes "tool" ya guardados que superan el límite.
+app.post("/admin/chat_conversations/recortar_tool_results", requireAdminToken, (_req, res) => {
+  const convs = readCollection<{ id: string; messages: { role: string; content: string | null }[]; updated_at: string }>("chat_conversations");
+  let mensajesRecortados = 0;
+  const antes = JSON.stringify(convs).length;
+  const recortadas = convs.map((c) => {
+    const nuevos = shrinkForStorage(c.messages as never) as typeof c.messages;
+    mensajesRecortados += nuevos.filter((m, i) => m.content !== c.messages[i]?.content).length;
+    return { ...c, messages: nuevos };
+  });
+  writeCollection("chat_conversations", recortadas);
+  const despues = JSON.stringify(recortadas).length;
+  res.json({ status: "ok", mensajes_recortados: mensajesRecortados, kb_antes: Math.round(antes / 1024), kb_despues: Math.round(despues / 1024) });
 });
 
 // FALLO REAL grave encontrado 12/11/2026 vía /admin/diagnostico_tamanos:
