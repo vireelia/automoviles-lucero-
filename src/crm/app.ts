@@ -2394,10 +2394,16 @@ crm.get("/reservas", async (req, res) => {
   // en Pendientes). El backfill automático de reservas (18/10/2026) se
   // mueve aquí también -- Reservas es ahora el único dueño de este dato.
   const interesHandoffs = list<Handoff>("handoffs").filter((h) => h.reason_type === "reserva" && h.status === "requested");
-  for (const h of interesHandoffs) {
-    if (h.lead_phone) {
-      const lead = list<Lead>("leads").find((l) => l.phone === h.lead_phone);
-      await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
+  // FALLO REAL encontrado 12/11/2026 (mismo patrón que Tareas/Incidencias):
+  // leía leads.json entero dentro del bucle, una vez por cada incidencia
+  // de reserva pendiente. Se lee una sola vez fuera del bucle.
+  if (interesHandoffs.length > 0) {
+    const leadsParaReserva = list<Lead>("leads");
+    for (const h of interesHandoffs) {
+      if (h.lead_phone) {
+        const lead = leadsParaReserva.find((l) => l.phone === h.lead_phone);
+        await tryAutoCreateReservation(h.lead_phone, lead?.vehicle_interest ?? null);
+      }
     }
   }
   // Tras el backfill, solo quedan como "interés sin confirmar" los que de
@@ -5929,7 +5935,14 @@ const TRASH_LABELS: Record<string, string> = {
 
 crm.get("/papelera", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
-  const items = listTrash();
+  const itemsReales = listTrash();
+  // Mismo fallo real que Tareas/Incidencias (12/11/2026): con 1.903
+  // elementos reales en papelera, pintarlos todos de golpe es lento para
+  // el navegador. Se limita a los 200 más recientes -- nada se borra ni
+  // se pierde, solo no se pinta todo a la vez.
+  const LIMITE_PAPELERA = 200;
+  const papeleraRecortada = itemsReales.length > LIMITE_PAPELERA;
+  const items = papeleraRecortada ? itemsReales.slice(0, LIMITE_PAPELERA) : itemsReales;
   const bulk = items.length > 0
     ? `<form id="papelera-bulk" method="post" action="/crm/papelera-masivo"></form>
 <div class="bulkbar">
@@ -5940,6 +5953,7 @@ crm.get("/papelera", (req, res) => {
     : "";
   const body = `<h1>Papelera</h1>
 <p class="sub">Aquí quedan las reservas, visitas, avisos y alertas que se eliminaron -- nada se borra para siempre hasta que lo confirmes aquí.</p>
+${papeleraRecortada ? `<p class="sub">Mostrando los ${LIMITE_PAPELERA} más recientes de ${itemsReales.length} reales -- ninguno se ha perdido, solo no se pintan todos a la vez para que la página cargue rápido.</p>` : ""}
 ${bulk}
 ${items.length === 0 ? `<div class="empty">La papelera está vacía.</div>` : items.map((t) => `<div class="card" style="position:relative"><div class="info">
 ${simpleCheckbox("papelera-bulk", t.id)}
