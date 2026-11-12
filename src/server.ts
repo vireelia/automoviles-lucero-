@@ -376,6 +376,15 @@ app.post("/admin/tasks/archivar_completadas", requireAdminToken, (req, res) => {
   res.json({ status: "ok", archivadas: archivadas.length, activas: activas.length });
 });
 
+app.get("/admin/diagnostico_agentes", requireAdminToken, (_req, res) => {
+  res.json({
+    status: "ok",
+    miguel_voz: isVoiceAgentEnabled(),
+    carolina_whatsapp: isWhatsappZernioAgentEnabled(),
+    daniel_correo_auto_envio: isEmailAutoSendEnabled(),
+  });
+});
+
 app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
   const email = typeof req.query.email === "string" ? req.query.email : "";
   if (!email) {
