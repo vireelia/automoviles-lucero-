@@ -527,6 +527,22 @@ export function decideInterest(input: { from: string; subject: string; text: str
   if (input.portal && input.portal !== "Coches.net") {
     return { interested: false, reason: "portal_no_habilitado_para_respuesta_automatica" };
   }
+  // CIERRE REAL DE SEGURIDAD (12/11/2026, petición explícita: "ojo, que no
+  // se suba cualquier información al CRM, ni que el agente responda
+  // información privada por correo -- solo coches.net y wallapop"): antes,
+  // un correo SIN portal detectado (remitente directo cualquiera) igual
+  // podía marcarse "interesado" si el texto sonaba a consulta de vehículo
+  // (INTERESTED/PORTAL_NOTIFICATION_TEMPLATE) -- así es como un correo de
+  // phishing con lenguaje de "financiación pendiente de validación" pudo
+  // colarse como si fuera un cliente real. Ahora solo Coches.net (este
+  // mismo if, ya pasado arriba) y Wallapop (gestionado aparte, nunca por
+  // correo) pueden generar una respuesta automática o un registro de
+  // interés real -- cualquier remitente sin portal reconocido, aunque el
+  // texto mencione coches/precio/visita, se queda siempre para revisión
+  // humana, nunca contesta sola la IA ni expone datos del negocio.
+  if (!input.portal) {
+    return { interested: false, reason: "sin_portal_reconocido_revision_humana" };
+  }
   if (input.hasPriorThread) {
     return { interested: true, reason: "conversacion_previa" };
   }
