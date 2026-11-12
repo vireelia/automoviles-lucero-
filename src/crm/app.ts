@@ -2562,7 +2562,13 @@ const TASK_TYPE_LABEL: Record<TaskType, string> = {
   contactar_whatsapp: "Contactar por WhatsApp (número nuevo)",
   otra: "Otra tarea comercial",
 };
-function taskCard(t: Task): string {
+// FALLO REAL grave encontrado 12/11/2026 (sección Tareas "se queda
+// totalmente parado"): esta función se llama una vez por tarea (hasta
+// 9.193 veces), y antes leía el archivo de usuarios del CRM del disco
+// ENTERO en cada llamada (listUsers() dentro del cuerpo) solo para
+// dibujar el desplegable de "asignar a". Ahora se lee UNA vez antes del
+// bucle (ver crm.get("/seguimiento")) y se pasa como parámetro.
+function taskCard(t: Task, users: CrmUser[]): string {
   const overdue = t.due_at ? t.due_at < new Date().toISOString() : false;
   const tone = t.status === "completada" ? "off" : overdue ? "urgent" : t.priority === "alta" ? "pending" : "";
   return `<div class="card ${tone}" id="task-${esc(t.id)}"><div class="info">
@@ -2571,7 +2577,7 @@ function taskCard(t: Task): string {
 ${t.reason ? `<p>${esc(t.reason)}</p>` : ""}
 <p class="sub">Creada: ${esc(fmtDate(t.created_at))}${t.due_at ? ` · Vence: ${esc(fmtDate(t.due_at))}` : ""}${t.assigned_to ? ` · Asignada a: ${esc(t.assigned_to)}` : ""}</p>
 ${t.lead_phone ? `<a class="btn light" href="/crm/buscar?q=${esc(t.lead_phone)}">Ver cliente</a>` : ""}
-${t.status === "pendiente" ? `<form method="post" action="/crm/seguimiento/${esc(t.id)}/asignar" style="display:inline"><select name="assigned_to" onchange="this.form.submit()"><option value="">Sin asignar</option>${listUsers().map((u) => `<option value="${esc(u.email)}" ${t.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></form>` : ""}
+${t.status === "pendiente" ? `<form method="post" action="/crm/seguimiento/${esc(t.id)}/asignar" style="display:inline"><select name="assigned_to" onchange="this.form.submit()"><option value="">Sin asignar</option>${users.map((u) => `<option value="${esc(u.email)}" ${t.assigned_to === u.email ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></form>` : ""}
 ${t.status === "pendiente" ? `<form method="post" action="/crm/seguimiento/${esc(t.id)}" style="display:inline">${button("Completar", "completar", "ok")}</form>` : ""}
 </div></div>`;
 }
@@ -2602,7 +2608,7 @@ ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;bord
 <div><label>Fecha límite (opcional)</label><input type="date" name="due_at"></div></div>
 <button class="btn ok" type="submit">Crear tarea</button></form></div>
 <p>${pill("pendientes", "Pendientes")} ${pill("vencidas", "Vencidas")} ${pill("completadas", "Completadas")} ${pill("todas", "Todas")}</p>
-${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : `<div class="cards-grid">${items.map(taskCard).join("")}</div>`}`;
+${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : `<div class="cards-grid">${(() => { const u = listUsers(); return items.map((t) => taskCard(t, u)).join(""); })()}</div>`}`;
   res.type("html").send(page("Tareas", me(res), body, msgOf(req)));
 });
 crm.post("/seguimiento", (req, res) => {
