@@ -2595,6 +2595,17 @@ crm.get("/seguimiento", (req, res) => {
   if (f === "vencidas") items = items.filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
   if (f === "completadas") items = items.filter((t) => t.status === "completada");
   items = items.sort((a, b) => (b.priority === "alta" ? 1 : 0) - (a.priority === "alta" ? 1 : 0) || (a.due_at ?? "9999").localeCompare(b.due_at ?? "9999"));
+  // FALLO REAL grave encontrado 12/11/2026 (sección Tareas sentida como
+  // "colgada" incluso tras arreglar el N+1 de listUsers): con miles de
+  // tareas pendientes reales, se enviaba una página con todas ellas de
+  // golpe -- el navegador tiene que pintar miles de tarjetas, que es lento
+  // aunque el servidor las genere rápido. Se limita a las más urgentes/
+  // próximas, con aviso real de cuántas quedan fuera -- nunca se pierden,
+  // solo no se pintan todas a la vez.
+  const LIMITE_TAREAS = 200;
+  const totalReal = items.length;
+  const recortado = totalReal > LIMITE_TAREAS;
+  if (recortado) items = items.slice(0, LIMITE_TAREAS);
   const pill = (k: string, label: string) => `<a href="/crm/seguimiento?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Tareas</h1>
 <p class="sub">Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar, cliente que no se presentó, handoff urgente), otras se añaden a mano.</p>
@@ -2608,6 +2619,7 @@ ${hotWithoutAction.length > 0 ? `<div class="msg" style="background:#fdecea;bord
 <div><label>Fecha límite (opcional)</label><input type="date" name="due_at"></div></div>
 <button class="btn ok" type="submit">Crear tarea</button></form></div>
 <p>${pill("pendientes", "Pendientes")} ${pill("vencidas", "Vencidas")} ${pill("completadas", "Completadas")} ${pill("todas", "Todas")}</p>
+${recortado ? `<p class="sub">Mostrando las ${LIMITE_TAREAS} más urgentes/próximas de ${totalReal} reales -- ninguna se ha perdido, solo no se pintan todas a la vez para que la página cargue rápido.</p>` : ""}
 ${items.length === 0 ? `<div class="empty">No hay tareas en esta lista.</div>` : `<div class="cards-grid">${(() => { const u = listUsers(); return items.map((t) => taskCard(t, u)).join(""); })()}</div>`}`;
   res.type("html").send(page("Tareas", me(res), body, msgOf(req)));
 });
@@ -2756,7 +2768,15 @@ crm.get("/incidencias", (req, res) => {
   const allHandoffs = list<Handoff>("handoffs").filter((h) => h.reason_type !== "reserva");
   const pendientes = allHandoffs.filter((h) => h.status === "requested").sort((a, b) => b.created_at.localeCompare(a.created_at));
   const atendidos = allHandoffs.filter((h) => h.status === "done").sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const handoffs = v === "atendidos" ? atendidos : pendientes;
+  const handoffsReales = v === "atendidos" ? atendidos : pendientes;
+  // Mismo fallo real que en Tareas (12/11/2026): con 5.792 incidencias
+  // pendientes reales, pintar todas de golpe hace sentir la página lenta
+  // aunque el servidor responda rápido -- se limita lo que se pinta, nunca
+  // lo que existe de verdad.
+  const LIMITE_INCIDENCIAS = 200;
+  const totalHandoffsReal = handoffsReales.length;
+  const handoffsRecortado = totalHandoffsReal > LIMITE_INCIDENCIAS;
+  const handoffs = handoffsRecortado ? handoffsReales.slice(0, LIMITE_INCIDENCIAS) : handoffsReales;
   // Tareas vencidas (20/10/2026, sección 19) -- solo un aviso con enlace a
   // Seguimiento, sin duplicar aquí la lista completa de tareas.
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && t.due_at && t.due_at < new Date().toISOString());
@@ -2772,7 +2792,8 @@ ${overdueTasks.length > 0 ? `<div class="msg" style="background:#fdecea;border-c
 ${vCard("por_atender", "🔴", "#fee2e2", "#dc2626", "Por atender", "Necesitan una persona", pendientes.length)}
 ${vCard("atendidos", "✅", "#dcfce7", "#16a34a", "Ya atendidas", "Resueltas, para auditoría", atendidos.length)}
 </div>
-<h2>${v === "atendidos" ? "Incidencias ya atendidas" : "Incidencias por atender"} (${handoffs.length})</h2>
+<h2>${v === "atendidos" ? "Incidencias ya atendidas" : "Incidencias por atender"} (${totalHandoffsReal})</h2>
+${handoffsRecortado ? `<p class="sub">Mostrando las ${LIMITE_INCIDENCIAS} más recientes de ${totalHandoffsReal} reales -- ninguna se ha perdido, solo no se pintan todas a la vez para que la página cargue rápido.</p>` : ""}
 ${isAdmin && handoffs.length > 0 ? simpleBulkBar("avisos-bulk", "/crm/avisos-masivo", handoffs.length, "¿Eliminar los avisos seleccionados? Se pueden recuperar luego desde la Papelera.") : ""}
 ${handoffs.length === 0 ? `<div class="empty">${v === "atendidos" ? "Todavía no hay nada marcado como atendido." : "No hay incidencias pendientes."}</div>` : `<div class="cards-grid">${handoffs.map((h) => handoffCard(h, isAdmin, v === "atendidos")).join("")}</div>`}`;
   res.type("html").send(page("Incidencias", me(res), body, msgOf(req)));
