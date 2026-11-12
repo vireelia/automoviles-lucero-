@@ -4193,7 +4193,16 @@ function buildAgendaEntries(today: string): AgendaEntry[] {
     const row = agendaRow("llamada", time, title, c.summary || "Sin resumen", `/crm/contactos/llamadas?id=${encodeURIComponent(c.id)}`);
     entries.push({ dateKey: madridDateOnly(c.created_at), overdue: false, row });
   }
-  for (const t of listTasks().filter((x) => x.status === "pendiente")) {
+  // FALLO REAL grave (12/11/2026): generar una fila HTML por cada una de
+  // las 9.193 tareas pendientes es el trabajo caro de verdad, aunque
+  // luego se recorte lo que se pinta -- casi todas sin due_at (van a
+  // "Sin fecha", que ya se recorta a 200). Se procesan primero las que sí
+  // tienen fecha límite (relevantes para los cubos por día, pocas), y del
+  // resto solo las suficientes para rellenar "Sin fecha" sin más.
+  const tareasPendientesTodas = listTasks().filter((x) => x.status === "pendiente");
+  const conFecha = tareasPendientesTodas.filter((t) => t.due_at);
+  const sinFechaTareas = tareasPendientesTodas.filter((t) => !t.due_at).slice(0, 250);
+  for (const t of [...conFecha, ...sinFechaTareas]) {
     const tag = t.priority === "alta" ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Prioridad alta</span>` : "";
     const row = agendaRow("tarea", null, TASK_TYPE_LABEL[t.type], t.reason || contactLabel(t.lead_phone, null), `/crm/seguimiento#task-${esc(t.id)}`, tag);
     const dk = t.due_at ? madridDateOnly(t.due_at) : null;
@@ -4212,8 +4221,17 @@ crm.get("/agenda", (req, res) => {
   const today = todayMadrid();
   const rango = req.query.r === "pasados" ? "pasados" : req.query.r === "hoy" ? "hoy" : "proximos";
   const entries = buildAgendaEntries(today);
-  const overdue = entries.filter((e) => e.overdue);
-  const sinFecha = entries.filter((e) => e.dateKey === null && !e.overdue);
+  // FALLO REAL grave encontrado 12/11/2026 (misma auditoría de fluidez):
+  // buildAgendaEntries crea una fila por cada una de las 9.193 tareas
+  // pendientes -- la inmensa mayoría sin fecha límite, así que acaban
+  // amontonadas en "Sin fecha" sin ningún límite de pintado. Mismo
+  // arreglo que Tareas/Incidencias/Papelera: recortar lo que se pinta,
+  // nunca lo que existe de verdad.
+  const LIMITE_AGENDA = 200;
+  const overdueReal = entries.filter((e) => e.overdue);
+  const sinFechaReal = entries.filter((e) => e.dateKey === null && !e.overdue);
+  const overdue = overdueReal.slice(0, LIMITE_AGENDA);
+  const sinFecha = sinFechaReal.slice(0, LIMITE_AGENDA);
   const rangeStart = rango === "pasados" ? addDaysToDateStr(today, -29) : today;
   const rangeEnd = rango === "pasados" ? addDaysToDateStr(today, -1) : rango === "hoy" ? today : addDaysToDateStr(today, 13);
   const byDay = new Map<string, AgendaRow[]>();
@@ -4229,10 +4247,10 @@ crm.get("/agenda", (req, res) => {
   const pill = (k: string, label: string) => `<a href="/crm/agenda?r=${k}" class="tag" style="text-decoration:none;${rango === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Agenda</h1>
 <p class="sub">Visitas, llamadas y tareas de todos los canales, cruzadas en una sola vista -- cada fila enlaza a su sección real.</p>
-${overdue.length ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:16px"><b>⚠️ Atrasado -- necesita acción</b>${overdue.map((e) => e.row.html).join("")}</div>` : ""}
+${overdue.length ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin-bottom:16px"><b>⚠️ Atrasado -- necesita acción</b>${overdueReal.length > LIMITE_AGENDA ? `<p class="sub">Mostrando las ${LIMITE_AGENDA} más antiguas de ${overdueReal.length} reales.</p>` : ""}${overdue.map((e) => e.row.html).join("")}</div>` : ""}
 <p>${pill("proximos", "Próximos 14 días")} ${pill("hoy", "Hoy")} ${pill("pasados", "Últimos 30 días")}</p>
 ${dayKeys.map((d) => agendaDaySection(d, byDay.get(d) ?? [], today)).join("")}
-${sinFecha.length ? `<div class="agenda-day"><div class="agenda-day-head"><b>Sin fecha</b></div>${sinFecha.map((e) => e.row.html).join("")}</div>` : ""}`;
+${sinFecha.length ? `<div class="agenda-day"><div class="agenda-day-head"><b>Sin fecha</b></div>${sinFechaReal.length > LIMITE_AGENDA ? `<p class="sub">Mostrando las ${LIMITE_AGENDA} de ${sinFechaReal.length} reales.</p>` : ""}${sinFecha.map((e) => e.row.html).join("")}</div>` : ""}`;
   res.type("html").send(page("Agenda", me(res), body, msgOf(req)));
 });
 // Reserva real detrás de una venta cerrada (26/10/2026, sección Ventas) --
