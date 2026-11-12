@@ -965,6 +965,34 @@ function navIcon(key: string, size = 18): string {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
 }
 
+// FALLO REAL grave encontrado 12/11/2026 (auditoría de fluidez "de
+// Inicio a Papelera"): esta cabecera se dibuja en TODAS las páginas del
+// CRM, y recalculaba sus contadores (9.193 tareas, alertas, 500 correos,
+// 500 WhatsApp) en CADA clic, aunque nadie hubiera cambiado nada desde
+// la última vez. Se cachea 10 segundos -- tiempo demasiado corto para
+// que nadie note un contador desactualizado, suficiente para no repetir
+// el mismo trabajo en cada navegación.
+let headerBadgeCache: { at: number; value: ReturnType<typeof computeHeaderBadgeCounts> } | null = null;
+function computeHeaderBadgeCounts() {
+  const pendingMails = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
+  const pendingWhatsapp = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
+  const msgTotal = pendingMails + pendingWhatsapp;
+  const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=sin_leer" : "/crm/contactos/correo?f=sin_leer";
+  const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin leer`;
+  const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
+  const alertCount = pendingAlerts().length;
+  const notifTotal = overdueTasks + alertCount;
+  const notifTitle = `${alertCount} aviso(s) urgente(s) y ${overdueTasks} tarea(s) vencida(s)`;
+  return { msgTotal, msgHref, msgTitle, notifTotal, notifTitle };
+}
+function headerBadgeCounts() {
+  const now = Date.now();
+  if (!headerBadgeCache || now - headerBadgeCache.at > 10_000) {
+    headerBadgeCache = { at: now, value: computeHeaderBadgeCounts() };
+  }
+  return headerBadgeCache.value;
+}
+
 function page(section: string, user: CrmUser, body: string, msg?: string): string {
   // Studio IA gasta dinero real en cada generación (16-17/10/2026) -- a
   // petición real ("a esa seccion, solo puedo acceder yo y el correo de
@@ -980,15 +1008,7 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   // mismo fallo que las pestañas de Contactos -- contaba cada MENSAJE
   // suelto, no conversaciones reales, y encima no bajaba nunca con solo
   // ver el chat. Mismo criterio ya aplicado ahí: conversaciones NO LEÍDAS.
-  const pendingMails = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
-  const pendingWhatsapp = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
-  const msgTotal = pendingMails + pendingWhatsapp;
-  const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=sin_leer" : "/crm/contactos/correo?f=sin_leer";
-  const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin leer`;
-  const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
-  const alertCount = pendingAlerts().length;
-  const notifTotal = overdueTasks + alertCount;
-  const notifTitle = `${alertCount} aviso(s) urgente(s) y ${overdueTasks} tarea(s) vencida(s)`;
+  const { msgTotal, msgHref, msgTitle, notifTotal, notifTitle } = headerBadgeCounts();
   const roleLabel: Record<string, string> = { admin: "Administrador", comercial: "Comercial", equipo: "Equipo" };
   const integrationsOk = isZernioWhatsappConfigured() && googleStatus().connected && Boolean(process.env.RETELL_API_KEY) && Boolean(process.env.OPENAI_API_KEY);
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
