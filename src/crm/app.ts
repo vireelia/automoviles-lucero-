@@ -1645,6 +1645,15 @@ function clearSessionCookie(res: express.Response) {
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+// Diagnóstico de solo lectura (12/11/2026, "por qué no deja entrar a
+// Ramón") -- nunca crea sesión ni toca nada, solo informa si esa cuenta
+// está bloqueada en memoria por intentos fallidos ahora mismo.
+export function loginLockoutStatus(email: string): { bloqueada: boolean; intentos: number; minutos_restantes: number } {
+  const a = loginAttempts.get(email.trim().toLowerCase());
+  if (!a) return { bloqueada: false, intentos: 0, minutos_restantes: 0 };
+  const bloqueada = a.lockedUntil > Date.now();
+  return { bloqueada, intentos: a.count, minutos_restantes: bloqueada ? Math.ceil((a.lockedUntil - Date.now()) / 60000) : 0 };
+}
 crm.get("/entrar", (_req, res) => {
   res.type("html").send(loginPage());
 });

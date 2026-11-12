@@ -79,6 +79,7 @@ import { processInboundEmail, deliverEmail } from "./email/agent.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
 import { bootstrapAdmin, listUsers } from "./crm/auth.js";
+import { loginLockoutStatus } from "./crm/app.js";
 import { startDailySummary } from "./crm/daily.js";
 
 const app = express();
@@ -374,6 +375,16 @@ app.get("/admin/diagnostico_conversaciones", requireAdminToken, (_req, res) => {
     .sort((a, b) => b.bytes_total - a.bytes_total)
     .slice(0, 15);
   res.json({ status: "ok", top_15_mas_pesadas: porConversacion });
+});
+
+app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
+  const email = typeof req.query.email === "string" ? req.query.email : "";
+  if (!email) {
+    res.status(400).json({ error: "falta ?email=" });
+    return;
+  }
+  const existe = listUsers().some((u) => u.email === email.trim().toLowerCase());
+  res.json({ status: "ok", existe_la_cuenta: existe, ...loginLockoutStatus(email) });
 });
 
 // Migración puntual: aplica a lo ya guardado el mismo recorte que ahora se
