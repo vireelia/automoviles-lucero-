@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, unlinkSync } from "fs";
+import { readFile as readFileAsync, readdir as readdirAsync } from "fs/promises";
 import { randomBytes } from "crypto";
 import path from "path";
 import { withPersistentLock, withPersistentLockSync } from "./locks.js";
@@ -179,4 +180,27 @@ export function readAllShards<T>(collection: string): T[] {
   return listShardKeys(collection)
     .map((k) => readShard<T>(collection, k))
     .filter((x): x is T => x !== null);
+}
+
+// Versión asíncrona (12/11/2026, caída real en producción tras partir
+// chat_conversations en fragmentos): readAllShards síncrono bloquea el
+// event loop ENTERO mientras dura el escaneo completo -- si el volumen de
+// EasyPanel tiene más latencia por archivo de la que se probó en local
+// (250ms con 6.885 archivos en SSD local), un escaneo bloqueante de esta
+// colección (el seguimiento comercial la recorre entera cada 5 minutos)
+// podría dejar el servicio entero sin responder el tiempo que dure. Esta
+// versión usa fs/promises, así que aunque tarde, el event loop puede
+// seguir atendiendo otras peticiones reales mientras se completa.
+export async function readAllShardsAsync<T>(collection: string): Promise<T[]> {
+  const dir = shardDir(collection);
+  const files = (await readdirAsync(dir)).filter((f) => f.endsWith(".json") && !f.includes(".tmp"));
+  const out: T[] = [];
+  for (const f of files) {
+    try {
+      out.push(JSON.parse(await readFileAsync(path.join(dir, f), "utf8")));
+    } catch {
+      // archivo a medio escribir o corrupto puntual -- se salta, no tira el resto
+    }
+  }
+  return out;
 }
