@@ -2125,7 +2125,14 @@ crm.get("/", (req, res) => {
     ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
   const d = dayLabel(today);
-  const alerts = pendingAlerts();
+  const alertsReales = pendingAlerts();
+  // FALLO REAL grave encontrado 12/11/2026 (Inicio sentido como "lento"
+  // tras arreglar Agenda): mismo patrón, pintar TODAS las alertas
+  // pendientes reales (3.213 en la colección) sin límite. Se recorta a
+  // 200, nunca se pierde ninguna de verdad.
+  const LIMITE_ALERTAS = 200;
+  const alertasRecortado = alertsReales.length > LIMITE_ALERTAS;
+  const alerts = alertasRecortado ? alertsReales.slice(0, LIMITE_ALERTAS) : alertsReales;
   const emailLabels: Record<string, string> = {
     enviado: "sí",
     pendiente: "en curso",
@@ -2134,7 +2141,7 @@ crm.get("/", (req, res) => {
     error: "error al enviar",
   };
   const alertBlock = alerts.length
-    ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>Llamar ya (${alerts.length})</b> -- las tarjetas de abajo, con el motivo y el botón para llamar o escribir a cada una.</div>` +
+    ? `<div class="msg" style="background:#fdecea;border-color:#c62828"><b>Llamar ya (${alertsReales.length})</b> -- las tarjetas de abajo, con el motivo y el botón para llamar o escribir a cada una.${alertasRecortado ? ` Mostrando las ${LIMITE_ALERTAS} más recientes.` : ""}</div>` +
       (me(res).role === "admin" ? simpleBulkBar("alertas-bulk", "/crm/alertas-masivo", alerts.length, "¿Eliminar las alertas seleccionadas? Úsalo solo para pruebas; se pueden recuperar luego desde la Papelera.") : "") +
       alerts
         .map(
