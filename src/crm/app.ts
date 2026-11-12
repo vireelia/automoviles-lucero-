@@ -1014,7 +1014,7 @@ function page(section: string, user: CrmUser, body: string, msg?: string): strin
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(section)} · Lucero</title>
 <link rel="manifest" href="/crm/manifest.json"><meta name="theme-color" content="#ffffff">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Lucero"><link rel="apple-touch-icon" href="/crm/icono.svg">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Lucero"><link rel="apple-touch-icon" href="/crm/icono.svg">
 <style>
 *{box-sizing:border-box}
 /* Identidad visual CRM PRO (25/10/2026, rediseño pedido estilo coches.net
