@@ -1,6 +1,27 @@
 import crypto from "crypto";
 import { appendToCollection, readCollection, writeCollection } from "../store.js";
 
+// Correo de aviso urgente REACTIVADO (12/11/2026, petición explícita: "esa
+// mierda no debe de salir ahí y se tiene que arreglar" + "reactívalo si no
+// consume créditos de OpenAI" + "es solo una automatización"). No usa IA en
+// ningún punto -- es texto fijo con el motivo real ya calculado, vía Gmail
+// (ya conectado), a los destinatarios reales de ALERT_EMAILS (variable ya
+// prevista en el proyecto, hasta ahora sin usar). "Fire and forget": nunca
+// bloquea ni retrasa la creación de la alerta en el CRM, que sigue siendo
+// lo primero y lo que de verdad importa -- si el correo falla, el aviso ya
+// quedó registrado igualmente.
+function sendAlertEmail(alertId: string, reason: string): void {
+  const destinatarios = (process.env.ALERT_EMAILS ?? "").split(",").map((e) => e.trim()).filter(Boolean);
+  if (destinatarios.length === 0) {
+    setEmailStatus(alertId, "sin_destinatarios");
+    return;
+  }
+  import("../email/agent.js")
+    .then(({ deliverEmail }) => Promise.all(destinatarios.map((to) => deliverEmail(to, "Aviso urgente -- Automóviles Lucero", reason))))
+    .then((results) => setEmailStatus(alertId, results.every((r) => r.status === "sent") ? "enviado" : "error"))
+    .catch(() => setEmailStatus(alertId, "error"));
+}
+
 // Avisos urgentes para Ramón y José. Cada aviso queda en el CRM (bloque de
 // Hoy) hasta que alguien lo marca como atendido. El correo como canal de
 // aviso se desactivó del todo (04/11/2026, "deja los avisos por correos
@@ -98,13 +119,10 @@ export function raiseAlert(input: {
     done_at: selfResolving ? new Date().toISOString() : null,
   };
   appendToCollection("alerts", alert);
-  // Avisos por correo desactivados del todo (04/11/2026, "deja los avisos
-  // por correos quitalos, y envia solo avisos por whassap a ramon y jose
-  // de visitas y reservas solo eso"): el registro real sigue quedando
-  // siempre en el CRM (Pendientes), solo se deja de mandar correo. El
-  // único canal real de aviso ahora es WhatsApp, y solo para
-  // visitas/reservas (ver team-notify.ts, VISIT_RESERVATION_KINDS).
-  setEmailStatus(alert.id, "desactivado_a_peticion_real");
+  // Reactivado (12/11/2026, ver comentario real arriba de sendAlertEmail)
+  // -- el registro en el CRM sigue siendo lo primero, el correo es un
+  // aviso adicional que nunca bloquea ni retrasa nada de lo anterior.
+  sendAlertEmail(alert.id, input.reason);
   return alert;
 }
 

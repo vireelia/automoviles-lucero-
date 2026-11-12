@@ -9,7 +9,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending, confirmReservation, cancelReservation, reopenReservation } from "../tools/reservations.js";
 import { getOfficialStatus, setOfficialStatus, type OfficialVehicleStatus } from "../tools/vehicle-state.js";
 import { deliverEmail } from "../email/agent.js";
-import { pendingAlerts, markAlertDone, deleteAlert } from "../alerts/alerts.js";
+import { pendingAlerts, markAlertDone, deleteAlert, type AlertKind } from "../alerts/alerts.js";
 import { moveToTrash, moveManyToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
@@ -2125,7 +2125,16 @@ crm.get("/", (req, res) => {
     ...urgentTasks.map((t) => ({ href: "/crm/seguimiento", text: `Tarea: ${t.reason ?? TASK_TYPE_LABEL[t.type]}` })),
   ];
   const d = dayLabel(today);
-  const alertsReales = pendingAlerts();
+  // FALLO REAL corregido 12/11/2026 (petición explícita: "se tiene que
+  // arreglar porque si no, llenaremos el CRM de incidencias y no de
+  // visitas o reservas"): el bloque destacado "Llamar ya" mezclaba TODOS
+  // los tipos de alerta (lead caliente, fallo técnico, gestión de portal,
+  // handoff urgente...) con las de verdad urgentes de negocio. Ahora solo
+  // entran aquí reserva_pendiente y handoff_urgente -- el resto de tipos
+  // siguen existiendo y registrados (nunca se borran), pero no ocupan el
+  // sitio pensado para "esto hay que llamarlo ya por una visita o reserva".
+  const ALERTAS_INICIO_KINDS: AlertKind[] = ["reserva_pendiente", "handoff_urgente"];
+  const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind));
   // FALLO REAL grave encontrado 12/11/2026 (Inicio sentido como "lento"
   // tras arreglar Agenda): mismo patrón, pintar TODAS las alertas
   // pendientes reales (3.213 en la colección) sin límite. Se recorta a
