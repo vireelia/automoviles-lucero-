@@ -1,4 +1,5 @@
 import express from "express";
+import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
@@ -290,6 +291,43 @@ function requireAdminToken(req: express.Request, res: express.Response, next: ex
 app.post("/admin/confirm_reservation", requireAdminToken, route((a) => confirmReservation(a)));
 app.post("/admin/cancel_reservation", requireAdminToken, route((a) => cancelReservation(a)));
 app.post("/admin/reopen_reservation", requireAdminToken, route((a) => reopenReservation(a)));
+
+// Mismas dos acciones que /crm/clientes/archivados (ver crm/app.ts), pero por
+// ADMIN_TOKEN en vez de sesión de navegador -- el servicio está cayéndose de
+// forma intermitente por el tamaño de leads.json (lectura/escritura síncrona
+// en store.ts bloqueando el event loop), así que no se puede depender de que
+// el navegador aguante una sesión de CRM completa para hacer esta limpieza;
+// un solo POST por curl basta aunque el servicio esté inestable.
+app.get("/admin/leads_archivados/exportar-pdf", requireAdminToken, (_req, res) => {
+  const leads = readCollection<{
+    archived?: boolean; name?: string | null; phone?: string | null; email?: string | null;
+    vehicle_interest?: string | null; channel?: string | null; created_at?: string;
+  }>("leads");
+  const archivados = leads.filter((l) => l.archived === true);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="leads_archivados_${new Date().toISOString().slice(0, 10)}.pdf"`);
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+  doc.pipe(res);
+  doc.fontSize(16).text("Automóviles Lucero -- Leads archivados", { underline: true });
+  doc.fontSize(10).fillColor("#555").text(`Generado ${new Date().toLocaleString("es-ES")} -- ${archivados.length} leads`);
+  doc.moveDown(1);
+  doc.fillColor("#000");
+  for (const l of archivados) {
+    doc.fontSize(10).text(
+      `${l.name ?? "(sin nombre)"} -- ${l.phone ?? l.email ?? "(sin contacto)"} -- interés: ${l.vehicle_interest ?? "-"} -- canal: ${l.channel ?? "-"} -- creado: ${l.created_at ?? "-"}`,
+    );
+    if (doc.y > 760) doc.addPage();
+  }
+  doc.end();
+});
+
+app.post("/admin/leads_archivados/eliminar", requireAdminToken, (_req, res) => {
+  const leads = readCollection<{ archived?: boolean }>("leads");
+  const antes = leads.length;
+  const restantes = leads.filter((l) => l.archived !== true);
+  writeCollection("leads", restantes);
+  res.json({ status: "ok", borrados: antes - restantes.length, restantes: restantes.length });
+});
 
 // Migración puntual (21/10/2026, auditoría real de "estamos perdiendo
 // reservas/visitas"): varios registros antiguos de appointments/handoffs
