@@ -4817,6 +4817,7 @@ ${tempPill("archivados", "Archivados", "#9aa1ad", archivedCount)}
 <div style="display:flex;align-items:center;gap:10px">
 ${dateDropdown}
 ${isAdmin ? `<a class="btn light noprint" href="/crm/clientes/exportar.json" download style="white-space:nowrap;margin:0">⬇️ Exportar (JSON)</a>` : ""}
+${isAdmin && archivedCount > 0 ? `<a class="btn light noprint" href="/crm/clientes/archivados" style="white-space:nowrap;margin:0">📁 Gestionar archivados (${archivedCount})</a>` : ""}
 ${isAdmin ? `<form method="post" action="/crm/clientes/limpiar-antiguos" style="margin:0" onsubmit="return confirm('¿Mover a la Papelera los clientes archivados sin visita ni reserva real? Se pueden recuperar luego desde ahí -- nunca se borran para siempre.')"><button class="btn light noprint" type="submit" style="white-space:nowrap;margin:0">🧹 Limpiar sin interés real</button></form>` : ""}
 </div>
 </div>
@@ -5915,6 +5916,70 @@ ${simpleCheckbox("papelera-bulk", t.id)}
 </form>
 </div></div>`).join("")}`;
   res.type("html").send(page("Papelera", me(res), body, msgOf(req)));
+});
+
+// ---------- Leads archivados: exportar a PDF y borrar permanentemente ----------
+// Petición real (12/11/2026): el archivo leads.json acumuló ~5.000 leads
+// archivados (curiosos sin visita/reserva, campo "archived" ya existente --
+// ver comentario en tools/leads.ts). store.ts lee y escribe el archivo
+// ENTERO de forma síncrona en cada operación (readFileSync/writeFileSync
+// bloqueantes, sin streaming) -- con ese volumen, cada escritura bloquea el
+// único hilo de Node el tiempo suficiente para que el servicio deje de
+// responder a tiempo bajo tráfico simultáneo (patrón real observado:
+// /health sin contestar en 15-20s). A diferencia de la papelera (reversible
+// por decisión del propio Eliud, "nada se borra para siempre hasta que lo
+// confirmes"), esto es un borrado PERMANENTE explícitamente pedido -- por
+// eso exige generar primero el PDF con el registro completo, sin paso por
+// papelera.
+import PDFDocument from "pdfkit";
+
+crm.get("/clientes/archivados", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
+  const leads = readCollection<{ archived?: boolean }>("leads");
+  const archivados = leads.filter((l) => l.archived === true);
+  const body = `<h1>Leads archivados</h1>
+<p class="sub">${archivados.length} leads marcados como "archivado" (curiosos sin visita ni reserva). Estos NO aparecen en Clientes, pero siguen ocupando espacio en el archivo real -- con miles acumulados, ralentizan el sistema entero.</p>
+<form method="post" action="/crm/clientes/archivados/exportar-pdf" style="margin-bottom:12px">
+<button class="btn ok" type="submit">Descargar PDF con los ${archivados.length} leads archivados</button>
+</form>
+<form method="post" action="/crm/clientes/archivados/eliminar" onsubmit="return confirm('Esto borra para siempre los ${archivados.length} leads archivados (no pasan por la papelera). Asegúrate de haber descargado el PDF antes. ¿Continuar?')">
+<button class="btn danger" type="submit">Borrar permanentemente los ${archivados.length} leads archivados</button>
+</form>`;
+  res.type("html").send(page("Leads archivados", me(res), body, msgOf(req)));
+});
+
+crm.post("/clientes/archivados/exportar-pdf", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
+  const leads = readCollection<{
+    archived?: boolean; name?: string | null; phone?: string | null; email?: string | null;
+    vehicle_interest?: string | null; channel?: string | null; created_at?: string; notes?: string | null;
+  }>("leads");
+  const archivados = leads.filter((l) => l.archived === true);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="leads_archivados_${new Date().toISOString().slice(0, 10)}.pdf"`);
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+  doc.pipe(res);
+  doc.fontSize(16).text("Automóviles Lucero -- Leads archivados", { underline: true });
+  doc.fontSize(10).fillColor("#555").text(`Generado ${new Date().toLocaleString("es-ES")} -- ${archivados.length} leads`);
+  doc.moveDown(1);
+  doc.fillColor("#000");
+  for (const l of archivados) {
+    doc.fontSize(10).text(
+      `${l.name ?? "(sin nombre)"} -- ${l.phone ?? l.email ?? "(sin contacto)"} -- interés: ${l.vehicle_interest ?? "-"} -- canal: ${l.channel ?? "-"} -- creado: ${l.created_at ?? "-"}`,
+    );
+    if (doc.y > 760) doc.addPage();
+  }
+  doc.end();
+});
+
+crm.post("/clientes/archivados/eliminar", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
+  const leads = readCollection<{ archived?: boolean }>("leads");
+  const antes = leads.length;
+  const restantes = leads.filter((l) => l.archived !== true);
+  writeCollection("leads", restantes);
+  back(res, "/crm/clientes/archivados", `Borrados permanentemente ${antes - restantes.length} leads archivados. Quedan ${restantes.length} leads activos.`);
 });
 
 crm.post("/papelera/:id", (req, res) => {
