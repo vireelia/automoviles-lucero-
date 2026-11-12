@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import crypto from "crypto";
-import { readCollection, writeCollection, appendToCollection, readShard, writeShard } from "../store.js";
+import { readCollection, writeCollection, appendToCollection } from "../store.js";
 import { dispatchTool } from "./dispatch.js";
 import { getBusinessConfig } from "../data/business-config.js";
 import { businessInfo } from "../data/business-info.js";
@@ -228,8 +228,18 @@ function trimToTurns(messages: ChatMessage[]): ChatMessage[] {
   return start > 0 ? kept.slice(start) : kept;
 }
 
+// REVERTIDO (12/11/2026): se había partido chat_conversations en un
+// archivo por conversación (readShard/writeShard) para arreglar el peso
+// del archivo único -- pero tras desplegarlo, el servicio empezó a sufrir
+// caídas sostenidas en producción que no se explican por el código
+// revisado a mano ni por Klikar (compartía servidor, pero las caídas
+// siguieron tras pararlo). Como es el cambio más grande e invasivo del
+// día sobre el camino más caliente (cada mensaje real), se revierte a
+// readCollection/writeCollection -- el recorte de resultados de
+// herramientas (shrinkForStorage) SÍ se mantiene, ese no toca la
+// arquitectura de almacenamiento, solo el contenido guardado.
 function loadConversation(sessionId: string): ConversationRecord {
-  const found = readShard<ConversationRecord>("chat_conversations", sessionId);
+  const found = readCollection<ConversationRecord>("chat_conversations").find((c) => c.id === sessionId);
   return found ?? { id: sessionId, messages: [], updated_at: new Date().toISOString() };
 }
 
@@ -251,7 +261,8 @@ export function shrinkForStorage(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function saveConversation(record: ConversationRecord) {
-  writeShard("chat_conversations", record.id, { ...record, messages: shrinkForStorage(record.messages) });
+  const others = readCollection<ConversationRecord>("chat_conversations").filter((c) => c.id !== record.id);
+  writeCollection("chat_conversations", [...others, { ...record, messages: shrinkForStorage(record.messages) }]);
 }
 
 export type Channel = "CHAT" | "EMAIL" | "WHATSAPP" | "FACEBOOK";

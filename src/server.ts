@@ -384,6 +384,17 @@ app.get("/admin/diagnostico_wallapop", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", total: wallapop.length, leads: wallapop });
 });
 
+app.get("/admin/diagnostico_tareas", requireAdminToken, (_req, res) => {
+  const tasks = readCollection<{ type: string; status: string; source_ref?: string }>("tasks");
+  const porTipo: Record<string, number> = {};
+  const pendientesPorTipo: Record<string, number> = {};
+  for (const t of tasks) {
+    porTipo[t.type] = (porTipo[t.type] ?? 0) + 1;
+    if (t.status === "pendiente") pendientesPorTipo[t.type] = (pendientesPorTipo[t.type] ?? 0) + 1;
+  }
+  res.json({ status: "ok", total: tasks.length, por_tipo: porTipo, pendientes_por_tipo: pendientesPorTipo });
+});
+
 app.get("/admin/diagnostico_agentes", requireAdminToken, (_req, res) => {
   res.json({
     status: "ok",
@@ -403,26 +414,36 @@ app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
   res.json({ status: "ok", existe_la_cuenta: existe, ...loginLockoutStatus(email) });
 });
 
-// MIGRACIÓN REAL DEFINITIVA (12/11/2026): chat/agent.ts ya no lee ni
-// escribe chat_conversations.json como archivo único -- usa readShard/
-// writeShard (un archivo pequeño por conversación en la carpeta
-// chat_conversations/). Esta ruta reparte lo que ya existía en el archivo
-// único en sus archivos nuevos, y deja el archivo viejo intacto como
-// backup (renombrado, nunca borrado) en vez de seguir usándolo.
-app.post("/admin/chat_conversations/migrar_a_fragmentos", requireAdminToken, (_req, res) => {
-  const p = nodePath.join(process.env.DATA_DIR ?? nodePath.join(process.cwd(), "data"), "chat_conversations.json");
-  if (!nodeFs.existsSync(p)) {
-    res.json({ status: "ok", migradas: 0, nota: "no existe chat_conversations.json (quizás ya migrado antes)" });
+// REVERSA DE LA MIGRACIÓN (12/11/2026): la fragmentación de hoy se
+// revierte por sospecha real de estar detrás de las caídas sostenidas en
+// producción. Esta ruta hace lo contrario de la migración de antes --
+// lee TODO lo que haya en la carpeta de fragmentos (incluye los mensajes
+// reales escritos ahí mientras estuvo activa) y lo consolida de vuelta en
+// un único chat_conversations.json, que es lo que vuelve a leer/escribir
+// chat/agent.ts tras este revertido. No borra la carpeta de fragmentos
+// por si hace falta consultarla.
+app.post("/admin/chat_conversations/consolidar_fragmentos", requireAdminToken, async (_req, res) => {
+  const dataDir = process.env.DATA_DIR ?? nodePath.join(process.cwd(), "data");
+  const shardsDir = nodePath.join(dataDir, "chat_conversations");
+  if (!nodeFs.existsSync(shardsDir)) {
+    res.json({ status: "ok", consolidadas: 0, nota: "no existe carpeta de fragmentos" });
     return;
   }
-  const convs = JSON.parse(nodeFs.readFileSync(p, "utf8")) as { id: string; messages: { role: string; content: string | null }[]; updated_at: string }[];
-  let migradas = 0;
-  for (const c of convs) {
-    writeShard("chat_conversations", c.id, { ...c, messages: shrinkForStorage(c.messages as never) });
-    migradas++;
+  const files = nodeFs.readdirSync(shardsDir).filter((f) => f.endsWith(".json") && !f.includes(".tmp"));
+  const existentes = readCollection<{ id: string }>("chat_conversations");
+  const porId = new Map(existentes.map((c) => [c.id, c]));
+  let consolidadas = 0;
+  for (const f of files) {
+    try {
+      const c = JSON.parse(nodeFs.readFileSync(nodePath.join(shardsDir, f), "utf8")) as { id: string };
+      porId.set(c.id, c);
+      consolidadas++;
+    } catch {
+      // archivo corrupto puntual, se salta
+    }
   }
-  nodeFs.renameSync(p, `${p}.migrado_${Date.now()}.bak`);
-  res.json({ status: "ok", migradas });
+  writeCollection("chat_conversations", Array.from(porId.values()));
+  res.json({ status: "ok", consolidadas, total_final: porId.size });
 });
 
 // tool_call_logs es puro log de diagnóstico (qué tool llamó el agente y
