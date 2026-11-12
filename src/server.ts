@@ -355,6 +355,41 @@ app.get("/admin/diagnostico_tamanos", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", colecciones: report });
 });
 
+// FALLO REAL grave encontrado 12/11/2026 vía /admin/diagnostico_tamanos:
+// chat_conversations.json pesaba 99,5 MB (6.885 conversaciones) -- se lee y
+// escribe ENTERO en cada mensaje real de WhatsApp/chat (store.ts es
+// síncrono). Mucho más grave que leads.json. No se puede borrar: es
+// historial real de clientes. Se archiva (reversible, nunca se borra) lo
+// que lleva mucho tiempo sin actividad a una colección aparte que el chat
+// en caliente nunca lee, igual que ya se hizo con los leads archivados.
+app.post("/admin/chat_conversations/archivar_inactivas", requireAdminToken, (req, res) => {
+  const diasInactividad = Number(req.query.dias ?? 45);
+  const corte = Date.now() - diasInactividad * 24 * 3600_000;
+  const convs = readCollection<{ id: string; updated_at?: string }>("chat_conversations");
+  const archivadas = convs.filter((c) => !c.updated_at || new Date(c.updated_at).getTime() < corte);
+  const activas = convs.filter((c) => c.updated_at && new Date(c.updated_at).getTime() >= corte);
+  if (archivadas.length === 0) {
+    res.json({ status: "ok", archivadas: 0, activas: activas.length, nota: "nada por debajo del corte" });
+    return;
+  }
+  const yaArchivadas = readCollection<{ id: string }>("chat_conversations_archive");
+  writeCollection("chat_conversations_archive", [...yaArchivadas, ...archivadas]);
+  writeCollection("chat_conversations", activas);
+  res.json({ status: "ok", archivadas: archivadas.length, activas: activas.length });
+});
+
+// tool_call_logs es puro log de diagnóstico (qué tool llamó el agente y
+// cuándo) -- sin valor de negocio real pasado un tiempo, a diferencia de
+// chat_conversations. Seguro recortar a los últimos N sin archivar.
+app.post("/admin/tool_call_logs/recortar", requireAdminToken, (req, res) => {
+  const quedarse = Number(req.query.quedarse ?? 2000);
+  const logs = readCollection<unknown>("tool_call_logs");
+  const antes = logs.length;
+  const recortados = logs.slice(-quedarse);
+  writeCollection("tool_call_logs", recortados);
+  res.json({ status: "ok", borrados: antes - recortados.length, restantes: recortados.length });
+});
+
 // Migración puntual (21/10/2026, auditoría real de "estamos perdiendo
 // reservas/visitas"): varios registros antiguos de appointments/handoffs
 // quedaron con lead_phone sin normalizar ("632241696" en vez de
