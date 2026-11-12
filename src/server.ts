@@ -356,6 +356,26 @@ app.get("/admin/diagnostico_tamanos", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", colecciones: report });
 });
 
+// tasks.json tenía 9.190 tareas (5,5 MB) -- listTasks() lo lee ENTERO en
+// cada carga del panel principal solo para encontrar las pocas urgentes.
+// Se archivan (reversible, nunca se borran) las ya completadas con más de
+// N días, igual que con los leads.
+app.post("/admin/tasks/archivar_completadas", requireAdminToken, (req, res) => {
+  const dias = Number(req.query.dias ?? 30);
+  const corte = Date.now() - dias * 24 * 3600_000;
+  const tasks = readCollection<{ status: string; updated_at?: string; created_at?: string }>("tasks");
+  const archivadas = tasks.filter((t) => t.status === "completada" && new Date(t.updated_at ?? t.created_at ?? 0).getTime() < corte);
+  const activas = tasks.filter((t) => !archivadas.includes(t));
+  if (archivadas.length === 0) {
+    res.json({ status: "ok", archivadas: 0, activas: activas.length });
+    return;
+  }
+  const yaArchivadas = readCollection<unknown>("tasks_archive");
+  writeCollection("tasks_archive", [...yaArchivadas, ...archivadas]);
+  writeCollection("tasks", activas);
+  res.json({ status: "ok", archivadas: archivadas.length, activas: activas.length });
+});
+
 app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
   const email = typeof req.query.email === "string" ? req.query.email : "";
   if (!email) {
