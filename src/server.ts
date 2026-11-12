@@ -376,6 +376,14 @@ app.post("/admin/tasks/archivar_completadas", requireAdminToken, (req, res) => {
   res.json({ status: "ok", archivadas: archivadas.length, activas: activas.length });
 });
 
+app.get("/admin/diagnostico_wallapop", requireAdminToken, (_req, res) => {
+  const leads = readCollection<{ phone?: string | null; name?: string | null; notes?: string | null; vehicle_interest?: string | null; created_at?: string }>("leads");
+  const wallapop = leads
+    .filter((l) => (l.notes ?? "").includes("Wallapop"))
+    .map((l) => ({ phone: l.phone, name: l.name, vehicle_interest: l.vehicle_interest, created_at: l.created_at }));
+  res.json({ status: "ok", total: wallapop.length, leads: wallapop });
+});
+
 app.get("/admin/diagnostico_agentes", requireAdminToken, (_req, res) => {
   res.json({
     status: "ok",
