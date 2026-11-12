@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import crypto from "crypto";
-import { readCollection, writeCollection, appendToCollection } from "../store.js";
+import { readCollection, writeCollection, appendToCollection, readShard, writeShard } from "../store.js";
 import { dispatchTool } from "./dispatch.js";
 import { getBusinessConfig } from "../data/business-config.js";
 import { businessInfo } from "../data/business-info.js";
@@ -229,7 +229,7 @@ function trimToTurns(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function loadConversation(sessionId: string): ConversationRecord {
-  const found = readCollection<ConversationRecord>("chat_conversations").find((c) => c.id === sessionId);
+  const found = readShard<ConversationRecord>("chat_conversations", sessionId);
   return found ?? { id: sessionId, messages: [], updated_at: new Date().toISOString() };
 }
 
@@ -251,8 +251,7 @@ export function shrinkForStorage(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function saveConversation(record: ConversationRecord) {
-  const others = readCollection<ConversationRecord>("chat_conversations").filter((c) => c.id !== record.id);
-  writeCollection("chat_conversations", [...others, { ...record, messages: shrinkForStorage(record.messages) }]);
+  writeShard("chat_conversations", record.id, { ...record, messages: shrinkForStorage(record.messages) });
 }
 
 export type Channel = "CHAT" | "EMAIL" | "WHATSAPP" | "FACEBOOK";

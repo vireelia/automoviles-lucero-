@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
 import path from "path";
 import { withPersistentLock, withPersistentLockSync } from "./locks.js";
@@ -117,4 +117,66 @@ export function mutateCollection<T>(collection: string, mutate: (items: T[]) => 
     });
   writeQueues.set(collection, next);
   return next;
+}
+
+// FALLO REAL grave encontrado 12/11/2026 (auditoría de rendimiento):
+// chat_conversations.json creció a 99,5 MB y luego 53,8 MB (6.885
+// conversaciones en un único archivo) -- readCollection/writeCollection
+// leen y escriben el archivo ENTERO en cada mensaje real de cualquier
+// cliente, bloqueando el event loop bajo tráfico simultáneo y causando
+// caídas reales confirmadas (/health sin responder, Ramón sin poder
+// entrar). "Almacén por fragmentos": un archivo pequeño POR CLAVE (por
+// ejemplo, por teléfono de cliente) dentro de una carpeta, en vez de todos
+// mezclados en un único archivo. Escribir el mensaje de un cliente ya solo
+// toca SU archivo, nunca el de los otros miles -- mismo patrón de archivo
+// JSON de siempre (atómico, sin tecnología nueva), solo organizado por
+// clave en vez de por colección entera.
+function shardKeyToFilename(key: string): string {
+  // Los teléfonos reales (+34...) y los "mail:..." ya son seguros como
+  // nombre de archivo salvo por un posible "/" interno (no debería
+  // ocurrir nunca en un teléfono o correo reales, pero se neutraliza por
+  // si acaso en vez de asumirlo).
+  return encodeURIComponent(key).replace(/%2F/g, "_");
+}
+
+function shardDir(collection: string): string {
+  const dir = path.join(DATA_DIR, collection);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function readShard<T>(collection: string, key: string): T | null {
+  const p = path.join(shardDir(collection), `${shardKeyToFilename(key)}.json`);
+  if (!existsSync(p)) return null;
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+export function writeShard<T>(collection: string, key: string, data: T): void {
+  const dir = shardDir(collection);
+  const p = path.join(dir, `${shardKeyToFilename(key)}.json`);
+  const tmp = `${p}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2));
+  renameSync(tmp, p);
+}
+
+export function deleteShard(collection: string, key: string): void {
+  const p = path.join(shardDir(collection), `${shardKeyToFilename(key)}.json`);
+  if (existsSync(p)) unlinkSync(p);
+}
+
+// Para trabajos puntuales/admin que de verdad necesitan ver todo (el
+// seguimiento comercial, migraciones) -- no para el camino en caliente de
+// un mensaje real, que siempre debe usar readShard/writeShard de una sola
+// clave.
+export function listShardKeys(collection: string): string[] {
+  const dir = shardDir(collection);
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json") && !f.includes(".tmp"))
+    .map((f) => decodeURIComponent(f.replace(/\.json$/, "")));
+}
+
+export function readAllShards<T>(collection: string): T[] {
+  return listShardKeys(collection)
+    .map((k) => readShard<T>(collection, k))
+    .filter((x): x is T => x !== null);
 }

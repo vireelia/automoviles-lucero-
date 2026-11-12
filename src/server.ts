@@ -16,7 +16,7 @@ import { verifyRetellSignature } from "./integrations/retell-signature.js";
 import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
-import { readCollection, writeCollection, claimOnce, mutateCollectionSync } from "./store.js";
+import { readCollection, writeCollection, claimOnce, mutateCollectionSync, writeShard, readAllShards, deleteShard, readShard } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
@@ -356,27 +356,6 @@ app.get("/admin/diagnostico_tamanos", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", colecciones: report });
 });
 
-// Diagnóstico de solo lectura (12/11/2026): chat_conversations.json pesa
-// 99,5 MB pero cada conversación YA tiene tope de 80 mensajes
-// (MAX_TURNS_KEPT en chat/agent.ts) -- antes de proponer ningún cambio,
-// hay que confirmar con datos reales de qué está hecho ese peso (texto
-// normal vs. resultados de herramientas con JSON grande incrustado). No
-// devuelve contenido de clientes, solo tamaños en bytes por mensaje.
-app.get("/admin/diagnostico_conversaciones", requireAdminToken, (_req, res) => {
-  const convs = readCollection<{ id: string; messages: { role: string; content: string | null }[] }>("chat_conversations");
-  const porConversacion = convs
-    .map((c) => ({
-      id_parcial: c.id.slice(-4),
-      num_mensajes: c.messages.length,
-      bytes_total: c.messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0),
-      mayor_mensaje_bytes: Math.max(0, ...c.messages.map((m) => m.content?.length ?? 0)),
-      mayor_mensaje_rol: c.messages.reduce((r, m) => ((m.content?.length ?? 0) > (c.messages.find((x) => x.role === r)?.content?.length ?? 0) ? m.role : r), c.messages[0]?.role ?? ""),
-    }))
-    .sort((a, b) => b.bytes_total - a.bytes_total)
-    .slice(0, 15);
-  res.json({ status: "ok", top_15_mas_pesadas: porConversacion });
-});
-
 app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
   const email = typeof req.query.email === "string" ? req.query.email : "";
   if (!email) {
@@ -387,45 +366,26 @@ app.get("/admin/diagnostico_login", requireAdminToken, (req, res) => {
   res.json({ status: "ok", existe_la_cuenta: existe, ...loginLockoutStatus(email) });
 });
 
-// Migración puntual: aplica a lo ya guardado el mismo recorte que ahora se
-// aplica solo a partir de ahora en saveConversation (chat/agent.ts) --
-// nunca borra mensajes ni conversaciones completas, solo recorta el
-// contenido de los mensajes "tool" ya guardados que superan el límite.
-app.post("/admin/chat_conversations/recortar_tool_results", requireAdminToken, (_req, res) => {
-  const convs = readCollection<{ id: string; messages: { role: string; content: string | null }[]; updated_at: string }>("chat_conversations");
-  let mensajesRecortados = 0;
-  const antes = JSON.stringify(convs).length;
-  const recortadas = convs.map((c) => {
-    const nuevos = shrinkForStorage(c.messages as never) as typeof c.messages;
-    mensajesRecortados += nuevos.filter((m, i) => m.content !== c.messages[i]?.content).length;
-    return { ...c, messages: nuevos };
-  });
-  writeCollection("chat_conversations", recortadas);
-  const despues = JSON.stringify(recortadas).length;
-  res.json({ status: "ok", mensajes_recortados: mensajesRecortados, kb_antes: Math.round(antes / 1024), kb_despues: Math.round(despues / 1024) });
-});
-
-// FALLO REAL grave encontrado 12/11/2026 vía /admin/diagnostico_tamanos:
-// chat_conversations.json pesaba 99,5 MB (6.885 conversaciones) -- se lee y
-// escribe ENTERO en cada mensaje real de WhatsApp/chat (store.ts es
-// síncrono). Mucho más grave que leads.json. No se puede borrar: es
-// historial real de clientes. Se archiva (reversible, nunca se borra) lo
-// que lleva mucho tiempo sin actividad a una colección aparte que el chat
-// en caliente nunca lee, igual que ya se hizo con los leads archivados.
-app.post("/admin/chat_conversations/archivar_inactivas", requireAdminToken, (req, res) => {
-  const diasInactividad = Number(req.query.dias ?? 45);
-  const corte = Date.now() - diasInactividad * 24 * 3600_000;
-  const convs = readCollection<{ id: string; updated_at?: string }>("chat_conversations");
-  const archivadas = convs.filter((c) => !c.updated_at || new Date(c.updated_at).getTime() < corte);
-  const activas = convs.filter((c) => c.updated_at && new Date(c.updated_at).getTime() >= corte);
-  if (archivadas.length === 0) {
-    res.json({ status: "ok", archivadas: 0, activas: activas.length, nota: "nada por debajo del corte" });
+// MIGRACIÓN REAL DEFINITIVA (12/11/2026): chat/agent.ts ya no lee ni
+// escribe chat_conversations.json como archivo único -- usa readShard/
+// writeShard (un archivo pequeño por conversación en la carpeta
+// chat_conversations/). Esta ruta reparte lo que ya existía en el archivo
+// único en sus archivos nuevos, y deja el archivo viejo intacto como
+// backup (renombrado, nunca borrado) en vez de seguir usándolo.
+app.post("/admin/chat_conversations/migrar_a_fragmentos", requireAdminToken, (_req, res) => {
+  const p = nodePath.join(process.env.DATA_DIR ?? nodePath.join(process.cwd(), "data"), "chat_conversations.json");
+  if (!nodeFs.existsSync(p)) {
+    res.json({ status: "ok", migradas: 0, nota: "no existe chat_conversations.json (quizás ya migrado antes)" });
     return;
   }
-  const yaArchivadas = readCollection<{ id: string }>("chat_conversations_archive");
-  writeCollection("chat_conversations_archive", [...yaArchivadas, ...archivadas]);
-  writeCollection("chat_conversations", activas);
-  res.json({ status: "ok", archivadas: archivadas.length, activas: activas.length });
+  const convs = JSON.parse(nodeFs.readFileSync(p, "utf8")) as { id: string; messages: { role: string; content: string | null }[]; updated_at: string }[];
+  let migradas = 0;
+  for (const c of convs) {
+    writeShard("chat_conversations", c.id, { ...c, messages: shrinkForStorage(c.messages as never) });
+    migradas++;
+  }
+  nodeFs.renameSync(p, `${p}.migrado_${Date.now()}.bak`);
+  res.json({ status: "ok", migradas });
 });
 
 // tool_call_logs es puro log de diagnóstico (qué tool llamó el agente y
@@ -477,11 +437,9 @@ app.post("/admin/normalize_phones", requireAdminToken, (_req, res) => {
 app.post("/admin/reset_conversation", requireAdminToken, (req, res) => {
   const contact = String(req.body?.contact ?? "").trim();
   if (!contact) return res.status(400).json({ error: "falta_contact" });
-  const conversations = readCollection<{ id: string }>("chat_conversations");
-  const antes = conversations.length;
-  const restantes = conversations.filter((c) => normalizePhone(c.id) !== normalizePhone(contact) && c.id !== contact);
-  writeCollection("chat_conversations", restantes);
-  res.json({ status: "ok", borradas: antes - restantes.length });
+  const coincide = readAllShards<{ id: string }>("chat_conversations").filter((c) => normalizePhone(c.id) === normalizePhone(contact) || c.id === contact);
+  for (const c of coincide) deleteShard("chat_conversations", c.id);
+  res.json({ status: "ok", borradas: coincide.length });
 });
 
 // Cierre masivo de avisos ya confirmados como ruido real (10/11/2026,
@@ -988,7 +946,11 @@ function debugSlice<T>(collection: string, def: number) {
   };
 }
 app.get("/debug/tool_call_logs", requireAdminToken, debugSlice("tool_call_logs", 200));
-app.get("/debug/chat_conversations", requireAdminToken, debugSlice("chat_conversations", 50));
+app.get("/debug/chat_conversations", requireAdminToken, (req, res) => {
+  const limit = debugLimit(req, 50);
+  const all = readAllShards<{ updated_at: string }>("chat_conversations").sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
+  res.json(Number.isFinite(limit) ? all.slice(-limit) : all);
+});
 app.get("/debug/call_analyses", requireAdminToken, debugSlice("call_analyses", 50));
 app.get("/debug/studio_jobs", requireAdminToken, debugSlice("studio_jobs", 50));
 app.get("/debug/alerts", requireAdminToken, debugSlice("alerts", 50));
@@ -1144,10 +1106,9 @@ app.post("/admin/reset_chat_conversation", requireAdminToken, (req, res) => {
     res.status(400).json({ error: "session_id requerido" });
     return;
   }
-  const conversaciones = readCollection<{ id: string }>("chat_conversations");
-  const sinEsa = conversaciones.filter((c) => c.id !== session_id);
-  writeCollection("chat_conversations", sinEsa);
-  res.json({ ok: true, session_id, existia: sinEsa.length !== conversaciones.length });
+  const existia = readShard("chat_conversations", session_id) !== null;
+  if (existia) deleteShard("chat_conversations", session_id);
+  res.json({ ok: true, session_id, existia });
 });
 app.post("/admin/reset_appointment_reminder", requireAdminToken, (req, res) => {
   const { appointment_id, field } = req.body ?? {};

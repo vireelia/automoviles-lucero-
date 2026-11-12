@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { readCollection, writeCollection } from "../store.js";
+import { readCollection, writeCollection, readAllShards } from "../store.js";
 import { sendWhatsappText, isWhatsappConnected } from "../integrations/whatsapp.js";
 import { conversationStage, appointmentsFor, normalizePhone, esComercial } from "./conversion.js";
 import { lastInboundAt, contactoAutorizado } from "./whatsapp-window.js";
@@ -61,7 +61,7 @@ export async function runSeguimientoComercial(now = Date.now()): Promise<{ envia
   if (!esEnabled()) return { enviados: 0, saltados: ["desactivado"] };
   if (!isWhatsappConnected()) return { enviados: 0, saltados: ["whatsapp_no_conectado"] };
 
-  const convs = readCollection<Conversacion>("chat_conversations");
+  const convs = readAllShards<Conversacion>("chat_conversations");
   const leads = readCollection<Lead>("leads");
   const previos = readCollection<Seguimiento>(COLLECTION);
   let enviados = 0;
