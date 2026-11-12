@@ -355,6 +355,27 @@ app.get("/admin/diagnostico_tamanos", requireAdminToken, (_req, res) => {
   res.json({ status: "ok", colecciones: report });
 });
 
+// Diagnóstico de solo lectura (12/11/2026): chat_conversations.json pesa
+// 99,5 MB pero cada conversación YA tiene tope de 80 mensajes
+// (MAX_TURNS_KEPT en chat/agent.ts) -- antes de proponer ningún cambio,
+// hay que confirmar con datos reales de qué está hecho ese peso (texto
+// normal vs. resultados de herramientas con JSON grande incrustado). No
+// devuelve contenido de clientes, solo tamaños en bytes por mensaje.
+app.get("/admin/diagnostico_conversaciones", requireAdminToken, (_req, res) => {
+  const convs = readCollection<{ id: string; messages: { role: string; content: string | null }[] }>("chat_conversations");
+  const porConversacion = convs
+    .map((c) => ({
+      id_parcial: c.id.slice(-4),
+      num_mensajes: c.messages.length,
+      bytes_total: c.messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0),
+      mayor_mensaje_bytes: Math.max(0, ...c.messages.map((m) => m.content?.length ?? 0)),
+      mayor_mensaje_rol: c.messages.reduce((r, m) => ((m.content?.length ?? 0) > (c.messages.find((x) => x.role === r)?.content?.length ?? 0) ? m.role : r), c.messages[0]?.role ?? ""),
+    }))
+    .sort((a, b) => b.bytes_total - a.bytes_total)
+    .slice(0, 15);
+  res.json({ status: "ok", top_15_mas_pesadas: porConversacion });
+});
+
 // FALLO REAL grave encontrado 12/11/2026 vía /admin/diagnostico_tamanos:
 // chat_conversations.json pesaba 99,5 MB (6.885 conversaciones) -- se lee y
 // escribe ENTERO en cada mensaje real de WhatsApp/chat (store.ts es
