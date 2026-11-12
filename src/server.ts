@@ -1,5 +1,7 @@
 import express from "express";
 import PDFDocument from "pdfkit";
+import * as nodeFs from "fs";
+import * as nodePath from "path";
 import crypto from "crypto";
 import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
@@ -327,6 +329,30 @@ app.post("/admin/leads_archivados/eliminar", requireAdminToken, (_req, res) => {
   const restantes = leads.filter((l) => l.archived !== true);
   writeCollection("leads", restantes);
   res.json({ status: "ok", borrados: antes - restantes.length, restantes: restantes.length });
+});
+
+// Diagnóstico real de tamaño por colección (12/11/2026, tras confirmar que
+// leads.json con ~6.000 archivados bloqueaba el event loop en cada
+// lectura/escritura síncrona de store.ts). Antes de tocar ninguna otra
+// colección hay que medir cuáles pesan de verdad -- nunca adivinar.
+app.get("/admin/diagnostico_tamanos", requireAdminToken, (_req, res) => {
+  const dataDir = process.env.DATA_DIR ?? nodePath.join(process.cwd(), "data");
+  const files = nodeFs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  const report = files
+    .map((f) => {
+      const full = nodePath.join(dataDir, f);
+      const stat = nodeFs.statSync(full);
+      let count: number | null = null;
+      try {
+        const parsed = JSON.parse(nodeFs.readFileSync(full, "utf8"));
+        count = Array.isArray(parsed) ? parsed.length : null;
+      } catch {
+        count = null;
+      }
+      return { coleccion: f.replace(/\.json$/, ""), kb: Math.round(stat.size / 1024), registros: count };
+    })
+    .sort((a, b) => b.kb - a.kb);
+  res.json({ status: "ok", colecciones: report });
 });
 
 // Migración puntual (21/10/2026, auditoría real de "estamos perdiendo
