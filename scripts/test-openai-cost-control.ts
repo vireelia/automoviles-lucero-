@@ -639,10 +639,355 @@ await test("Cierre-10: 7 fotos consecutivas -> 1 sola respuesta agrupada (confir
   assert.ok(modelCalls <= 1);
 });
 
+// =======================================================================
+// Fase final (18/11/2026) -- botón real de Daniel, concurrencia=3 real,
+// corte por reactivación, protección contra reenvíos, persistencia tras
+// reinicio.
+// =======================================================================
+
+await test("Final-1: las 4 combinaciones de Daniel (IA/envío)", async () => {
+  restoreDefaultMock();
+  // IA on + envío on (normal, ya cubierto implícitamente en Escenario 2 -- aquí explícito).
+  resetModelCalls();
+  setEmailAiProcessingEnabled(true);
+  setEmailAutoSendEnabled(true);
+  const r1 = await processInboundEmail(emailFixture(7000));
+  assert.ok(r1.outcome !== "pausado_ia_sin_procesar" && r1.outcome !== "modo_prueba_sin_envio");
+  assert.equal(modelCalls, 1, "IA on + envío on: debe redactar Y quedar listo para enviar de verdad");
+
+  // IA on + envío off.
+  resetModelCalls();
+  setEmailAutoSendEnabled(false);
+  const r2 = await processInboundEmail(emailFixture(7001));
+  assert.equal(r2.outcome, "modo_prueba_sin_envio");
+  assert.equal(modelCalls, 1);
+
+  // IA off + envío off.
+  resetModelCalls();
+  setEmailAiProcessingEnabled(false);
+  const r3 = await processInboundEmail(emailFixture(7002));
+  assert.equal(r3.outcome, "pausado_ia_sin_procesar");
+  assert.equal(modelCalls, 0);
+
+  // IA off + envío "on" (combinación insegura -- debe comportarse como apagada).
+  resetModelCalls();
+  setEmailAutoSendEnabled(true);
+  const r4 = await processInboundEmail(emailFixture(7003));
+  assert.equal(r4.outcome, "pausado_ia_sin_procesar", "con IA apagada, el envío 'activo' nunca debe importar");
+  assert.equal(modelCalls, 0);
+
+  setEmailAiProcessingEnabled(true);
+  setEmailAutoSendEnabled(true);
+});
+
+await test("Final-2: persistencia de interruptores tras reinicio simulado (nuevo proceso, mismo DATA_DIR)", async () => {
+  setEmailAiProcessingEnabled(false);
+  setWhatsappZernioAgentEnabled(false);
+  const { execFileSync } = await import("node:child_process");
+  const script = `
+    process.env.DATA_DIR = ${JSON.stringify(process.env.DATA_DIR)};
+    (async () => {
+      const { isEmailAiProcessingEnabled, isWhatsappZernioAgentEnabled } = await import(${JSON.stringify(path.join(process.cwd(), "src/tools/agent-toggle.ts"))});
+      console.log(JSON.stringify({ email_ai: isEmailAiProcessingEnabled(), wa: isWhatsappZernioAgentEnabled() }));
+    })();
+  `;
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8" });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  assert.equal(parsed.email_ai, false, "el interruptor de Daniel debe seguir pausado en un proceso nuevo (persistido en disco, no en memoria)");
+  assert.equal(parsed.wa, false, "lo mismo para el de Carolina");
+  setEmailAiProcessingEnabled(true);
+  setWhatsappZernioAgentEnabled(true);
+});
+
+await test("Final-3: tráfico realista con concurrencia=3 -- confirma si hay pérdida/latencia/errores", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const childDataDir = `${process.env.DATA_DIR}-conc3-child`;
+  const script = `
+    process.env.DATA_DIR = ${JSON.stringify(childDataDir)};
+    process.env.OPENAI_API_KEY = "test-key-mock-only";
+    process.env.LUCERO_MAX_CONCURRENT_LLM_CALLS = "3";
+    const http = require("node:http");
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        // Simula latencia real de OpenAI (~1-2s), no instantánea como el resto del mock.
+        setTimeout(() => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }));
+        }, 400);
+      });
+    });
+    srv.listen(0, async () => {
+      process.env.LLM_BASE_URL = "http://127.0.0.1:" + srv.address().port;
+      const { handleChatMessage } = await import(${JSON.stringify(path.join(process.cwd(), "src/chat/agent.ts"))});
+      // Tráfico realista para un concesionario de este tamaño: 8 clientes
+      // casi a la vez (hora punta real), no 50 -- ese es el caso
+      // extremo ya probado aparte.
+      const start = Date.now();
+      const resultados = await Promise.all(Array.from({ length: 8 }, (_, i) => handleChatMessage("sim-c3-" + i, "Consulta real " + i, "CHAT", "sim-c3-" + i)));
+      const elapsedMs = Date.now() - start;
+      const bloqueados = resultados.filter(r => r.ai_failed).length;
+      console.log(JSON.stringify({ bloqueados, elapsedMs, total: 8 }));
+      srv.close();
+    });
+  `;
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8" });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  tabla.push({ escenario: `concurrencia=3, 8 clientes reales (bloqueados: ${parsed.bloqueados}, ${parsed.elapsedMs}ms)`, recibidos: 8, bloqueados: parsed.bloqueados, llamadas: 8 - parsed.bloqueados, respuestas: 8 - parsed.bloqueados, reintentos: 0 });
+  // No se afirma nada todavía -- el resultado real decide la recomendación (ver reporte).
+  assert.ok(parsed.bloqueados >= 0); // la prueba en sí nunca falla; el DATO es el propio reporte.
+  (globalThis as any).__concurrency3Result = parsed;
+});
+
+await test("Final-4: corte por reactivación -- correo reenviado con fecha nueva pero contenido viejo NO engaña al corte", async () => {
+  // El corte (esAnteriorAlCorte/LUCERO_NO_AUTO_BEFORE y el de reactivación
+  // de Daniel) usa SIEMPRE receivedAt real de Gmail (internalDate), nunca
+  // una fecha que pueda venir dentro del texto del correo (p.ej. "Fwd:
+  // ...enviado el 10/10/2026..." en el cuerpo) -- un reenvío real SIEMPRE
+  // tiene un internalDate nuevo (el momento en que ESTA bandeja lo
+  // recibió), así que nunca puede "parecer antiguo" aunque el contenido
+  // hable de algo viejo, y tampoco puede "parecer nuevo" retroactivamente.
+  // Esta prueba confirma que decideInterest/esAnteriorAlCorte miran
+  // receivedAt, nunca el texto, citando el código real.
+  const src = (await import("node:fs")).readFileSync("src/email/agent.ts", "utf8");
+  const usaReceivedAtReal = /esAnteriorAlCorte\(email\.receivedAt\)/.test(src);
+  assert.ok(usaReceivedAtReal, "el corte debe usar email.receivedAt (la fecha real de Gmail), nunca un valor extraído del texto del correo");
+  // Prueba funcional: un correo con texto que MENCIONA una fecha vieja
+  // pero cuyo receivedAt real es de AHORA debe tratarse como nuevo.
+  process.env.LUCERO_NO_AUTO_BEFORE = new Date(Date.now() - 3600_000).toISOString(); // corte: hace 1h
+  const reenviado = emailFixture(7004, {
+    subject: "Fwd: interesado en el coche",
+    text: "Hola, me interesa el coche, ¿sigue disponible? (reenviado, el cliente escribió esto el 01/01/2020 según el cuerpo del correo)",
+  });
+  resetModelCalls();
+  const r = await processInboundEmail(reenviado); // receivedAt real = ahora (default de emailFixture)
+  assert.notEqual(r.outcome, "retenido_anterior_al_corte", "un reenvío con receivedAt real de AHORA nunca debe bloquearse por antigüedad, aunque el texto mencione una fecha vieja");
+  delete process.env.LUCERO_NO_AUTO_BEFORE;
+});
+
+await test("Final-5: reimportación de inventario no re-vincula leads antiguos a un vehicle_id nuevo automáticamente", async () => {
+  // vehicle_interest en un lead es SIEMPRE texto libre (tools/leads.ts),
+  // nunca una referencia (foreign key) a un vehicle_id -- y
+  // import-dealcar.mjs (regenera vehicles-seed.ts) nunca toca la
+  // colección "leads". No hay ningún camino de código que conecte una
+  // reimportación del catálogo con los leads existentes, así que no
+  // puede "re-vincular" nada ni disparar ninguna acción automática sobre
+  // un lead viejo solo por reimportar.
+  const leadsSrc = (await import("node:fs")).readFileSync("src/tools/leads.ts", "utf8");
+  assert.ok(/vehicle_interest\??:\s*string/.test(leadsSrc), "vehicle_interest debe seguir siendo texto libre, nunca un id de vehículo");
+  const importScriptPath = "scripts/import-dealcar.mjs";
+  const fsMod = await import("node:fs");
+  if (fsMod.existsSync(importScriptPath)) {
+    const importSrc = fsMod.readFileSync(importScriptPath, "utf8");
+    assert.ok(!/leads/i.test(importSrc), "el script de reimportación nunca debe tocar la colección de leads");
+  }
+});
+
+// =======================================================================
+// Control de gasto por agente + protección global (18/11/2026) -- claves
+// de OpenAI distintas confirmadas en producción para Carolina/Daniel.
+// =======================================================================
+
+function budgetChildScript(opts: { dataDir: string; env: Record<string, string>; calls: { channel: string; sessionPrefix: string; count: number }[] }): string {
+  return `
+    process.env.DATA_DIR = ${JSON.stringify(opts.dataDir)};
+    process.env.OPENAI_API_KEY = "test-key-mock-only";
+    ${Object.entries(opts.env).map(([k, v]) => `process.env[${JSON.stringify(k)}] = ${JSON.stringify(v)};`).join("\n    ")}
+    const http = require("node:http");
+    let calls = 0;
+    const srv = http.createServer((req, res) => {
+      calls++;
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 200, completion_tokens: 100 } }));
+      });
+    });
+    srv.listen(0, async () => {
+      process.env.LLM_BASE_URL = "http://127.0.0.1:" + srv.address().port;
+      const { handleChatMessage } = await import(${JSON.stringify(path.join(process.cwd(), "src/chat/agent.ts"))});
+      const resultsByChannel = {};
+      for (const batch of ${JSON.stringify(opts.calls)}) {
+        resultsByChannel[batch.channel] = resultsByChannel[batch.channel] || [];
+        for (let i = 0; i < batch.count; i++) {
+          const r = await handleChatMessage(batch.sessionPrefix + "-" + i, "Consulta real " + i, batch.channel, batch.sessionPrefix + "-" + i);
+          resultsByChannel[batch.channel].push(r.ai_failed);
+        }
+      }
+      console.log(JSON.stringify({ calls, resultsByChannel }));
+      srv.close();
+    });
+  `;
+}
+
+await test("Agente-1: Carolina agota su presupuesto individual -> Daniel sigue funcionando (global intacto)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const script = budgetChildScript({
+    dataDir: `${process.env.DATA_DIR}-agente1-child`,
+    env: { LUCERO_DAILY_LLM_BUDGET_EUR_CAROLINA: "0.00005", LUCERO_DAILY_LLM_BUDGET_EUR_DANIEL: "0", LUCERO_MONTHLY_LLM_BUDGET_EUR: "0" },
+    calls: [
+      { channel: "WHATSAPP", sessionPrefix: "car", count: 2 }, // 1ª consume presupuesto, 2ª debe bloquearse.
+      { channel: "EMAIL", sessionPrefix: "dan", count: 2 }, // Daniel sin presupuesto propio puesto -> ambas deben pasar.
+    ],
+  });
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8" });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  assert.deepEqual(parsed.resultsByChannel.WHATSAPP, [false, true], "la 2ª llamada de Carolina debe quedar derivada (ai_failed), la 1ª no");
+  assert.deepEqual(parsed.resultsByChannel.EMAIL, [false, false], "Daniel debe seguir funcionando normal, sin presupuesto individual propio agotado");
+});
+
+await test("Agente-2: Daniel agota su presupuesto individual -> Carolina sigue funcionando", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const script = budgetChildScript({
+    dataDir: `${process.env.DATA_DIR}-agente2-child`,
+    env: { LUCERO_DAILY_LLM_BUDGET_EUR_DANIEL: "0.00005", LUCERO_DAILY_LLM_BUDGET_EUR_CAROLINA: "0", LUCERO_MONTHLY_LLM_BUDGET_EUR: "0" },
+    calls: [
+      { channel: "EMAIL", sessionPrefix: "dan", count: 2 },
+      { channel: "WHATSAPP", sessionPrefix: "car", count: 2 },
+    ],
+  });
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8" });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  assert.deepEqual(parsed.resultsByChannel.EMAIL, [false, true]);
+  assert.deepEqual(parsed.resultsByChannel.WHATSAPP, [false, false]);
+});
+
+await test("Agente-3: ambos agotan el presupuesto GLOBAL -> los dos se bloquean", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const script = budgetChildScript({
+    dataDir: `${process.env.DATA_DIR}-agente3-child`,
+    env: { LUCERO_DAILY_LLM_BUDGET_EUR: "0.00008", LUCERO_DAILY_LLM_BUDGET_EUR_CAROLINA: "0", LUCERO_DAILY_LLM_BUDGET_EUR_DANIEL: "0" },
+    calls: [
+      { channel: "WHATSAPP", sessionPrefix: "car", count: 1 },
+      { channel: "EMAIL", sessionPrefix: "dan", count: 1 },
+    ],
+  });
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8" });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  assert.deepEqual(parsed.resultsByChannel.WHATSAPP, [false], "la 1ª llamada (Carolina) consume el global, debe pasar");
+  assert.deepEqual(parsed.resultsByChannel.EMAIL, [true], "la 2ª llamada (Daniel) encuentra el global ya agotado -- el global SÍ bloquea a los dos");
+});
+
+await test("Agente-4: presupuestos existentes (global diario/mensual, concurrencia) siguen funcionando igual (confirmación, no se asume)", async () => {
+  restoreDefaultMock();
+  resetModelCalls();
+  const r = await handleChatMessage("sim-agente4-control", "Consulta real de control", "CHAT", "sim-agente4-control");
+  assert.ok(!r.ai_failed && modelCalls === 1, "sin ningún presupuesto agotado, una conversación legítima sigue funcionando exactamente igual que antes de esta fase");
+});
+
+await test("Agente-5: concurrencia global se mantiene en 50 (no se reintroduce 3), nunca se pierde una solicitud rechazada", async () => {
+  restoreDefaultMock();
+  resetModelCalls();
+  const promesas = Array.from({ length: 55 }, (_, i) => handleChatMessage(`sim-agente5-${i}`, `Consulta real ${i}`, "WHATSAPP", `sim-agente5-${i}`));
+  const resultados = await Promise.all(promesas);
+  const bloqueadas = resultados.filter((r) => r.ai_failed);
+  const pasadas = resultados.filter((r) => !r.ai_failed);
+  assert.equal(pasadas.length, 50, "el límite global sigue en 50, nunca se reintrodujo el 3 descartado en la fase anterior");
+  assert.equal(bloqueadas.length, 5);
+  // "ninguna solicitud rechazada se pierde": cada una derivada debe tener
+  // una respuesta real (disculpa) y haber generado una tarea de handoff --
+  // nunca desaparece en silencio.
+  for (const b of bloqueadas) {
+    assert.ok(b.reply && b.reply.length > 0, "una solicitud rechazada debe tener siempre una respuesta real (disculpa), nunca desaparecer sin más");
+  }
+  const alerts = readCollection<any>("alerts").filter((a) => a.kind === "handoff_urgente");
+  assert.ok(alerts.length > 0, "las solicitudes rechazadas deben quedar registradas como tarea de handoff, nunca perderse en silencio");
+});
+
+await test("Agente-6: operaciones concurrentes no generan errores de contabilización del contador de concurrencia", async () => {
+  restoreDefaultMock();
+  resetModelCalls();
+  // Si activeLlmCalls se desincronizara (no decrementara bien tras cada
+  // llamada), una segunda ráfaga inmediatamente después de la primera
+  // encontraría el contador ya "atascado" por encima del límite real.
+  const primera = await Promise.all(Array.from({ length: 10 }, (_, i) => handleChatMessage(`sim-agente6a-${i}`, "c", "CHAT", `sim-agente6a-${i}`)));
+  const segunda = await Promise.all(Array.from({ length: 10 }, (_, i) => handleChatMessage(`sim-agente6b-${i}`, "c", "CHAT", `sim-agente6b-${i}`)));
+  assert.ok(primera.every((r) => !r.ai_failed) && segunda.every((r) => !r.ai_failed), "dos ráfagas consecutivas de 10 (bien por debajo del límite de 50) nunca deben bloquearse -- el contador debe volver a 0 entre ráfagas");
+});
+
+await test("Agente-7: reinicio (contadores por agente persisten igual que el global, en disco)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const childDataDir = `${process.env.DATA_DIR}-agente7-child`;
+  const first = budgetChildScript({
+    dataDir: childDataDir,
+    env: {},
+    calls: [{ channel: "WHATSAPP", sessionPrefix: "persist", count: 1 }],
+  });
+  execFileSync("npx", ["tsx", "--eval", first], { encoding: "utf8" });
+  // "Reinicio": proceso nuevo, mismo DATA_DIR -- debe ver el gasto de Carolina ya registrado.
+  const second = `
+    process.env.DATA_DIR = ${JSON.stringify(childDataDir)};
+    (async () => {
+      const { readCollection } = await import(${JSON.stringify(path.join(process.cwd(), "src/store.ts"))});
+      const log = readCollection("llm_usage_logs").filter(r => r.channel === "whatsapp");
+      console.log(JSON.stringify({ count: log.length }));
+    })();
+  `;
+  const out2 = execFileSync("npx", ["tsx", "--eval", second], { encoding: "utf8" });
+  const parsed2 = JSON.parse(out2.trim().split("\n").pop() ?? "{}");
+  assert.equal(parsed2.count, 1, "el registro de consumo de Carolina debe seguir en disco tras el 'reinicio' (proceso nuevo)");
+});
+
+await test("Agente-8: incident-analyst.ts registra su consumo bajo categoría propia, fuera de todo presupuesto", async () => {
+  mockServer.removeAllListeners("request");
+  mockServer.on("request", (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "Informe real simulado." } }], usage: { prompt_tokens: 300, completion_tokens: 150 } }));
+    });
+  });
+  // Siembra una incidencia real para que haya algo que analizar.
+  writeCollection("call_analyses", [{ channel: "VOICE", created_at: new Date().toISOString(), issues_detected: "cliente confundido con el precio", security_event: null }]);
+  const { analyzeIncidents } = await import("../src/tools/incident-analyst.js");
+  const r = await analyzeIncidents();
+  assert.ok((r as any).ok, "el análisis manual debe seguir funcionando igual, sin cambios de comportamiento comercial");
+  const log = readCollection<any>("llm_usage_logs").filter((r: any) => r.channel === "herramientas_auxiliares");
+  assert.ok(log.length >= 1, "debe quedar registrado bajo su propia categoría");
+  assert.ok(!JSON.stringify(log).includes("test-key-mock-only"), "nunca debe registrarse la clave de API en el log de consumo");
+  restoreDefaultMock();
+});
+
+await test("Agente-9: 7 fotos consecutivas (confirmación final, tras los cambios de presupuesto por agente)", async () => {
+  resetModelCalls();
+  setWhatsappZernioAgentEnabled(true);
+  lotesProcesados = 0;
+  const phone = "+34600777111";
+  for (let i = 0; i < 7; i++) {
+    await enqueueWhatsappBatchMessage(phone, { eventId: `evt-agente9-${i}`, whatsappInboxId: `inbox-agente9-${i}`, text: `[foto ${i + 1}]`, media_type: "image", sentAt: new Date().toISOString() });
+  }
+  await new Promise((r) => setTimeout(r, 120));
+  await processDueWhatsappBatches(batchHandler);
+  assert.equal(lotesProcesados, 1);
+  assert.ok(modelCalls <= 1);
+});
+
+await test("Agente-10: clientes antiguos bloqueados y reservas de vehículo no disponible bloqueadas (confirmación final)", async () => {
+  process.env.LUCERO_NO_AUTO_BEFORE = new Date().toISOString();
+  resetModelCalls();
+  const vieja = new Date(Date.now() - 48 * 3600_000).toISOString();
+  const r = await processInboundEmail(emailFixture(8000, { receivedAt: vieja }));
+  assert.equal(r.outcome, "retenido_anterior_al_corte");
+  delete process.env.LUCERO_NO_AUTO_BEFORE;
+
+  const vehicleReal = vehiclesSeed[0];
+  setOfficialStatus(vehicleReal.id, "SOLD", null);
+  const rv = await createReservationPending({ vehicle_id: vehicleReal.id, lead_phone: "+34600111000" });
+  assert.equal((rv as { status: string }).status, "denied");
+  setOfficialStatus(vehicleReal.id, "AVAILABLE", null);
+});
+
 mockServer.close();
 
 console.log("\n--- Tabla de escenarios ---");
 console.table(tabla);
+if ((globalThis as any).__concurrency3Result) {
+  console.log("\n--- Resultado concurrencia=3 (tráfico realista, 8 clientes) ---");
+  console.log((globalThis as any).__concurrency3Result);
+}
 
 const fails = results.filter((r) => !r.ok);
 console.log(`\n${results.length - fails.length}/${results.length} pruebas OK`);

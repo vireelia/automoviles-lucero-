@@ -182,6 +182,29 @@ const DAILY_BUDGET_EUR = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR ?? 15);
 // gasto real que este presupuesto no ve. Si alguna vez se automatiza ese
 // botón (p. ej. un cron que lo dispare solo), tendría que pasar también
 // por este mismo control antes de hacerlo.
+//
+// DISTINCIÓN EXPLÍCITA (ampliado 18/11/2026, "control de gasto por agente
+// + protección global"), para no confundir cuatro cosas distintas:
+// 1. Consumo ESTIMADO por la aplicación: lo que calcula esta misma
+//    función a partir de los tokens que OpenAI devuelve en cada
+//    respuesta (prompt_tokens/completion_tokens/cached_tokens), al precio
+//    PÚBLICO de gpt-4.1-mini -- esto es lo único que Lucero puede ver.
+// 2. Consumo REAL facturado por OpenAI: no accesible desde este código en
+//    absoluto -- requeriría la API de facturación/uso de OpenAI (fuera de
+//    alcance aquí) y puede diferir del punto 1 por descuentos, precios
+//    negociados, redondeos o cambios de precio que esta constante no
+//    conoce. NUNCA se afirma que el punto 1 sea el punto 2.
+// 3. Presupuesto GLOBAL de Lucero (DAILY_BUDGET_EUR/MONTHLY_BUDGET_EUR):
+//    suma el consumo ESTIMADO de TODOS los agentes juntos.
+// 4. Presupuesto INDIVIDUAL por agente (ver checkAgentBudgetOrThrow, más
+//    abajo): mismo cálculo ESTIMADO, pero filtrado solo a las llamadas de
+//    ese agente (por canal). Un presupuesto individual agotado nunca
+//    bloquea al otro agente, SOLO el global los bloquea a los dos.
+// Ninguno de estos cuatro puede garantizar un tope económico EXACTO -- son
+// estimaciones sobre tokens, no la factura real. Las alertas
+// (alertaCorteLlm) son una red de seguridad ADICIONAL para que el equipo
+// se entere pronto, nunca una garantía de que el gasto real nunca la
+// superará.
 const MONTHLY_BUDGET_EUR = Number(process.env.LUCERO_MONTHLY_LLM_BUDGET_EUR ?? 0);
 const PRECIO_INPUT_POR_1M = 0.4;
 const PRECIO_CACHED_POR_1M = 0.1;
@@ -208,6 +231,58 @@ function estimatedSpendTodayEur(): number {
 
 function estimatedSpendThisMonthEur(): number {
   return estimatedSpendEur(new Date().toISOString().slice(0, 7));
+}
+
+// Presupuesto POR AGENTE (18/11/2026, "verifiqué en producción... que
+// OPENAI_API_KEY_WHATSAPP y OPENAI_API_KEY_EMAIL son dos claves REALMENTE
+// DISTINTAS -- el contador compartido no corresponde con la facturación
+// real de OpenAI, que es por cuenta/clave"). Carolina (WHATSAPP+FACEBOOK,
+// misma clave real) y Daniel (EMAIL) ya usan claves distintas
+// (apiKeyForChannel, arriba) -- esto añade el presupuesto que faltaba
+// para que el CORTE también respete esa separación real, no solo el
+// registro. INCERTIDUMBRE EXPLÍCITA (no se asume lo contrario en ningún
+// sitio): dos claves de API distintas NO implican necesariamente dos
+// PROYECTOS DE FACTURACIÓN distintos en OpenAI -- pueden ser dos claves
+// del mismo proyecto/cuenta (que comparten el mismo límite de
+// facturación real) o de cuentas distintas (que no lo comparten). Desde
+// este código, sin acceso a la API de facturación de OpenAI, es
+// IMPOSIBLE saberlo con certeza -- por eso el presupuesto GLOBAL de abajo
+// se mantiene intacto como red de seguridad adicional, nunca se retira:
+// si las dos claves resultan compartir facturación real, el global sigue
+// siendo la única protección honesta; si no la comparten, el individual
+// por agente añade precisión real sobre lo que cada uno gasta.
+type AgentGroup = "carolina" | "daniel" | "otros";
+function agentGroupForChannel(channel: Channel): AgentGroup {
+  if (channel === "WHATSAPP" || channel === "FACEBOOK") return "carolina";
+  if (channel === "EMAIL") return "daniel";
+  return "otros"; // CHAT (widget web): sin presupuesto individual propio, pedido explícito solo para Carolina/Daniel/herramientas auxiliares.
+}
+const DAILY_BUDGET_EUR_CAROLINA = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR_CAROLINA ?? 0);
+const DAILY_BUDGET_EUR_DANIEL = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR_DANIEL ?? 0);
+const MONTHLY_BUDGET_EUR_CAROLINA = Number(process.env.LUCERO_MONTHLY_LLM_BUDGET_EUR_CAROLINA ?? 0);
+const MONTHLY_BUDGET_EUR_DANIEL = Number(process.env.LUCERO_MONTHLY_LLM_BUDGET_EUR_DANIEL ?? 0);
+
+function estimatedSpendEurFor(group: AgentGroup, prefix: string): number {
+  try {
+    const log = readCollection<LlmUsage & { at: string; channel: string }>("llm_usage_logs");
+    let total = 0;
+    for (const r of log) {
+      if (!r.at.startsWith(prefix)) continue;
+      const rowGroup: AgentGroup = r.channel === "whatsapp" || r.channel === "facebook" ? "carolina" : r.channel === "email" ? "daniel" : "otros";
+      if (rowGroup !== group) continue;
+      const sinCache = Math.max(0, r.prompt_tokens - r.cached_tokens);
+      total += (sinCache / 1_000_000) * PRECIO_INPUT_POR_1M + (r.cached_tokens / 1_000_000) * PRECIO_CACHED_POR_1M + (r.completion_tokens / 1_000_000) * PRECIO_OUTPUT_POR_1M;
+    }
+    return total;
+  } catch {
+    return 0; // Nunca bloquear una respuesta real por no poder leer el propio registro de coste.
+  }
+}
+
+export class AgentBudgetExceeded extends Error {
+  constructor(public readonly agent: AgentGroup) {
+    super(`agent_llm_budget_exceeded_${agent}`);
+  }
 }
 
 export class DailyBudgetExceeded extends Error {
@@ -269,6 +344,37 @@ function alertaCorteLlm(reason: string): void {
   raiseAlert({ kind: "fallo_tecnico", reason });
 }
 
+// Los 3 checks que una llamada debe superar A LA VEZ (encargo "Control de
+// gasto por agente + protección global"): (a) el presupuesto del AGENTE
+// correspondiente (si tiene uno puesto), (b) el presupuesto GLOBAL (ya
+// existente, se mantiene intacto), (c) la concurrencia (comprobada aparte,
+// justo debajo de esta función). Si Carolina agota el suyo, Daniel sigue
+// funcionando normal mientras el global no esté agotado -- nunca se
+// bloquean mutuamente por un presupuesto individual, solo el global los
+// bloquea a los dos.
+function checkAgentBudgetOrThrow(channel: Channel): void {
+  const group = agentGroupForChannel(channel);
+  if (group === "carolina") {
+    if (DAILY_BUDGET_EUR_CAROLINA > 0 && estimatedSpendEurFor("carolina", new Date().toISOString().slice(0, 10)) >= DAILY_BUDGET_EUR_CAROLINA) {
+      alertaCorteLlm(`Tope diario de gasto de IA de Carolina (WhatsApp/Facebook) alcanzado (${DAILY_BUDGET_EUR_CAROLINA} €) -- sus mensajes nuevos se derivan al equipo; Daniel sigue funcionando normal.`);
+      throw new AgentBudgetExceeded("carolina");
+    }
+    if (MONTHLY_BUDGET_EUR_CAROLINA > 0 && estimatedSpendEurFor("carolina", new Date().toISOString().slice(0, 7)) >= MONTHLY_BUDGET_EUR_CAROLINA) {
+      alertaCorteLlm(`Tope mensual de gasto de IA de Carolina alcanzado (${MONTHLY_BUDGET_EUR_CAROLINA} €) -- sus mensajes nuevos se derivan al equipo; Daniel sigue funcionando normal.`);
+      throw new AgentBudgetExceeded("carolina");
+    }
+  } else if (group === "daniel") {
+    if (DAILY_BUDGET_EUR_DANIEL > 0 && estimatedSpendEurFor("daniel", new Date().toISOString().slice(0, 10)) >= DAILY_BUDGET_EUR_DANIEL) {
+      alertaCorteLlm(`Tope diario de gasto de IA de Daniel (correo) alcanzado (${DAILY_BUDGET_EUR_DANIEL} €) -- sus correos nuevos se derivan a revisión humana; Carolina sigue funcionando normal.`);
+      throw new AgentBudgetExceeded("daniel");
+    }
+    if (MONTHLY_BUDGET_EUR_DANIEL > 0 && estimatedSpendEurFor("daniel", new Date().toISOString().slice(0, 7)) >= MONTHLY_BUDGET_EUR_DANIEL) {
+      alertaCorteLlm(`Tope mensual de gasto de IA de Daniel alcanzado (${MONTHLY_BUDGET_EUR_DANIEL} €) -- sus correos nuevos se derivan a revisión humana; Carolina sigue funcionando normal.`);
+      throw new AgentBudgetExceeded("daniel");
+    }
+  }
+}
+
 async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false, model: string = MODEL): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
   if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
     alertaCorteLlm(`Tope diario de gasto de IA alcanzado (${DAILY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo en vez de gastar de más hoy.`);
@@ -278,6 +384,7 @@ async function callLlm(messages: ChatMessage[], channel: Channel, forceText = fa
     alertaCorteLlm(`Tope mensual de gasto de IA alcanzado (${MONTHLY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo hasta el mes que viene o hasta que se amplíe el tope.`);
     throw new MonthlyBudgetExceeded();
   }
+  checkAgentBudgetOrThrow(channel);
   if (activeLlmCalls >= MAX_CONCURRENT_LLM_CALLS) {
     alertaCorteLlm(`Demasiadas conversaciones de IA a la vez (límite ${MAX_CONCURRENT_LLM_CALLS}) -- algunos mensajes se derivan al equipo en vez de arriesgar un bloqueo real por rate-limit del proveedor.`);
     throw new ConcurrencyLimitExceeded();
@@ -461,6 +568,16 @@ async function handleChatMessageUnlocked(
   if (MONTHLY_BUDGET_EUR > 0 && estimatedSpendThisMonthEur() >= MONTHLY_BUDGET_EUR) {
     console.error(`[chat] presupuesto mensual agotado, rechazo inmediato sin trabajo previo (${channel}, sesión ${sessionId})`);
     alertaCorteLlm(`Tope mensual de gasto de IA alcanzado (${MONTHLY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo hasta el mes que viene o hasta que se amplíe el tope.`);
+    await createHandoffFallback(sessionId);
+    return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
+  }
+  // Mismo criterio, para el presupuesto POR AGENTE (Carolina/Daniel): un
+  // rechazo por su propio tope también debe costar poco. checkAgentBudgetOrThrow
+  // ya decide internamente si este canal tiene agente con tope propio.
+  try {
+    checkAgentBudgetOrThrow(channel);
+  } catch (err) {
+    console.error(`[chat] presupuesto de agente agotado, rechazo inmediato sin trabajo previo (${channel}, sesión ${sessionId}): ${err instanceof Error ? err.message : err}`);
     await createHandoffFallback(sessionId);
     return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
   }

@@ -1,4 +1,5 @@
-import { readCollection, appendToCollection } from "../store.js";
+import crypto from "crypto";
+import { readCollection, writeCollection, appendToCollection } from "../store.js";
 
 // Agente de calidad real (27/10/2026, "un agente de ia que lo resuelva de
 // verdad... y me de los informes para arreglarlo"): revisa las incidencias
@@ -78,9 +79,39 @@ ${listado}`;
     body: JSON.stringify({ model: MODEL, temperature: 0.2, messages: [{ role: "user", content: prompt }] }),
   });
   if (!res.ok) return { ok: false, error: `llm_http_${res.status}` };
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const data = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+  };
   const report = data.choices?.[0]?.message?.content?.trim();
   if (!report) return { ok: false, error: "llm_sin_respuesta" };
+  // Registro de consumo (18/11/2026, "mide su consumo cuando sea
+  // técnicamente posible... categoría propia"): mismo fichero
+  // llm_usage_logs que Carolina/Daniel, pero con channel distinto
+  // ("herramientas_auxiliares") para que se vea aparte en cualquier
+  // reporte -- a propósito NUNCA se comprueba contra ningún presupuesto
+  // (ni el global de chat/agent.ts ni uno individual): esto sigue siendo
+  // una acción manual de admin, un clic, nunca un bucle, y está fuera del
+  // presupuesto compartido por la misma decisión documentada arriba (ver
+  // el comentario sobre MODEL/BASE_URL). Nunca se registra la clave de
+  // API ni ningún dato sensible de clientes -- solo contadores de tokens.
+  if (data.usage) {
+    try {
+      const log = readCollection<{ id: string; channel: string; session_id: string; at: string; prompt_tokens: number; completion_tokens: number; cached_tokens: number }>("llm_usage_logs");
+      log.push({
+        id: crypto.randomUUID(),
+        channel: "herramientas_auxiliares",
+        session_id: "incident-analyst",
+        at: new Date().toISOString(),
+        prompt_tokens: data.usage.prompt_tokens ?? 0,
+        completion_tokens: data.usage.completion_tokens ?? 0,
+        cached_tokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
+      });
+      writeCollection("llm_usage_logs", log.slice(-5000));
+    } catch {
+      // El registro de coste nunca debe tumbar el informe real ya generado.
+    }
+  }
 
   const analysis: IncidentAnalysis = {
     id: crypto.randomUUID(),
