@@ -2935,8 +2935,13 @@ crm.post("/correos/:id", async (req, res) => {
     // "Respondido por IA" vs "Respondido por equipo").
     m.answered = true;
     m.answered_by = "equipo";
+    // Mismo cierre de gap que en WhatsApp (18/11/2026, auditoría de
+    // coordinación entre canales): marcar "ya lo gestioné yo" también
+    // pausa a Daniel para este remitente, para que no conteste encima de
+    // una gestión humana que el agente no puede ver.
+    setEmailContactPaused(m.from, true, me(res).email);
     save("email_inbox", inbox);
-    return back(res, volver, "Hecho");
+    return back(res, volver, "Hecho -- Daniel queda pausado para este remitente hasta que lo reactivéis.");
   }
   const text = String(req.body.respuesta ?? "").trim();
   if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
@@ -2948,8 +2953,9 @@ crm.post("/correos/:id", async (req, res) => {
   const delivery = await deliverEmail(m.from, subject, `${text}\n\nAutomóviles Lucero`, thread, { allowProactive: true, reason: "crm_responder_manual" });
   m.answered = true;
   m.answered_by = "equipo";
+  setEmailContactPaused(m.from, true, me(res).email);
   save("email_inbox", inbox);
-  if (delivery.status === "sent") back(res, volver, "Respuesta enviada");
+  if (delivery.status === "sent") back(res, volver, "Respuesta enviada -- Daniel queda pausado para este remitente hasta que lo reactivéis.");
   else if (delivery.status === "queued") back(res, volver, "Respuesta guardada: se enviará cuando Gmail esté conectado");
   else back(res, volver, "No se pudo enviar. Inténtalo otra vez");
 });
@@ -3268,6 +3274,19 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
     // humano del equipo escribiendo y enviando a mano desde el CRM, nunca
     // un envío automático sin que nadie lo revise -- no debe bloquearse.
     const result = await sendWhatsappText(m.phone, text, { allowProactive: true, reason: "crm_responder_manual" });
+    // FALLO REAL identificado en auditoría (18/11/2026, "coordinación entre
+    // Carolina/Daniel/Miguel"): hasta ahora, que Ramón o José contestaran a
+    // mano desde aquí NUNCA suspendía las respuestas automáticas de
+    // Carolina para ese mismo número -- si el cliente escribía de nuevo
+    // minutos después, Carolina podía responder ella sola encima de una
+    // conversación que el equipo ya había tomado, sin saberlo. El propio
+    // interruptor de pausa por chat (isWhatsappChatPaused/setWhatsappChatPaused)
+    // ya existía, pero solo se activaba si alguien pulsaba el botón de
+    // pausa a propósito -- nunca automáticamente al responder de verdad.
+    // Ahora, escribir una respuesta real desde el CRM pausa también a
+    // Carolina en este chat -- el equipo puede reactivarla cuando quiera
+    // con el mismo botón de siempre ("Reanudar IA aquí").
+    setWhatsappChatPaused(m.phone, true, me(res).email);
     // FALLO REAL detectado (27/10/2026, "algunos mensajes no se pueden
     // enviar a whatsapp... no aparecen en el chat real ni en el CRM"):
     // cuando el envío fallaba, antes no se guardaba nada -- el único
@@ -3288,7 +3307,7 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
     m.delivered = result.ok;
     save("whatsapp_inbox", items);
     if (!result.ok) return back(res, volver, `No se pudo enviar: ${result.error}`);
-    return back(res, volver, "Respuesta enviada");
+    return back(res, volver, "Respuesta enviada -- Carolina queda pausada en este chat hasta que la reactivéis.");
   }
   // Enviar foto o audio real (27/10/2026, "que se pueda ver fotos... enviar
   // y recibir audios") -- un adjunto nunca puede pasar por Meta Direct Send
@@ -3303,6 +3322,9 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
     const saved = saveOutboundWhatsappAttachment(file.buffer, file.mimetype);
     if (!saved) return back(res, volver, "Ese archivo no es una foto ni un audio permitido");
     const result = await sendZernioWhatsappAttachment(m.phone, saved.publicUrl, attachmentType, caption || undefined);
+    // Mismo cierre de gap que en "responder" (texto) -- ver el comentario
+    // de arriba.
+    setWhatsappChatPaused(m.phone, true, me(res).email);
     m.answered = true;
     m.answered_by = "equipo";
     m.reply_text = caption || (attachmentType === "image" ? "📷 Foto" : "🎤 Audio");
