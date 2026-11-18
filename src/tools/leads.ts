@@ -37,10 +37,137 @@ type Lead = {
   // guardado". Opcional por compatibilidad con leads históricos (se leen
   // como no archivados si falta).
   archived?: boolean;
+  // Coordinación entre canales (18/11/2026, "alternativa ligera" aprobada
+  // tras el documento de impacto -- extender leads, NUNCA una colección
+  // nueva ni migración). Los 4 campos son opcionales por compatibilidad:
+  // un lead histórico sin ellos se lee como "sin intervención humana, sin
+  // actividad de agente reciente", que es el comportamiento de siempre.
+  //
+  // comercial_responsable / canal_activo_humano: se activan cuando Ramón o
+  // José responden A MANO desde el CRM (WhatsApp o correo, las 4 rutas ya
+  // corregidas en la fase anterior) -- a diferencia de
+  // isWhatsappChatPaused/isEmailContactPaused (que solo pausan ESE canal),
+  // esto es visible para AMBOS agentes, porque vive en el mismo registro
+  // de lead que los dos consultan. Se desactiva cuando se reactiva CUALQUIERA
+  // de los dos canales desde el CRM (ver agent-toggle.ts) -- es una
+  // aproximación deliberadamente simple: no distingue "reactivé solo
+  // WhatsApp" de "reactivé todo", porque el objetivo es que nunca se quede
+  // bloqueado para siempre por error, no una semántica perfecta por canal.
+  comercial_responsable?: string | null;
+  canal_activo_humano?: boolean;
+  // canal_activo_agente / canal_activo_agente_at: el último canal de IA que
+  // respondió de verdad a este lead, y cuándo. Usado solo como ventana
+  // corta de colisión (ver checkCrossChannelCollision) -- nunca como
+  // bloqueo permanente, porque es normal y deseado que Carolina y Daniel
+  // atiendan al mismo cliente en momentos distintos.
+  canal_activo_agente?: "WHATSAPP" | "EMAIL" | null;
+  canal_activo_agente_at?: string | null;
   created_at: string;
   updated_at: string;
   last_contact: string;
 };
+
+// Ventana de colisión entre canales (90s): tiempo generoso para cubrir un
+// cliente que escribe casi a la vez por WhatsApp y por correo, sin
+// bloquear la operación normal de ambos canales en momentos distintos del
+// mismo día. Pasada la ventana, cada canal vuelve a responder normal.
+const CROSS_CHANNEL_COLLISION_WINDOW_MS = 90_000;
+
+// Mismo criterio de identidad CIERTA que ya usa upsertLead_sinBloqueo
+// (teléfono normalizado primero, email solo si no hay teléfono) -- nunca
+// una coincidencia débil (nombre, parecido de texto). Si no hay lead
+// encontrado con esa identidad exacta, no hay nada que coordinar -- se
+// deja pasar (nunca se bloquea a ciegas por falta de dato).
+function findLeadByIdentity(args: { phone?: string | null; email?: string | null }): Lead | undefined {
+  const leads = readLeads();
+  const normalizedPhone = args.phone ? normalizePhone(args.phone) : undefined;
+  if (normalizedPhone) return leads.find((l) => l.phone === normalizedPhone);
+  if (args.email) return leads.find((l) => l.email === args.email);
+  return undefined;
+}
+
+function identityArgsForChannel(channel: "WHATSAPP" | "FACEBOOK" | "EMAIL" | "CHAT", contact: string): { phone?: string; email?: string } {
+  if (channel === "WHATSAPP" || channel === "FACEBOOK") return { phone: contact };
+  if (channel === "EMAIL") return { email: contact };
+  return {};
+}
+
+// Comprobación ANTES de responder (Carolina/Daniel, chat/agent.ts): ¿hay
+// una razón real, con identidad cierta, para no responder en paralelo?
+// Nunca bloquea si no se puede identificar con certeza al mismo cliente
+// en el otro canal -- "mejor no vincular que fusionar mal" (regla
+// explícita del cliente).
+export function checkCrossChannelCollision(channel: "WHATSAPP" | "FACEBOOK" | "EMAIL" | "CHAT", contact: string): { blocked: boolean; reason?: string } {
+  if (channel === "CHAT") return { blocked: false }; // el widget web no tiene un canal "hermano" con el que colisionar.
+  const lead = findLeadByIdentity(identityArgsForChannel(channel, contact));
+  if (!lead) return { blocked: false };
+  if (lead.canal_activo_humano) {
+    return { blocked: true, reason: `intervención humana activa (${lead.comercial_responsable ?? "equipo"})` };
+  }
+  const otroCanal = channel === "EMAIL" ? "WHATSAPP" : "EMAIL";
+  if (lead.canal_activo_agente === otroCanal && lead.canal_activo_agente_at) {
+    const edadMs = Date.now() - new Date(lead.canal_activo_agente_at).getTime();
+    if (edadMs >= 0 && edadMs < CROSS_CHANNEL_COLLISION_WINDOW_MS) {
+      return { blocked: true, reason: `${otroCanal === "WHATSAPP" ? "Carolina" : "Daniel"} acaba de responder a este mismo cliente hace ${Math.round(edadMs / 1000)}s` };
+    }
+  }
+  return { blocked: false };
+}
+
+// Se llama DESPUÉS de una respuesta automática real (nunca antes, para no
+// marcar "actividad de agente" sobre un intento que falló). Solo escribe
+// si existe un lead con esa identidad cierta -- nunca crea uno nuevo aquí
+// (crearlo es responsabilidad de upsertLead, con sus propias reglas).
+function markAutomaticReply_sinBloqueo(channel: "WHATSAPP" | "FACEBOOK" | "EMAIL", contact: string): void {
+  const leads = readLeads();
+  const lead = (() => {
+    const normalizedPhone = channel !== "EMAIL" ? normalizePhone(contact) : undefined;
+    return normalizedPhone ? leads.find((l) => l.phone === normalizedPhone) : leads.find((l) => l.email === contact);
+  })();
+  if (!lead) return;
+  lead.canal_activo_agente = channel === "FACEBOOK" ? "WHATSAPP" : channel;
+  lead.canal_activo_agente_at = now();
+  writeCollection("leads", leads);
+}
+export function markAutomaticReply(...args: Parameters<typeof markAutomaticReply_sinBloqueo>): ReturnType<typeof markAutomaticReply_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => markAutomaticReply_sinBloqueo(...args));
+}
+
+// Se llama desde el CRM cuando Ramón/José responden a mano (WhatsApp o
+// correo) -- visible para AMBOS agentes porque vive en el lead
+// compartido. Nunca crea un lead nuevo (si no existe todavía con esa
+// identidad, no hay nada que marcar -- la conversación seguirá su curso
+// normal, sin el refuerzo cruzado, honesto sobre esa limitación).
+function markHumanTookOver_sinBloqueo(args: { phone?: string | null; email?: string | null; by: string | null }): void {
+  const lead = findLeadByIdentity(args);
+  if (!lead) return;
+  const leads = readLeads();
+  const real = leads.find((l) => l.id === lead.id);
+  if (!real) return;
+  real.canal_activo_humano = true;
+  real.comercial_responsable = args.by ?? real.comercial_responsable ?? null;
+  writeCollection("leads", leads);
+}
+export function markHumanTookOver(...args: Parameters<typeof markHumanTookOver_sinBloqueo>): ReturnType<typeof markHumanTookOver_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => markHumanTookOver_sinBloqueo(...args));
+}
+
+// Se llama al reactivar CUALQUIERA de los dos canales desde el CRM
+// (agent-toggle.ts) -- deliberadamente simple (ver comentario del campo
+// arriba): reactivar un canal cualquiera levanta el bloqueo cruzado,
+// nunca se queda atascado para siempre por error.
+function clearHumanTookOver_sinBloqueo(args: { phone?: string | null; email?: string | null }): void {
+  const lead = findLeadByIdentity(args);
+  if (!lead) return;
+  const leads = readLeads();
+  const real = leads.find((l) => l.id === lead.id);
+  if (!real) return;
+  real.canal_activo_humano = false;
+  writeCollection("leads", leads);
+}
+export function clearHumanTookOver(...args: Parameters<typeof clearHumanTookOver_sinBloqueo>): ReturnType<typeof clearHumanTookOver_sinBloqueo> {
+  return withPersistentLockSync("col_leads", () => clearHumanTookOver_sinBloqueo(...args));
+}
 
 function now() {
   return new Date().toISOString();

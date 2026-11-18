@@ -8,6 +8,7 @@ import { businessInfo } from "../data/business-info.js";
 import { conversationStage, maxUserTurnsFor, esComercial, type Stage } from "./conversion.js";
 import { withPersistentLock, markOncePerWindow } from "../locks.js";
 import { raiseAlert } from "../alerts/alerts.js";
+import { checkCrossChannelCollision, markAutomaticReply } from "../tools/leads.js";
 
 // Agente de chat propio (fuera de Retell). Usa el mismo prompt (núcleo
 // común + addendum de chat) y las mismas 26 herramientas que el agente de
@@ -581,6 +582,20 @@ async function handleChatMessageUnlocked(
     await createHandoffFallback(sessionId);
     return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
   }
+  // Coordinación entre canales (18/11/2026, "alternativa ligera" -- ver
+  // tools/leads.ts): identidad CIERTA únicamente (teléfono o email exactos
+  // ya vinculados en el mismo lead), nunca una coincidencia débil. Si está
+  // bloqueado, el mensaje NUNCA se pierde -- se marca como fallo real de
+  // IA (igual que un 429), que ya hace que el canal de origen lo encole
+  // para reintentarlo en vez de descartarlo en silencio (ver
+  // enqueuePendingReply en server.ts/email/agent.ts).
+  if (channel !== "CHAT") {
+    const colision = checkCrossChannelCollision(channel, contact);
+    if (colision.blocked) {
+      console.warn(`[chat] colisión entre canales para ${channel}/${contact}: ${colision.reason} -- se deja pendiente, no se pierde.`);
+      return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
+    }
+  }
   const conversation = loadConversation(sessionId);
   const userTurnCount = (conversation.user_turn_count ?? 0) + 1;
 
@@ -858,6 +873,17 @@ async function handleChatMessageUnlocked(
     user_turn_count: userTurnCount,
     known_facts: knownFacts,
   });
+  // Marca de actividad de agente (ver tools/leads.ts) -- DESPUÉS de una
+  // respuesta real, nunca antes de saber que tuvo éxito. Solo escribe si
+  // ya existe un lead con esa identidad cierta; si no existe, no hace
+  // nada (no crea uno aquí, eso es responsabilidad de upsertLead).
+  if (channel === "WHATSAPP" || channel === "FACEBOOK" || channel === "EMAIL") {
+    try {
+      markAutomaticReply(channel, contact);
+    } catch {
+      // Nunca debe tumbar una respuesta real ya generada con éxito.
+    }
+  }
   return { reply, tool_runs: toolRuns, ai_failed: aiFailed };
 }
 

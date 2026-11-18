@@ -13,7 +13,7 @@ import { pendingAlerts, markAlertDone, deleteAlert, type AlertKind } from "../al
 import { moveToTrash, moveManyToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
-import { normalizePhone, upsertLead, mergeLeads } from "../tools/leads.js";
+import { normalizePhone, upsertLead, mergeLeads, markHumanTookOver, clearHumanTookOver } from "../tools/leads.js";
 import { parseCochesNetJsonBlock, parseCochesNetReplyMessage, extractWallapopContact, isCochesNetSharedSender, extractCochesNetClientIdentity } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
@@ -2915,6 +2915,7 @@ crm.post("/correos/:id", async (req, res) => {
   }
   if (accion === "pausar_chat" || accion === "reanudar_chat") {
     setEmailContactPaused(m.from, accion === "pausar_chat", me(res).email);
+    if (accion === "reanudar_chat") clearHumanTookOver({ email: m.from });
     return back(res, volver, accion === "pausar_chat" ? "Daniel pausado para este remitente" : "Daniel reactivado para este remitente");
   }
   // Acciones nuevas del módulo mensajes/clientes (18/10/2026), solo
@@ -2940,6 +2941,7 @@ crm.post("/correos/:id", async (req, res) => {
     // pausa a Daniel para este remitente, para que no conteste encima de
     // una gestión humana que el agente no puede ver.
     setEmailContactPaused(m.from, true, me(res).email);
+    markHumanTookOver({ email: m.from, by: me(res).email });
     save("email_inbox", inbox);
     return back(res, volver, "Hecho -- Daniel queda pausado para este remitente hasta que lo reactivéis.");
   }
@@ -2954,6 +2956,7 @@ crm.post("/correos/:id", async (req, res) => {
   m.answered = true;
   m.answered_by = "equipo";
   setEmailContactPaused(m.from, true, me(res).email);
+  markHumanTookOver({ email: m.from, by: me(res).email });
   save("email_inbox", inbox);
   if (delivery.status === "sent") back(res, volver, "Respuesta enviada -- Daniel queda pausado para este remitente hasta que lo reactivéis.");
   else if (delivery.status === "queued") back(res, volver, "Respuesta guardada: se enviará cuando Gmail esté conectado");
@@ -3259,6 +3262,7 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
   }
   if (accion === "pausar_chat" || accion === "reanudar_chat") {
     setWhatsappChatPaused(m.phone, accion === "pausar_chat", me(res).email);
+    if (accion === "reanudar_chat") clearHumanTookOver({ phone: m.phone });
     return back(res, volver, accion === "pausar_chat" ? "Carolina pausada en este chat" : "Carolina reactivada en este chat");
   }
   // Responder de verdad desde el CRM (25/10/2026, petición real: "que se
@@ -3287,6 +3291,7 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
     // Carolina en este chat -- el equipo puede reactivarla cuando quiera
     // con el mismo botón de siempre ("Reanudar IA aquí").
     setWhatsappChatPaused(m.phone, true, me(res).email);
+    markHumanTookOver({ phone: m.phone, by: me(res).email });
     // FALLO REAL detectado (27/10/2026, "algunos mensajes no se pueden
     // enviar a whatsapp... no aparecen en el chat real ni en el CRM"):
     // cuando el envío fallaba, antes no se guardaba nada -- el único
@@ -3325,6 +3330,7 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
     // Mismo cierre de gap que en "responder" (texto) -- ver el comentario
     // de arriba.
     setWhatsappChatPaused(m.phone, true, me(res).email);
+    markHumanTookOver({ phone: m.phone, by: me(res).email });
     m.answered = true;
     m.answered_by = "equipo";
     m.reply_text = caption || (attachmentType === "image" ? "📷 Foto" : "🎤 Audio");
