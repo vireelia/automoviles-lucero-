@@ -84,6 +84,24 @@ await test("create_reservation_pending de punta a punta -- EL FALLO CRÍTICO: an
   setOfficialStatus(v.id, "AVAILABLE", null);
 });
 
+await test("GAP cerrado: create_lead/update_lead ahora SÍ pueden pasar email desde WhatsApp -- antes la API ni lo permitía", () => {
+  const names = ["create_lead", "update_lead"];
+  for (const n of names) {
+    const schema = toolSchemas.find((t: any) => t.function.name === n) as any;
+    assert.ok(schema.function.parameters.properties.email, `${n} debe aceptar el parámetro email`);
+  }
+});
+
+await test("Vínculo bidireccional real: email dado por WhatsApp se vincula al mismo lead que ya tenía el teléfono", async () => {
+  const { upsertLead } = await import("../src/tools/leads.js");
+  const { readCollection } = await import("../src/store.js");
+  upsertLead({ phone: "+34688777666", channel: "WHATSAPP", name: "Cliente Bidireccional" });
+  await dispatchTool("update_lead", { phone: "+34688777666", email: "bidireccional@ejemplo-real.com" });
+  const leads = readCollection<any>("leads");
+  const lead = leads.find((l: any) => l.phone === "+34688777666");
+  assert.equal(lead.email, "bidireccional@ejemplo-real.com", "el email dado por WhatsApp debe quedar vinculado al mismo lead del teléfono");
+});
+
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} pruebas superadas.`);
 if (results.some((r) => !r.ok)) {
   console.log("Fallos:", results.filter((r) => !r.ok));
