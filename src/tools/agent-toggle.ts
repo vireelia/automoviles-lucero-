@@ -37,6 +37,47 @@ export function setEmailAutoSendEnabled(enabled: boolean, updatedBy: string | nu
   writeCollection("agent_toggles", rows);
 }
 
+// Interruptor NUEVO e independiente (Fase 2F, 18/11/2026, "cierre de gaps de
+// seguridad y consumo"): a diferencia de "email_auto_send" (que SOLO decide
+// si la respuesta ya redactada se envía -- con él apagado, Daniel sigue
+// llamando a OpenAI para clasificar/redactar, a propósito, como modo de
+// prueba real desde el 15/10/2026), este decide si Daniel llama a OpenAI EN
+// ABSOLUTO. Por defecto activado (true si no hay fila -- no cambia el
+// comportamiento de nadie que no lo toque a propósito). `updated_at` de este
+// registro se usa también como "momento de la última reactivación": un
+// correo recibido antes de ese instante, si todavía no se había contestado
+// cuando se pausó la IA, nunca se contesta solo al reactivar -- ver el uso
+// de este valor en email/agent.ts (mismo criterio que esAnteriorAlCorte,
+// pero basado en el instante real de reactivación de este interruptor en
+// vez de una fecha fija en una variable de entorno).
+type EmailAiProcessingToggleRecord = { id: "email_ai_processing"; enabled: boolean; updated_at: string; updated_by: string | null };
+
+export function getEmailAiProcessingState(): { enabled: boolean; updated_at: string | null } {
+  const row = readCollection<EmailAiProcessingToggleRecord>("agent_toggles").find((r) => r.id === "email_ai_processing");
+  if (!row) return { enabled: true, updated_at: null };
+  return { enabled: row.enabled, updated_at: row.updated_at };
+}
+
+export function isEmailAiProcessingEnabled(): boolean {
+  return getEmailAiProcessingState().enabled;
+}
+
+export function setEmailAiProcessingEnabled(enabled: boolean, updatedBy: string | null = null): void {
+  const rows = readCollection<EmailAiProcessingToggleRecord>("agent_toggles").filter((r) => r.id !== "email_ai_processing");
+  rows.push({ id: "email_ai_processing", enabled, updated_at: new Date().toISOString(), updated_by: updatedBy });
+  writeCollection("agent_toggles", rows);
+}
+
+// Combinación exigida (Fase 2F): si la IA está apagada, el envío automático
+// se comporta como apagado también, SIEMPRE -- no hay combinación real en
+// la que tenga sentido enviar algo que la IA no generó en esta misma
+// pasada. Usar esta función en todo punto donde hoy se comprueba
+// isEmailAutoSendEnabled() para decidir si se envía de verdad (nunca para
+// decidir si se procesa con IA, eso es isEmailAiProcessingEnabled() a secas).
+export function isEmailSendEffectivelyEnabled(): boolean {
+  return isEmailAutoSendEnabled() && isEmailAiProcessingEnabled();
+}
+
 // Interruptor del agente en WhatsApp vía Zernio (19/10/2026, a petición real
 // justo al dejar el canal conectado: "todavía no actives Miguel"). A
 // diferencia de voice_agent/email_auto_send -- que ya llevaban tiempo en

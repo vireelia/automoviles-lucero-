@@ -1520,6 +1520,21 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
     return;
   }
 
+  // Fase 2F (18/11/2026, gap identificado en la auditoría de consumo de
+  // OpenAI): esta ruta legacy (n8n) era la única de las tres entradas de
+  // WhatsApp que llamaba a la IA sin comprobar los interruptores reales --
+  // ahora respeta exactamente los mismos dos que ya protegen Zernio
+  // (server.ts, ruta /webhooks/zernio-whatsapp): canal apagado o número
+  // pausado individualmente, cero llamadas a OpenAI, igual que allí.
+  if (!isWhatsappZernioAgentEnabled()) {
+    console.warn(`[whatsapp] canal apagado (isWhatsappZernioAgentEnabled) -- mensaje de ${from} no se procesa con IA.`);
+    return;
+  }
+  if (isWhatsappChatPaused(from.replace(/^\+/, ""))) {
+    console.warn(`[whatsapp] ${from} está pausado individualmente -- no se procesa con IA.`);
+    return;
+  }
+
   try {
     const result = await handleChatMessage(from, text, "WHATSAPP", from);
     if (result.ai_failed) {

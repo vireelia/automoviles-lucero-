@@ -166,11 +166,22 @@ const DAILY_BUDGET_EUR = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR ?? 15);
 // un descontrol agudo en un solo día; este es un segundo cinturón para un
 // goteo sostenido varios días, y requiere que el negocio decida un número
 // real antes de activarlo -- no se inventa aquí un valor mensual "seguro".
-// IMPORTANTE: esto es un límite de la APLICACIÓN (sólo decide si Lucero
-// sigue llamando a OpenAI), nunca un sustituto de los límites de
-// facturación reales configurados en la cuenta de OpenAI -- seguir
-// configurando esos límites ahí es responsabilidad aparte, no sustituible
-// por esta variable.
+// IMPORTANTE (ampliado en la auditoría de Fase 2F): esto es un límite de
+// la APLICACIÓN (sólo decide si Lucero sigue llamando a OpenAI), nunca un
+// sustituto de los límites de facturación reales configurados en la
+// cuenta de OpenAI -- seguir configurando esos límites ahí es
+// responsabilidad aparte, no sustituible por esta variable. Además, de
+// forma honesta: este cálculo es una ESTIMACIÓN orientativa (precio
+// público de gpt-4.1-mini, no el cobro real negociado si lo hay) y solo
+// cubre las llamadas que pasan por ESTA función (callLlm, usada por
+// Miguel/Carolina/Daniel vía handleChatMessage). `src/tools/
+// incident-analyst.ts` hace una llamada real a OpenAI completamente
+// aparte (botón manual de admin en Informes, bajo demanda) que NO está
+// contabilizada aquí ni sujeta a estos topes -- su riesgo real de fuga es
+// bajo (un clic = una llamada, nunca un bucle automático), pero es un
+// gasto real que este presupuesto no ve. Si alguna vez se automatiza ese
+// botón (p. ej. un cron que lo dispare solo), tendría que pasar también
+// por este mismo control antes de hacerlo.
 const MONTHLY_BUDGET_EUR = Number(process.env.LUCERO_MONTHLY_LLM_BUDGET_EUR ?? 0);
 const PRECIO_INPUT_POR_1M = 0.4;
 const PRECIO_CACHED_POR_1M = 0.1;
@@ -392,6 +403,17 @@ async function handleChatMessageUnlocked(
   // casi nada en vez de todo el trabajo previo.
   if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
     console.error(`[chat] presupuesto diario agotado, rechazo inmediato sin trabajo previo (${channel}, sesión ${sessionId})`);
+    alertaCorteLlm(`Tope diario de gasto de IA alcanzado (${DAILY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo en vez de gastar de más hoy.`);
+    await createHandoffFallback(sessionId);
+    return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
+  }
+  // Mismo criterio y mismo motivo (Fase 2F, 18/11/2026): el tope mensual
+  // también se comprueba aquí, lo primero, antes de cargar la conversación
+  // ni leer ninguna colección -- un rechazo por tope mensual debe costar
+  // igual de poco que uno por tope diario.
+  if (MONTHLY_BUDGET_EUR > 0 && estimatedSpendThisMonthEur() >= MONTHLY_BUDGET_EUR) {
+    console.error(`[chat] presupuesto mensual agotado, rechazo inmediato sin trabajo previo (${channel}, sesión ${sessionId})`);
+    alertaCorteLlm(`Tope mensual de gasto de IA alcanzado (${MONTHLY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo hasta el mes que viene o hasta que se amplíe el tope.`);
     await createHandoffFallback(sessionId);
     return { reply: FALLBACK_REPLY, tool_runs: 0, ai_failed: true };
   }

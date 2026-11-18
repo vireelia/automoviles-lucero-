@@ -16,7 +16,7 @@ function isFirstContactEnabled(): boolean {
 import { isGoogleConnected, sendGmail, googleStatus } from "../integrations/google.js";
 import { decideInterest, detectPortal, WHATSAPP_ONLY_REQUEST, extractCochesNetContact, extractCochesNetClientIdentity, isCochesNetSharedSender, extractWallapopContact } from "./interest.js";
 import { raiseAlert } from "../alerts/alerts.js";
-import { isEmailAutoSendEnabled, isEmailContactPaused } from "../tools/agent-toggle.js";
+import { isEmailAutoSendEnabled, isEmailContactPaused, getEmailAiProcessingState, isEmailSendEffectivelyEnabled } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
 import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
@@ -634,6 +634,28 @@ export async function processInboundEmail(
     await marcarProcesado(email, "retenido_anterior_al_corte");
     return { outcome: "retenido_anterior_al_corte" };
   }
+  // Interruptor de procesamiento con IA (Fase 2F, 18/11/2026): con Daniel
+  // pausado, ni se llama a OpenAI ni se marca procesado -- el correo queda
+  // real y visible (nunca se pierde ni se borra), y el sondeo lo volverá a
+  // encontrar sin coste mientras siga pausado.
+  const aiState = getEmailAiProcessingState();
+  if (!aiState.enabled) {
+    recordInbox(email, "pausado_ia_sin_procesar", {});
+    return { outcome: "pausado_ia_sin_procesar" };
+  }
+  // Corte por reactivación (mismo criterio que esAnteriorAlCorte, pero con
+  // el instante real de la última vez que se encendió este interruptor en
+  // vez de una fecha fija): un correo recibido ANTES de esa reactivación y
+  // que todavía no se había contestado mientras Daniel estaba pausado nunca
+  // se contesta solo al reactivar -- queda para revisión humana, igual que
+  // un correo anterior a LUCERO_NO_AUTO_BEFORE. Sin receivedAt real (no
+  // debería pasar, Gmail siempre lo manda) no se puede comparar -- se deja
+  // pasar al camino normal en vez de bloquear por un dato que falta.
+  if (aiState.updated_at && email.receivedAt && new Date(email.receivedAt).getTime() < new Date(aiState.updated_at).getTime()) {
+    recordInbox(email, "retenido_reactivacion_ia", { draftNote: "No contestado automáticamente: llegó mientras Daniel estaba pausado, antes de la última reactivación. Revísalo y respóndelo a mano si corresponde." });
+    await marcarProcesado(email, "retenido_reactivacion_ia");
+    return { outcome: "retenido_reactivacion_ia" };
+  }
   // FALLO REAL grave detectado (16/10/2026): esto va ANTES del filtro de
   // automáticos a propósito -- la dirección de origen de este tipo de aviso
   // de Coches.net puede parecer un no-reply (o llegar recortada por el bug
@@ -882,7 +904,7 @@ export async function processInboundEmail(
   // sigue clasificando y redactando igual que siempre, pero la respuesta se
   // queda como nota en Pendientes en vez de salir de verdad -- útil para
   // probar cambios de prompt/reglas sin arriesgar un envío real a un cliente.
-  if (!isEmailAutoSendEnabled()) {
+  if (!isEmailSendEffectivelyEnabled()) {
     recordInbox(email, "modo_prueba_sin_envio", { portal: portalInfo.portal, draftNote: body });
     await marcarProcesado(email, "modo_prueba_sin_envio");
     return { outcome: "modo_prueba_sin_envio", reply: body };
@@ -974,7 +996,7 @@ function borradorDefectuoso(m: InboxItem): string | null {
 }
 
 export async function sendPendingDailyCapEmails(): Promise<number> {
-  if (!isEmailAutoSendEnabled()) return 0; // mismo interruptor de pruebas que el resto del envío automático.
+  if (!isEmailSendEffectivelyEnabled()) return 0; // Fase 2F: si la IA está apagada, el envío se comporta como apagado también, sin excepción.
 
   // Fase 1, retención: solo lectura/escritura de disco (sin red), bajo el
   // mismo bloqueo "col_email_inbox" que usa recordInbox -- ningún correo
