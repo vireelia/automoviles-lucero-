@@ -744,6 +744,29 @@ export async function processInboundEmail(
     const sensitive = decision.reason === "documento_sensible_revision_humana";
     recordInbox(sensitive ? { ...email, text: "[contenido sensible -- no almacenado]" } : email, "automated_no_reply", { portal: portalInfo.portal });
     await marcarProcesado(email, "automated_no_reply");
+    // Milanuncios (y cualquier otro portal real reconocido por
+    // PORTAL_SENDERS que no sea Wallapop/Coches.net) -- auditoría
+    // 18/11/2026. A diferencia del caso genérico de abajo (remitente SIN
+    // portal reconocido, que debe seguir en silencio por la decisión real
+    // del 03/11/2026 contra el ruido de correos ambiguos que no son
+    // clientes), este SÍ es un remitente de portal real confirmado --
+    // mismo criterio que Wallapop antes de su fix del 28/10. NUNCA se
+    // intenta contestar, NUNCA se llama a la IA, y NUNCA se crea ni
+    // vincula un lead aquí: no existe en este proyecto ningún parser real
+    // del formato de aviso de Milanuncios (a diferencia de Wallapop, cuyo
+    // bloque JSON real sí se conoce y se parsea en extractWallapopContact)
+    // -- inventar un parser sin haber visto nunca un aviso real de
+    // Milanuncios sería simular una integración que no existe. Lo único
+    // honesto que se puede hacer sin ese formato conocido es avisar al
+    // equipo de que llegó algo real, con el asunto tal cual, para que lo
+    // gestionen a mano desde el propio portal -- igual que Wallapop
+    // cuando no se puede extraer el teléfono.
+    if (decision.reason === "portal_no_habilitado_para_respuesta_automatica" && portalInfo.portal) {
+      raiseAlert({
+        kind: "gestion_portal",
+        reason: `${portalInfo.portal}: nuevo aviso sobre "${email.subject || "un anuncio"}" -- este portal no tiene integración real en el sistema (solo se detecta que llegó), revísalo y gestiónalo directamente ahí.`,
+      });
+    }
     // Decisión real (03/11/2026, "solo se tiene que responder mensajes de
     // clientes y enviar avisos de reservas o visitas, no de todoooo"):
     // antes (27/10/2026, caso real del Opel Mokka) esto avisaba al equipo
