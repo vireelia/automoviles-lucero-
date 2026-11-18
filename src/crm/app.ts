@@ -2859,6 +2859,8 @@ crm.post("/avisos/:id", (req, res) => {
     if (me(res).role !== "admin") return back(res, home, "Solo el administrador puede eliminar avisos");
     moveToTrash("handoffs", h, `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})`, me(res).email);
     save("handoffs", items.filter((x) => x.id !== h.id));
+    const tareaGemelaEliminada = listTasks().find((t) => t.type === "revisar_handoff" && t.source_ref === h.id && t.status === "pendiente");
+    if (tareaGemelaEliminada) completeTask(tareaGemelaEliminada.id, me(res).email);
     return back(res, home, "Aviso movido a la papelera");
   }
   if (accion === "reabrir") {
@@ -2868,6 +2870,17 @@ crm.post("/avisos/:id", (req, res) => {
   }
   h.status = "done";
   save("handoffs", items);
+  // FALLO REAL grave encontrado 12/11/2026 (petición explícita: "las
+  // incidencias para qué cojones son si no se resuelven" -- 5.792 tareas
+  // "revisar_handoff" pendientes con solo ~200 leads reales): cada
+  // incidencia crea SIEMPRE una tarea gemela ("revisar_handoff",
+  // source_ref = id de la incidencia, ver tools/requests.ts), pero
+  // atender la incidencia aquí nunca completaba esa tarea gemela -- el
+  // equipo resolvía el caso real en Incidencias y la tarea se quedaba
+  // pendiente para siempre, sin que nadie supiera que tenía que ir
+  // también a Tareas a cerrarla a mano. Se completa automáticamente.
+  const tareaGemela = listTasks().find((t) => t.type === "revisar_handoff" && t.source_ref === h.id && t.status === "pendiente");
+  if (tareaGemela) completeTask(tareaGemela.id, me(res).email);
   back(res, `${home}${home === "/crm/incidencias" ? "?v=atendidos" : ""}`, "Aviso atendido");
 });
 
@@ -2882,6 +2895,10 @@ crm.post("/avisos-masivo", (req, res) => {
   const targets = items.filter((h) => idSet.has(h.id));
   moveManyToTrash(targets.map((h) => ({ collection: "handoffs", record: h, label: `Aviso: ${h.reason ?? "sin motivo"} (${h.lead_name ?? h.lead_phone ?? "sin contacto"})` })), me(res).email);
   save("handoffs", items.filter((h) => !idSet.has(h.id)));
+  const targetIds = new Set(targets.map((h) => h.id));
+  for (const t of listTasks().filter((t) => t.type === "revisar_handoff" && t.status === "pendiente" && t.source_ref && targetIds.has(t.source_ref))) {
+    completeTask(t.id, me(res).email);
+  }
   back(res, "/crm/incidencias", targets.length === 0 ? "No había nada que hacer" : `${targets.length} aviso(s) movido(s) a la papelera`);
 });
 
@@ -2925,7 +2942,10 @@ crm.post("/correos/:id", async (req, res) => {
   if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
   const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "su consulta"}`;
   const thread = m.thread_id && m.in_reply_to ? { threadId: m.thread_id, inReplyTo: m.in_reply_to } : undefined;
-  const delivery = await deliverEmail(m.from, subject, `${text}\n\nAutomóviles Lucero`, thread);
+  // Excepción explícita (18/11/2026, outbound-guard.ts): respuesta manual de
+  // una persona real del equipo desde el propio CRM -- no un envío
+  // automático, nunca debe bloquearse por falta de un evento entrante.
+  const delivery = await deliverEmail(m.from, subject, `${text}\n\nAutomóviles Lucero`, thread, { allowProactive: true, reason: "crm_responder_manual" });
   m.answered = true;
   m.answered_by = "equipo";
   save("email_inbox", inbox);
@@ -3244,7 +3264,10 @@ crm.post("/whatsapp/:id", whatsappAttachmentUpload.single("adjunto"), async (req
   if (accion === "responder") {
     const text = String(req.body.respuesta ?? "").trim();
     if (!text) return back(res, volver, "Escribe la respuesta antes de enviarla");
-    const result = await sendWhatsappText(m.phone, text);
+    // Excepción explícita (17/11/2026, outbound-guard.ts): aquí es un
+    // humano del equipo escribiendo y enviando a mano desde el CRM, nunca
+    // un envío automático sin que nadie lo revise -- no debe bloquearse.
+    const result = await sendWhatsappText(m.phone, text, { allowProactive: true, reason: "crm_responder_manual" });
     // FALLO REAL detectado (27/10/2026, "algunos mensajes no se pueden
     // enviar a whatsapp... no aparecen en el chat real ni en el CRM"):
     // cuando el envío fallaba, antes no se guardaba nada -- el único

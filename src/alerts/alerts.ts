@@ -16,8 +16,12 @@ function sendAlertEmail(alertId: string, reason: string): void {
     setEmailStatus(alertId, "sin_destinatarios");
     return;
   }
+  // Excepción explícita (18/11/2026, outbound-guard.ts): aviso urgente al
+  // propio equipo (Ramón/José/direcciones de ALERT_EMAILS), igual que su
+  // equivalente por WhatsApp (team-notify.ts) -- nunca depende de que el
+  // equipo haya escrito nada antes.
   import("../email/agent.js")
-    .then(({ deliverEmail }) => Promise.all(destinatarios.map((to) => deliverEmail(to, "Aviso urgente -- Automóviles Lucero", reason))))
+    .then(({ deliverEmail }) => Promise.all(destinatarios.map((to) => deliverEmail(to, "Aviso urgente -- Automóviles Lucero", reason, undefined, { allowProactive: true, reason: "aviso_urgente_equipo" }))))
     .then((results) => setEmailStatus(alertId, results.every((r) => r.status === "sent") ? "enviado" : "error"))
     .catch(() => setEmailStatus(alertId, "error"));
 }

@@ -14,6 +14,8 @@
 // y haría falta una plantilla) se propaga el error tal cual, nunca se
 // asume entregado.
 import { isZernioWhatsappConfigured, sendZernioWhatsappText } from "./zernio.js";
+import { authorizeOutboundMessage } from "../outbound-guard.js";
+import { lastInboundAt as lastWhatsappInboundAt } from "../chat/whatsapp-window.js";
 
 const GRAPH_VERSION = "v21.0";
 
@@ -27,7 +29,27 @@ function normalizePhone(phone: string): string {
 
 export type WhatsappSendResult = { ok: true; messageId: string } | { ok: false; error: string };
 
-export async function sendWhatsappText(to: string, body: string): Promise<WhatsappSendResult> {
+// Opciones de autorización de la barrera central (src/outbound-guard.ts).
+// Por defecto (sin pasar nada) se resuelve automáticamente el último
+// mensaje ENTRANTE real de WhatsApp de ese contacto -- así cualquier
+// llamador que no toque este parámetro queda protegido igual, sin tener que
+// acordarse de añadirlo en cada sitio. Solo las llamadas ya identificadas
+// como excepción real (recordatorio de cita, confirmación de reserva, aviso
+// urgente al equipo) deben pasar allowProactive:true explícitamente, en su
+// propio call site -- nunca aquí.
+export type OutboundAuthz = { allowProactive?: boolean; lastInboundAt?: number | null; reason?: string };
+
+export async function sendWhatsappText(to: string, body: string, authz: OutboundAuthz = {}): Promise<WhatsappSendResult> {
+  const lastInboundAt = authz.lastInboundAt !== undefined ? authz.lastInboundAt : lastWhatsappInboundAt(to);
+  const auth = authorizeOutboundMessage({
+    phone: to,
+    channel: "whatsapp",
+    lastInboundAt,
+    reason: authz.reason ?? "sendWhatsappText_default",
+    allowProactive: authz.allowProactive,
+  });
+  if (!auth.ok) return { ok: false, error: `bloqueado_outbound_guard:${auth.motivo}` };
+
   if (isZernioWhatsappConfigured()) return sendZernioWhatsappText(to, body);
 
   const token = process.env.WHATSAPP_ACCESS_TOKEN;

@@ -82,11 +82,18 @@ export function sendLocation() {
   });
 }
 
-export async function sendWhatsapp(args: { lead_phone?: string; message?: string }) {
+// allowProactive (17/11/2026, barrera central de outbound-guard.ts): solo
+// true cuando quien llama a esta función YA es una de las excepciones reales
+// identificadas (recordatorio de cita agendada, confirmación de reserva,
+// aviso al equipo) -- ver scheduler.ts/reservations.ts, nunca por defecto.
+export async function sendWhatsapp(args: { lead_phone?: string; message?: string; allowProactive?: boolean; outboundReason?: string }) {
   const record = { id: crypto.randomUUID(), ...args, delivery_status: "queued" as const, created_at: now() };
 
   if (isWhatsappConnected() && args.lead_phone && args.message) {
-    const result = await sendWhatsappText(args.lead_phone, args.message);
+    const result = await sendWhatsappText(args.lead_phone, args.message, {
+      allowProactive: args.allowProactive,
+      reason: args.outboundReason ?? "tools/delivery.sendWhatsapp",
+    });
     if (result.ok) {
       appendToCollection("whatsapp_queue", { ...record, delivery_status: "sent" as const, message_id: result.messageId });
       return envelope({ status: "ok", data: { ...record, delivery_status: "sent", message_id: result.messageId }, source: "WhatsApp Cloud API", conflicts: [] });
@@ -147,7 +154,13 @@ export async function notifySalesperson(args: {
       { name: "Ramón", phone: cfg.ramonPhone },
       { name: "José", phone: cfg.josePhone },
     ];
-    const results = await Promise.all(recipients.map((r) => sendWhatsappText(r.phone, formatted).then((res) => ({ ...r, res }))));
+    // Excepción explícita (aviso urgente al equipo, Ramón/José): nunca
+    // puede quedar bloqueado por la barrera de outbound-guard.ts.
+    const results = await Promise.all(
+      recipients.map((r) =>
+        sendWhatsappText(r.phone, formatted, { allowProactive: true, reason: "notifySalesperson_aviso_urgente_equipo" }).then((res) => ({ ...r, res })),
+      ),
+    );
     const sentTo = results.filter((r) => r.res.ok).map((r) => r.name);
     const failedTo = results.filter((r) => !r.res.ok).map((r) => `${r.name} (${(r.res as { error: string }).error})`);
 

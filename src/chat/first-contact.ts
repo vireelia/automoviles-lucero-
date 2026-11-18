@@ -27,6 +27,17 @@ export function buildFirstContactText(input: FirstContactInput): string {
   return `${saludo}, soy Carolina, de Automóviles Lucero. Hemos recibido tu consulta en ${input.portal} sobre ${vehiculo}. ¿Qué día y hora te vendría bien para venir a verlo? Si prefieres, te resuelvo cualquier duda por aquí.`;
 }
 
+// Texto honesto cuando el vehículo del aviso ya no está disponible (SOLD/
+// RESERVED en vehicle-state.ts) o no se pudo confirmar de forma única en el
+// catálogo actual -- nunca se ofrece verlo ni reservarlo como si siguiera
+// disponible (17/11/2026, fix del incidente real reportado por Ramón).
+export function buildUnavailableFirstContactText(input: FirstContactInput): string {
+  const nombre = cleanName(input.name);
+  const saludo = nombre ? `Hola ${nombre}` : "Hola";
+  const vehiculo = input.vehicle?.trim() ? `el ${input.vehicle.trim()}` : "el vehículo que consultaste";
+  return `${saludo}, soy Carolina, de Automóviles Lucero. Gracias por tu interés en ${vehiculo} a través de ${input.portal} -- ese vehículo en concreto ya no está disponible. ¿Quieres que te muestre opciones similares que sí tenemos ahora en el catálogo?`;
+}
+
 function dedupKey(phone: string, vehicle: string | null): string {
   return `${phone}|${(vehicle ?? "").trim().toLowerCase()}`;
 }

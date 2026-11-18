@@ -53,7 +53,11 @@ export function startDailySummary() {
     const summary = buildDailySummary(date);
     for (const u of listUsers()) {
       if (!u.email) continue;
-      await deliverEmail(u.email, `Visitas de hoy (${date})`, summary);
+      // Excepción explícita (18/11/2026, outbound-guard.ts): resumen interno
+      // al propio equipo del CRM (no un cliente), generado por el scheduler
+      // a una hora fija -- nunca depende de que el equipo le haya escrito
+      // nada al sistema antes.
+      await deliverEmail(u.email, `Visitas de hoy (${date})`, summary, undefined, { allowProactive: true, reason: "resumen_diario_interno_equipo" });
     }
   }, 10 * 60 * 1000);
 }

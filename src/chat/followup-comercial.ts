@@ -1,8 +1,9 @@
 import crypto from "crypto";
 import { readCollection, writeCollection } from "../store.js";
-import { sendWhatsappText, isWhatsappConnected } from "../integrations/whatsapp.js";
+import { isWhatsappConnected } from "../integrations/whatsapp.js";
 import { conversationStage, appointmentsFor, normalizePhone, esComercial } from "./conversion.js";
 import { lastInboundAt, contactoAutorizado } from "./whatsapp-window.js";
+import { authorizeAndSendOutbound } from "../outbound-guard.js";
 
 // LUCERO_SEGUIMIENTO_COMERCIAL. Reemplaza a checkStaleFollowups, que Eliud
 // desactivó el 28/10/2026 ("elimínalos por ahora") porque escribía "nos han
@@ -102,10 +103,20 @@ export async function runSeguimientoComercial(now = Date.now()): Promise<{ envia
       continue;
     }
 
-    const texto = textoSeguimiento(lead?.name ?? null, lead?.vehicle_interest ?? null, intento);
-    const sent = await sendWhatsappText(phone, texto);
+    // Migrado (18/11/2026, Fase 2D) a authorizeAndSendOutbound -- centraliza
+    // el chequeo de contacto autorizado (ya se comprobó arriba también, no
+    // se quita esa comprobación específica para no cambiar "saltados") junto
+    // con el resto de chequeos estructurales (pausa del equipo, dedup), y es
+    // el propio servicio el que ejecuta el envío real.
+    const sent = await authorizeAndSendOutbound({
+      phone,
+      channel: "whatsapp",
+      reason: "followup_comercial",
+      lastInboundAt: entrante,
+      textBuilder: () => textoSeguimiento(lead?.name ?? null, lead?.vehicle_interest ?? null, intento),
+    });
     if (!sent.ok) {
-      saltados.push(`${phone}: envio_fallido_${sent.error}`);
+      saltados.push(`${phone}: envio_fallido_${sent.motivo}`);
       continue;
     }
     previos.push({ id: crypto.randomUUID(), phone, intento, enviado_at: new Date(now).toISOString(), vehiculo: lead?.vehicle_interest ?? null });
