@@ -243,6 +243,20 @@ export class ConcurrencyLimitExceeded extends Error {
 // conversación legítima en ese caso -- el corte real solo debería llegar
 // muy por encima de eso (p. ej. un bucle real o un ataque), nunca en un
 // pico de tráfico normal de un concesionario de este tamaño.
+// ADVERTENCIA EXPLÍCITA (confirmado contra el Dockerfile real del
+// proyecto: una sola imagen, un solo `CMD node dist/server.js`, un solo
+// volumen -- EasyPanel lo despliega hoy como UNA instancia, nunca varias
+// en paralelo): activeLlmCalls y estimatedSpendTodayEur/ThisMonthEur son
+// contadores EN MEMORIA/en disco de ESTE proceso. Si algún día el
+// servicio se replica en varias instancias (p. ej. escalado horizontal),
+// cada una tendría su propio contador de concurrencia y su propia lectura
+// de llm_usage_logs con una condición de carrera real entre ellas al
+// escribir -- el tope de concurrencia dejaría de ser un límite GLOBAL de
+// verdad, y el de presupuesto podría sobrepasarse (cada instancia cree
+// que todavía hay cupo). Esto queda fuera de alcance a propósito: una
+// coordinación real entre procesos (semáforo distribuido, contador
+// atómico compartido) es infraestructura nueva que no hace falta
+// mientras el despliegue siga siendo de una sola instancia.
 const MAX_CONCURRENT_LLM_CALLS = Number(process.env.LUCERO_MAX_CONCURRENT_LLM_CALLS ?? 50);
 let activeLlmCalls = 0;
 
@@ -292,6 +306,38 @@ async function callLlm(messages: ChatMessage[], channel: Channel, forceText = fa
   }
 }
 
+// Detección de pico anómalo (Fase "cierre final de seguridad", 18/11/2026,
+// "alerta real ante un consumo anómalo"): a diferencia del tope diario/
+// mensual (que CORTA el gasto), esto solo AVISA -- un pico real de
+// llamadas en poco tiempo puede ser tráfico legítimo (varios clientes a
+// la vez) o el inicio real de un problema (bucle, integración rota
+// reenviando el mismo evento). Ninguno de los dos casos debe bloquearse
+// solo -- el tope de concurrencia/presupuesto ya existe para eso si el
+// pico de verdad se descontrola -- pero el equipo debe enterarse pronto
+// de un pico fuera de lo normal para poder mirarlo. Umbral configurable,
+// nunca hardcodeado: por defecto, más de 30 llamadas reales en 5 minutos
+// (holgado frente al tráfico normal de este negocio).
+const ANOMALY_WINDOW_MS = 5 * 60_000;
+const ANOMALY_THRESHOLD = Number(process.env.LUCERO_LLM_ANOMALY_THRESHOLD ?? 30);
+
+function checkAnomalousSpike(): void {
+  try {
+    const log = readCollection<{ at: string }>("llm_usage_logs");
+    const sinceMs = Date.now() - ANOMALY_WINDOW_MS;
+    const recientes = log.filter((r) => new Date(r.at).getTime() >= sinceMs).length;
+    if (recientes >= ANOMALY_THRESHOLD) {
+      // Razón SIN el número exacto a propósito: raiseAlert deduplica por
+      // texto exacto (mismo kind+reason, unas horas) -- con el contador
+      // dentro del texto, cada llamada generaría una alerta "distinta" y
+      // nunca deduplicaría. El número real queda en el log de consola.
+      console.warn(`[chat] pico de consumo de IA: ${recientes} llamadas reales en los últimos ${Math.round(ANOMALY_WINDOW_MS / 60_000)} min (umbral ${ANOMALY_THRESHOLD}).`);
+      alertaCorteLlm(`Pico de consumo de IA fuera de lo normal (más de ${ANOMALY_THRESHOLD} llamadas reales en ${Math.round(ANOMALY_WINDOW_MS / 60_000)} minutos). Puede ser tráfico legítimo real o un problema real -- revisar el detalle en los logs/llm_usage_logs.`);
+    }
+  } catch {
+    // La detección de picos nunca debe tumbar una respuesta real al cliente.
+  }
+}
+
 function recordLlmUsage(channel: Channel, sessionId: string, usage: LlmUsage): void {
   try {
     const log = readCollection<LlmUsage & { id: string; channel: string; session_id: string; at: string }>("llm_usage_logs");
@@ -300,6 +346,7 @@ function recordLlmUsage(channel: Channel, sessionId: string, usage: LlmUsage): v
   } catch {
     // El registro de coste nunca debe tumbar una respuesta real al cliente.
   }
+  checkAnomalousSpike();
 }
 
 // Un turno empieza siempre en un mensaje de usuario: así nunca se corta una

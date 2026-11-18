@@ -1459,7 +1459,29 @@ type WhatsappInboxRecord = {
   reply_attachment_path?: string;
   reply_attachment_type?: "image" | "audio";
 };
-app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
+// DESHABILITADA (Fase "cierre final de seguridad", 18/11/2026). Auditoría
+// real antes de tocarla: sin referencias activas en ningún lado del
+// proyecto -- ni en GUIA-TECNICA-DESARROLLADOR.md (que documenta Zernio
+// como la integración real de WhatsApp y ni menciona esta ruta), ni en
+// ningún script/config de n8n del repo (src/integrations/n8n.ts es otra
+// cosa: solo reenvía análisis de LLAMADAS DE VOZ a n8n, nunca WhatsApp),
+// ni en ninguna variable de entorno documentada. Además exige
+// `requireAdminToken`, así que un n8n externo que la llamara de verdad
+// necesitaría el ADMIN_TOKEN real, configurado en un sitio que no aparece
+// documentado en ningún lugar. Todo apunta a que Zernio (confirmado real,
+// con tráfico real) la sustituyó del todo. Se responde 410 ANTES de tocar
+// ninguna colección ni llamar a la IA -- nunca se intenta enviar nada.
+// El código histórico queda comentado justo debajo, nunca borrado: si
+// algún día aparece un consumidor real (poco probable, pero posible si
+// alguien reactiva un workflow de n8n viejo), se puede reactivar
+// descomentándolo y aplicándole el mismo cierre de gaps ya hecho en la
+// Fase 2F (los interruptores ya están en el bloque comentado).
+app.post("/channels/whatsapp/inbound", requireAdminToken, (_req, res) => {
+  res.status(410).json({ error: "route_disabled", reason: "Sustituida por /webhooks/zernio-whatsapp. Sin consumidor real conocido -- ver comentario en server.ts." });
+});
+
+/* HISTÓRICO -- deshabilitada arriba, código conservado tal cual por si hiciera falta reactivarlo.
+app.post("/channels/whatsapp/inbound__disabled", requireAdminToken, async (req, res) => {
   const b = req.body ?? {};
   if (typeof b.from !== "string" || typeof b.text !== "string" || !b.from.trim() || !b.text.trim()) {
     res.status(400).json({ error: "bad_request" });
@@ -1568,6 +1590,7 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
     console.error("[whatsapp] inbound:", err instanceof Error ? err.message : err);
   }
 });
+*/
 
 // WhatsApp vía Zernio (18/10/2026, alternativa a la Fase 1 de arriba para
 // evitar la verificación de negocio de Meta): Zernio llama directo a este

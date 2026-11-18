@@ -21,6 +21,19 @@ export type IncidentAnalysis = {
   report: string;
 };
 
+// DECISIÓN EXPLÍCITA (Fase "cierre final de seguridad", 18/11/2026): esta
+// llamada se queda FUERA del presupuesto/concurrencia compartidos de
+// chat/agent.ts (DAILY_BUDGET_EUR/MONTHLY_BUDGET_EUR/MAX_CONCURRENT_LLM_CALLS),
+// a propósito, tras evaluar el esfuerzo real de meterla ahí: es una acción
+// manual de un solo clic (botón en Informes, solo admin), nunca un bucle
+// ni un webhook automático -- el riesgo real de fuga de coste es bajo
+// (como mucho, un admin pulsando el botón varias veces seguidas). Meterla
+// en el contador compartido obligaría a exportar ese estado desde un
+// módulo que hoy lo mantiene privado (activeLlmCalls, estimatedSpend*) solo
+// para proteger un camino que ya es manual y poco frecuente -- no
+// proporcional. Si esto se automatiza alguna vez (p. ej. un cron que lo
+// dispare solo, sin que nadie pulse nada), SÍ tendría que pasar por el
+// mismo control que todo lo demás antes de hacerlo.
 const MODEL = process.env.LUCERO_CHAT_MODEL ?? "gpt-4.1-mini";
 const BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
 

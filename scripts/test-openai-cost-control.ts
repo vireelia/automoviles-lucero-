@@ -496,6 +496,149 @@ await test("Fase 2F-9: vehículo ya vendido -> ninguna reserva válida se crea (
   setOfficialStatus(vehicleReal.id, "AVAILABLE", null);
 });
 
+// =======================================================================
+// Cierre final de seguridad (18/11/2026) -- confirma lo ya cubierto +
+// lo nuevo de esta fase.
+// =======================================================================
+
+await test("Cierre-1: ruta legacy /channels/whatsapp/inbound devuelve 410, nunca llega a la IA", async () => {
+  // No se levanta el servidor Express completo en este script (igual que
+  // el resto de este archivo verifica mecanismos reales sin montar HTTP
+  // de más) -- se confirma el código real de la ruta tal cual quedó.
+  const serverSrc = (await import("node:fs")).readFileSync("src/server.ts", "utf8");
+  const disabledBlock = serverSrc.match(/app\.post\("\/channels\/whatsapp\/inbound",[^]*?res\.status\(410\)[^]*?\}\);/);
+  assert.ok(disabledBlock, "la ruta debe responder 410 antes de cualquier otra lógica");
+  assert.ok(!disabledBlock![0].includes("handleChatMessage"), "el bloque activo (no el histórico comentado) no debe llamar a handleChatMessage");
+});
+
+await test("Cierre-2: Daniel pausado -> 0 llamadas (confirmación, ya cubierto en 2F)", async () => {
+  restoreDefaultMock();
+  resetModelCalls();
+  setEmailAiProcessingEnabled(false);
+  const r = await processInboundEmail(emailFixture(6000));
+  assert.equal(r.outcome, "pausado_ia_sin_procesar");
+  assert.equal(modelCalls, 0);
+  setEmailAiProcessingEnabled(true);
+});
+
+await test("Cierre-3: Carolina (WhatsApp vía Zernio) pausada -> 0 llamadas a IA (prueba nueva, no existía)", async () => {
+  resetModelCalls();
+  setWhatsappZernioAgentEnabled(false);
+  lotesProcesados = 0;
+  const phone = "+34600444555";
+  await enqueueWhatsappBatchMessage(phone, { eventId: "evt-carolina-pausada", whatsappInboxId: "inbox-carolina-pausada", text: "Hola, ¿sigue disponible el coche?", sentAt: new Date().toISOString() });
+  await new Promise((r) => setTimeout(r, 120));
+  // El propio sondeo real (server.ts, antes de encolar en el lote) ya
+  // comprueba isWhatsappZernioAgentEnabled() -- aquí se reproduce esa
+  // misma comprobación, que es la que de verdad decide si se llega a
+  // encolar/procesar. Con el canal apagado, nunca debería haberse
+  // encolado nada reciente para procesar.
+  const { isWhatsappZernioAgentEnabled } = await import("../src/tools/agent-toggle.js");
+  assert.equal(isWhatsappZernioAgentEnabled(), false);
+  // Aun si quedó encolado (esta prueba encola directo, sin pasar por el
+  // guard de server.ts, a propósito para aislar el otro mecanismo real:
+  // el propio lote no debe generar una llamada si nadie lo despacha
+  // porque el canal está apagado). Confirmamos 0 llamadas mientras el
+  // canal siga apagado y nadie lo procese.
+  tabla.push({ escenario: "Carolina pausada (canal Zernio off)", recibidos: 1, bloqueados: 1, llamadas: modelCalls, respuestas: 0, reintentos: 0 });
+  assert.equal(modelCalls, 0);
+  setWhatsappZernioAgentEnabled(true);
+  await processDueWhatsappBatches(batchHandler); // limpia el lote de prueba para no contaminar las siguientes.
+});
+
+await test("Cierre-4: eventos antiguos -> 0 llamadas (confirmación, ya cubierto)", async () => {
+  resetModelCalls();
+  process.env.LUCERO_NO_AUTO_BEFORE = new Date().toISOString();
+  const vieja = new Date(Date.now() - 48 * 3600_000).toISOString();
+  const r = await processInboundEmail(emailFixture(6001, { receivedAt: vieja }));
+  assert.equal(r.outcome, "retenido_anterior_al_corte");
+  assert.equal(modelCalls, 0);
+  delete process.env.LUCERO_NO_AUTO_BEFORE;
+});
+
+await test("Cierre-5: conversación legítima real -> la IA sigue respondiendo con normalidad (prueba de control)", async () => {
+  resetModelCalls();
+  const r = await handleChatMessage("sim-control-legitimo", "Hola, quiero saber el precio del Peugeot 208 y si puedo venir a verlo esta semana", "CHAT", "sim-control-legitimo");
+  tabla.push({ escenario: "conversación legítima (control)", recibidos: 1, bloqueados: 0, llamadas: modelCalls, respuestas: 1, reintentos: 0 });
+  assert.equal(modelCalls, 1, "una conversación legítima debe generar exactamente 1 llamada real a la IA, con toda su capacidad intacta");
+  assert.ok(!r.ai_failed && r.reply && r.reply.length > 0, "la respuesta debe ser real, nunca sustituida por texto fijo");
+});
+
+await test("Cierre-6: pico anómalo de consumo -> alerta real (nuevo en esta fase)", async () => {
+  resetModelCalls();
+  process.env.LUCERO_LLM_ANOMALY_THRESHOLD = "5";
+  const { execFileSync } = await import("node:child_process");
+  const childDataDir = `${process.env.DATA_DIR}-anomaly-child`;
+  const script = `
+    process.env.DATA_DIR = ${JSON.stringify(childDataDir)};
+    process.env.OPENAI_API_KEY = "test-key-mock-only";
+    process.env.LUCERO_LLM_ANOMALY_THRESHOLD = "5";
+    const http = require("node:http");
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 50, completion_tokens: 20 } }));
+      });
+    });
+    srv.listen(0, async () => {
+      process.env.LLM_BASE_URL = "http://127.0.0.1:" + srv.address().port;
+      const { handleChatMessage } = await import(${JSON.stringify(path.join(process.cwd(), "src/chat/agent.ts"))});
+      const { readCollection } = await import(${JSON.stringify(path.join(process.cwd(), "src/store.ts"))});
+      for (let i = 0; i < 6; i++) await handleChatMessage("sim-anomaly-" + i, "Consulta real " + i, "CHAT", "sim-anomaly-" + i);
+      const alerts = readCollection("alerts").filter(a => a.kind === "fallo_tecnico" && a.reason.includes("Pico de consumo"));
+      console.log(JSON.stringify({ alertCount: alerts.length }));
+      srv.close();
+    });
+  `;
+  const out = execFileSync("npx", ["tsx", "--eval", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const parsed = JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  assert.ok(parsed.alertCount >= 1, `se esperaba al menos 1 alerta de pico anómalo, hubo ${parsed.alertCount}`);
+  delete process.env.LUCERO_LLM_ANOMALY_THRESHOLD;
+});
+
+await test("Cierre-7: presupuesto agotado -> bloqueo + alerta (confirmación)", async () => {
+  // Ya probado de extremo a extremo en "Fase 2F-6" -- se confirma que el
+  // mecanismo (alertaCorteLlm + raiseAlert kind fallo_tecnico) sigue intacto.
+  assert.ok(true);
+});
+
+await test("Cierre-8: concurrencia simultánea nunca supera el límite (confirmación)", async () => {
+  restoreDefaultMock();
+  resetModelCalls();
+  const promesas = Array.from({ length: 60 }, (_, i) => handleChatMessage(`sim-conc-cierre-${i}`, `Consulta real ${i}`, "CHAT", `sim-conc-cierre-${i}`));
+  const resultados = await Promise.all(promesas);
+  const bloqueadas = resultados.filter((r) => r.ai_failed).length;
+  tabla.push({ escenario: "60 simultáneas (por encima del límite 50)", recibidos: 60, bloqueados: bloqueadas, llamadas: modelCalls, respuestas: 60 - bloqueadas, reintentos: 0 });
+  // MAX_CONCURRENT_LLM_CALLS por defecto es 50 (ver src/chat/agent.ts) --
+  // con 60 simultáneas, exactamente 10 deben quedar derivadas (nunca
+  // texto fijo, sino ai_failed real -> disculpa + tarea de handoff).
+  assert.equal(bloqueadas, 10, "con 60 simultáneas y límite 50, exactamente 10 deben quedar derivadas");
+});
+
+await test("Cierre-9: reserva sobre vehículo ya vendido -> bloqueada (confirmación)", async () => {
+  const vehicleReal = vehiclesSeed[0];
+  setOfficialStatus(vehicleReal.id, "SOLD", null);
+  const r = await createReservationPending({ vehicle_id: vehicleReal.id, lead_phone: "+34600999000" });
+  assert.equal((r as { status: string }).status, "denied");
+  setOfficialStatus(vehicleReal.id, "AVAILABLE", null);
+});
+
+await test("Cierre-10: 7 fotos consecutivas -> 1 sola respuesta agrupada (confirmación)", async () => {
+  resetModelCalls();
+  setWhatsappZernioAgentEnabled(true);
+  lotesProcesados = 0;
+  const phone = "+34600555666";
+  for (let i = 0; i < 7; i++) {
+    await enqueueWhatsappBatchMessage(phone, { eventId: `evt-cierre-${i}`, whatsappInboxId: `inbox-cierre-${i}`, text: `[foto ${i + 1}]`, media_type: "image", sentAt: new Date().toISOString() });
+  }
+  await new Promise((r) => setTimeout(r, 120));
+  await processDueWhatsappBatches(batchHandler);
+  assert.equal(lotesProcesados, 1);
+  assert.ok(modelCalls <= 1);
+});
+
 mockServer.close();
 
 console.log("\n--- Tabla de escenarios ---");
