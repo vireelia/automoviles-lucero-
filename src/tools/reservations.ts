@@ -275,6 +275,34 @@ async function confirmReservation_sinBloqueo(args: { reservation_id: string; ver
     });
   }
 
+  // FALLO REAL identificado en auditoría (18/11/2026, "ningún agente puede
+  // afirmar disponibilidad sin comprobar el inventario vigente"): la
+  // disponibilidad solo se comprobaba al CREAR la reserva
+  // (createReservationPending), nunca otra vez justo antes de confirmarla
+  // -- entre la creación y la confirmación pueden pasar horas o días
+  // (esperando el justificante de pago real), tiempo de sobra para que el
+  // vehículo cambie de estado por otra vía (venta presencial, otra
+  // reserva ya confirmada). Confirmar sin volver a comprobar podía dar
+  // por buena una reserva sobre un coche que ya no estaba disponible de
+  // verdad. Se comprueba aquí, DENTRO del mismo lock ya tomado, para que
+  // nadie pueda colarse entre la comprobación y la escritura.
+  const estadoActual = getOfficialStatus(reservation.vehicle_id);
+  if (estadoActual === "SOLD") {
+    registrarIntentoConfirmacion({
+      reservation_id: args.reservation_id,
+      verified_by: args.verified_by,
+      result: "rejected",
+      motivo: "vehiculo_no_disponible_al_confirmar",
+      estado_actual: estadoActual,
+    });
+    return envelope({
+      status: "denied",
+      error_code: "vehicle_not_available_at_confirm",
+      data: reservation,
+      source: `registro interno -- el vehículo ya no está disponible (estado real: ${estadoActual}) en el momento de confirmar, aunque lo estuviera cuando se creó la reserva.`,
+    });
+  }
+
   reservation.status = "confirmed";
   reservation.verified_by = args.verified_by;
   reservation.verified_at = now().toISOString();
