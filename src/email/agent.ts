@@ -3,7 +3,7 @@ import dns from "dns";
 import { readCollection, writeCollection, mutateCollection, mutateCollectionSync } from "../store.js";
 import { esAnteriorAlCorte } from "../deploy-safety.js";
 import { handleChatMessage, recordAssistantMessage, FALLBACK_REPLY } from "../chat/agent.js";
-import { buildFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
+import { buildFirstContactText, buildUnavailableFirstContactText, alreadyContacted, markContacted } from "../chat/first-contact.js";
 import { dentroDeVentana, contactoAutorizado } from "../chat/whatsapp-window.js";
 import { withPersistentLock } from "../locks.js";
 import { createAutoTask } from "../tools/tasks.js";
@@ -19,7 +19,30 @@ import { raiseAlert } from "../alerts/alerts.js";
 import { isEmailAutoSendEnabled, isEmailContactPaused } from "../tools/agent-toggle.js";
 import { upsertLead } from "../tools/leads.js";
 import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
-import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
+import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
+import { authorizeOutboundMessage, sendVehicleContactTemplateGuarded } from "../outbound-guard.js";
+import { getOfficialStatus } from "../tools/vehicle-state.js";
+import { currentVehicles } from "../data/vehicles-current.js";
+
+// Causa raíz real del incidente reportado por Ramón (17/11/2026):
+// contactLeadViaWhatsapp construía el primer mensaje usando make/model/
+// version tal cual venían del aviso de Coches.net, sin comprobar nunca si
+// ese vehículo seguía realmente disponible -- un anuncio puede seguir
+// "vivo" en Coches.net mientras el coche ya está SOLD/RESERVED por dentro
+// (vehicle-state.ts es independiente del propio anuncio del portal, ver
+// CLAUDE.md). Busca el vehículo real del catálogo actual que coincide de
+// forma única por marca+modelo (ignorando mayúsculas/espacios) -- nunca por
+// "parece parecido". Si hay más de una coincidencia, o ninguna, se trata
+// igual que "no se puede confirmar que esté disponible" (ver más abajo),
+// nunca se asume lo contrario.
+function findCatalogVehicleByMakeModel(make: string | null, model: string | null): { id: string } | null {
+  if (!make || !model) return null;
+  const mk = make.trim().toLowerCase();
+  const md = model.trim().toLowerCase();
+  if (!mk || !md) return null;
+  const matches = currentVehicles().filter((v) => v.make.trim().toLowerCase() === mk && v.model.trim().toLowerCase() === md);
+  return matches.length === 1 ? { id: matches[0].id } : null;
+}
 
 export type InboundEmail = {
   messageKey: string;
@@ -205,6 +228,34 @@ function replySubject(subject: string): string {
 
 export type EmailDelivery = { status: Outbox["status"]; error?: string };
 
+// Opciones de autorización de la barrera central (src/outbound-guard.ts),
+// mismo patrón (y mismo nombre de tipo, duplicado a propósito para no crear
+// un ciclo de imports con integrations/whatsapp.ts) que ya usa
+// sendWhatsappText. Por defecto (sin pasar nada) se resuelve automáticamente
+// el último correo ENTRANTE real de esa dirección (email_inbox, por "from"),
+// así cualquier llamador que no toque este parámetro queda protegido igual.
+// Solo las excepciones ya identificadas (recordatorio de cita, confirmación
+// de reserva/visita, aviso urgente al equipo, respuesta manual del CRM, el
+// resumen diario interno al propio equipo) deben pasar allowProactive:true
+// explícitamente, en su propio call site.
+export type EmailOutboundAuthz = { allowProactive?: boolean; lastInboundAt?: number | null; reason?: string };
+
+// Fecha (ms epoch) del último correo real registrado como ENTRANTE de esta
+// dirección, o null si no consta ninguno. Usa received_at (internalDate de
+// Gmail) cuando está, igual que el resto de la barrera -- nunca created_at
+// (cuándo lo procesó el sistema).
+function lastInboundEmailAt(address: string): number | null {
+  const key = address.trim().toLowerCase();
+  if (!key) return null;
+  let ultimo = 0;
+  for (const m of readCollection<InboxItem>("email_inbox")) {
+    if (m.from.trim().toLowerCase() !== key) continue;
+    const t = new Date(m.received_at ?? m.created_at ?? 0).getTime();
+    if (Number.isFinite(t) && t > ultimo) ultimo = t;
+  }
+  return ultimo > 0 ? ultimo : null;
+}
+
 // Comprueba que el dominio del destinatario admite correo real antes de
 // intentar un envío (26/10/2026, "estan saliendo muchos errores de
 // correos" -- rebote real confirmado por Eliud: "Tu mensaje no se ha
@@ -237,7 +288,43 @@ export async function deliverEmail(
   subject: string,
   body: string,
   thread?: { threadId: string; inReplyTo: string },
+  authz: EmailOutboundAuthz = {},
 ): Promise<EmailDelivery> {
+  // Defensa en profundidad (18/11/2026, Fase 2D): mismo criterio que
+  // sendWhatsappText ya aplica para WhatsApp desde el 17/11/2026 -- el
+  // chequeo 1 de la barrera central (evento entrante real + antigüedad) vive
+  // AQUÍ, dentro del punto de entrada real al proveedor (Gmail), para que
+  // ningún call site -- presente o futuro -- pueda mandar un correo
+  // proactivo sin pasar por él, aunque se le olvide comprobarlo por su
+  // cuenta. Antes de este cambio, deliverEmail no aplicaba ningún chequeo:
+  // los 7 call sites reales dependían por completo de que cada uno decidiera
+  // bien si debía llamar o no (p. ej. checkStaleFollowups en scheduler.ts,
+  // función ya desactivada en código pero que seguía llamando a deliverEmail
+  // sin ninguna barrera si alguien la reactivaba).
+  const lastInboundAt = authz.lastInboundAt !== undefined ? authz.lastInboundAt : lastInboundEmailAt(to);
+  const auth = authorizeOutboundMessage({
+    phone: to,
+    channel: "email",
+    lastInboundAt,
+    reason: authz.reason ?? "deliverEmail_default",
+    allowProactive: authz.allowProactive,
+  });
+  if (!auth.ok) {
+    const outboxBlocked = readCollection<Outbox>("email_outbox");
+    outboxBlocked.push({
+      id: crypto.randomUUID(),
+      to,
+      subject,
+      body,
+      status: "failed",
+      thread_id: thread?.threadId,
+      error: `bloqueado_outbound_guard:${auth.motivo}`,
+      created_at: new Date().toISOString(),
+    });
+    writeCollection("email_outbox", outboxBlocked.slice(-500));
+    return { status: "failed", error: `bloqueado_outbound_guard:${auth.motivo}` };
+  }
+
   let delivery: EmailDelivery = { status: "queued" };
   if (isGoogleConnected()) {
     if (!(await hasMailServer(to))) {
@@ -367,7 +454,49 @@ async function contactLeadViaWhatsapp(
     return { outcome: "duplicado_primer_contacto" };
   }
   const firstContact = { leadId: leadRes.data?.id ?? waPhone, phone: waPhone, name: contact.name, vehicle: vehicleLabel || null, portal };
-  const reply = buildFirstContactText(firstContact);
+
+  // FIX REAL del vector confirmado (17/11/2026): antes de ofrecer ver/
+  // reservar el coche, comprobar si de verdad sigue disponible en nuestro
+  // propio estado (vehicle-state.ts), no en lo que diga el anuncio del
+  // portal (puede seguir "vivo" ahí aunque ya esté vendido por dentro).
+  const catalogMatch = findCatalogVehicleByMakeModel(contact.make, contact.model);
+  const officialStatus = catalogMatch ? getOfficialStatus(catalogMatch.id) : null;
+  const vehicleConfirmedUnavailable = catalogMatch === null || officialStatus === "SOLD" || officialStatus === "RESERVED";
+  const reply = vehicleConfirmedUnavailable ? buildUnavailableFirstContactText(firstContact) : buildFirstContactText(firstContact);
+
+  // Barrera central de outbound-guard.ts: el único evento entrante real que
+  // autoriza este primer contacto es el propio aviso del portal -- su fecha
+  // real es received_at (internalDate de Gmail), NUNCA la fecha en la que
+  // el sistema lo procesó (puede ser un reproceso de un correo antiguo de
+  // la cola, o un backlog). Punto 1 de la investigación: el bloque JSON de
+  // Coches.net no trae ningún campo de fecha propio del evento -- esta es
+  // la única fecha real disponible.
+  const inboundAtMs = email.receivedAt ? new Date(email.receivedAt).getTime() : null;
+  const auth = authorizeOutboundMessage({
+    phone: waPhone,
+    channel: "whatsapp",
+    lastInboundAt: Number.isFinite(inboundAtMs) ? inboundAtMs : null,
+    reason: `contactLeadViaWhatsapp:${portal}`,
+  });
+  if (!auth.ok) {
+    recordInbox(email, "bloqueado_por_antiguedad", { portal, draftNote: `No se envía (${auth.motivo}) -- aviso demasiado antiguo o reprocesado. Texto que se habría enviado:\n${reply}` });
+    await marcarProcesado(email, "bloqueado_por_antiguedad");
+    // Regla explícita del dueño (18/11/2026, Fase 2D): "cuando no pueda
+    // verificarse la legitimidad de un primer contacto automático, bloquear
+    // el envío y crear una tarea para revisión humana" -- no basta con
+    // loguear y olvidar. Coches.net no manda fecha propia del evento (solo
+    // receivedAt de Gmail, ver CLAUDE.md), así que esto cubre tanto un aviso
+    // genuinamente viejo como uno cuya legitimidad simplemente no se puede
+    // confirmar con certeza.
+    createAutoTask({
+      lead_phone: waPhone,
+      type: "contactar_whatsapp",
+      reason: `${portal}: aviso de contacto por WhatsApp sin legitimidad verificable (${auth.motivo}) -- vehículo referenciado: ${vehicleLabel || "sin especificar"}. Decide tú si corresponde escribirle: https://wa.me/${contact.phone}`,
+      source_ref: `bloqueado_antiguedad_${email.messageKey}`,
+      channel: "WHATSAPP",
+    });
+    return { outcome: "bloqueado_por_antiguedad" };
+  }
 
   // PUNTO 10 (09/11/2026): que la plantilla esté aprobada no autoriza a
   // escribir a cualquiera. Si el contacto pidió no recibir mensajes o
@@ -428,8 +557,17 @@ async function contactLeadViaWhatsapp(
   // plantilla del todo y caía directo al aviso de "escribir a mano", aunque
   // la plantilla habría funcionado igual con un texto genérico. Ya no exige
   // vehicleLabel -- usa un texto genérico cuando no hay uno real.
-  if (await isContactoInicialTemplateApproved()) {
-    const templateSent = await sendZernioWhatsappVehicleContactTemplate(waPhone, vehicleLabel || "el vehículo que consultaste");
+  // La plantilla de Meta ("contacto_inicial_vehiculo") dice literalmente
+  // "vimos su interés... agendar una visita" -- NUNCA puede usarse como
+  // respaldo cuando ya sabemos que el vehículo no está disponible, aunque
+  // falle el texto libre de arriba. En ese caso se deriva directo a
+  // revisión humana con el texto honesto ya redactado.
+  if (!vehicleConfirmedUnavailable && (await isContactoInicialTemplateApproved())) {
+    // FASE 2D (18/11/2026): releído contra el catálogo real en el instante
+    // del envío (sendVehicleContactTemplateGuarded), no solo lo calculado
+    // más arriba (vehicleConfirmedUnavailable) -- defensa en profundidad
+    // ante cualquier reproceso/retraso real entre ambos puntos.
+    const templateSent = await sendVehicleContactTemplateGuarded(waPhone, vehicleLabel || "el vehículo que consultaste", catalogMatch?.id ?? null, `contactLeadViaWhatsapp:${portal}`);
     if (templateSent.ok) {
       // La plantilla YA es el primer contacto completo (se presenta, nombra
       // el vehículo e invita a escribir para agendar la visita), así que no

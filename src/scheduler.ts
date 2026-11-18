@@ -11,7 +11,7 @@ import { createAutoTask } from "./tools/tasks.js";
 import { withPersistentLockOrSkip, withPersistentLock, withPersistentLockSync } from "./locks.js";
 import { drainN8nVozOutbox } from "./integrations/n8n.js";
 import { runSeguimientoComercial } from "./chat/followup-comercial.js";
-import { sendClientReminderViaTemplate } from "./integrations/zernio.js";
+import { sendClientReminderTemplateGuarded } from "./outbound-guard.js";
 
 // Automatizaciones internas (Sección 46 del encargo: 09_APPOINTMENT_REMINDER_2H
 // y 21_FOLLOWUP_SEQUENCE). Un único proceso Node ya corre 24/7 (este mismo
@@ -80,7 +80,11 @@ function withinWindow(msUntil: number, hoursBefore: number): boolean {
 async function sendApptReminder(appt: Appointment, message: string): Promise<boolean> {
   if (!appt.lead_phone) return false;
   if (appt.lead_phone.includes("@")) {
-    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+    // Excepción explícita (18/11/2026, outbound-guard.ts): recordatorio de
+    // una cita YA agendada -- el propio sistema (scheduler, no un bot
+    // adivinando interés) sabe que hace falta escribir, sin depender de
+    // ningún correo entrante reciente del cliente.
+    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`, undefined, { allowProactive: true, reason: "recordatorio_cita_agendada" });
     if (result.status !== "sent") {
       console.warn(`[scheduler] recordatorio por correo falló de verdad para ${appt.id} (${appt.lead_phone}):`, result.error);
       raiseAlert({
@@ -91,7 +95,11 @@ async function sendApptReminder(appt: Appointment, message: string): Promise<boo
     }
     return result.status === "sent";
   }
-  const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
+  // Excepción explícita (17/11/2026, outbound-guard.ts): recordatorio de una
+  // cita YA agendada por el propio sistema -- nunca debe quedar bloqueado
+  // por falta de un mensaje entrante reciente, el propio registro de la
+  // cita ya es la autorización real.
+  const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message, allowProactive: true, outboundReason: "recordatorio_cita_agendada" });
   if (result.status === "ok") return true;
   // FALLO REAL detectado (11/11/2026, "siempre que haya una visita o
   // reserva ojo con eso"): el texto libre falla siempre que el cliente
@@ -100,7 +108,10 @@ async function sendApptReminder(appt: Appointment, message: string): Promise<boo
   // notifyTeam() antes de la plantilla de aviso interno. Mismo respaldo:
   // plantilla aprobada por Meta con nombre/fecha/hora como variables.
   const nombre = (readCollection<{ phone: string | null; name: string | null }>("leads", []).find((l) => l.phone === appt.lead_phone)?.name) || "cliente";
-  const templateResult = await sendClientReminderViaTemplate(appt.lead_phone, nombre, appt.requested_date ?? "", appt.requested_time ?? "");
+  // FASE 2D (18/11/2026): releída de la cita en el instante del envío --
+  // solo se manda el recordatorio de respaldo si la cita SIGUE activa (no
+  // cancelada, no histórica) ahora mismo, no la que trae `appt` en memoria.
+  const templateResult = await sendClientReminderTemplateGuarded(appt.lead_phone, nombre, appt.requested_date ?? "", appt.requested_time ?? "", appt.id, `recordatorio_cita:${appt.id}`);
   if (templateResult.ok) return true;
   const motivo = result.conflicts?.[0] ?? result.error_code ?? "fallo real desconocido";
   console.warn(`[scheduler] recordatorio por WhatsApp falló de verdad para ${appt.id} (${appt.lead_phone}): ${motivo}; plantilla también falló: ${templateResult.error}`);
@@ -246,9 +257,13 @@ async function checkDailyTeamKeepalive() {
   ];
   for (const member of team) {
     try {
+      // Excepción explícita: aviso interno al propio equipo (Ramón/José),
+      // nunca a un cliente -- no debe depender de ningún evento entrante.
       const result = await sendWhatsapp({
         lead_phone: member.phone,
         message: `Buenas tardes, ${member.name}. Todo bien por hoy -- si puedes, respóndeme aunque sea con un 👍 para que no se te cierre el WhatsApp con el sistema. ¡Buen final de día!`,
+        allowProactive: true,
+        outboundReason: "keepalive_diario_equipo",
       });
       console.log(`[scheduler] keepalive de fin de día a ${member.name}: ${result.data?.delivery_status ?? "sin respuesta"}`);
     } catch (err) {

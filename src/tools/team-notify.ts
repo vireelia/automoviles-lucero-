@@ -17,7 +17,7 @@ import { readCollection, appendToCollection, mutateCollectionSync } from "../sto
 import { getBusinessConfig } from "../data/business-config.js";
 import { raiseAlert, type AlertKind } from "../alerts/alerts.js";
 import { sendWhatsappText } from "../integrations/whatsapp.js";
-import { sendTeamAlertViaTemplate } from "../integrations/zernio.js";
+import { sendTeamAlertTemplateGuarded } from "../outbound-guard.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { callUrgentAlert } from "../integrations/twilio-voice.js";
 
@@ -129,8 +129,17 @@ async function notifyTeam(kind: AlertKind, whatsappText: string, leadPhone: stri
       // mismo texto que ya se iba a mandar; solo si la plantilla aún no
       // existe o no está aprobada se intenta el texto libre de siempre
       // (que sí puede funcionar si por casualidad hay una ventana abierta).
-      const templateResult = await sendTeamAlertViaTemplate(member.phone, whatsappText);
-      const result = templateResult.ok ? templateResult : await sendWhatsappText(member.phone, whatsappText);
+      // Excepción explícita (17/11/2026, outbound-guard.ts): aviso al propio
+      // equipo (Ramón/José), nunca a un cliente -- no debe depender de
+      // ningún evento entrante de ellos.
+      // FASE 2D (18/11/2026): isAuthorizedTeamPhone comprueba, en el
+      // instante del envío, que el destinatario es de verdad uno de los
+      // teléfonos del equipo configurados ahora mismo -- nunca se confía
+      // solo en que el llamador construya `recipients` a partir de la
+      // config (defensa en profundidad, mismo criterio que outbound-guard
+      // aplica en el resto de este archivo).
+      const templateResult = await sendTeamAlertTemplateGuarded(member.phone, whatsappText, `notifyTeam_${kind}`);
+      const result = templateResult.ok ? templateResult : await sendWhatsappText(member.phone, whatsappText, { allowProactive: true, reason: `notifyTeam_${kind}` });
       whatsappOk = result.ok;
       appendToCollection("team_notifications", {
         id: crypto.randomUUID(),

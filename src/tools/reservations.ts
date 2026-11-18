@@ -12,7 +12,8 @@ import { deliverEmail } from "../email/agent.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
-import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
+import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
+import { sendVehicleContactTemplateGuardedForReservation } from "../outbound-guard.js";
 
 function vehicleLabel(vehicleId: string): string {
   const v = currentVehicles().find((x) => x.id === vehicleId);
@@ -30,24 +31,36 @@ function vehicleLabel(vehicleId: string): string {
 // rechaza el envío, devuelve {status:"denied"} con éxito HTTP normal. Esta
 // función solo capturaba excepciones reales, así que una reserva podía
 // quedar "confirmada" sin que el cliente hubiera recibido nunca el aviso.
-async function sendReservationConfirmedMessage(contact: string | null, vehicleId: string): Promise<boolean> {
+async function sendReservationConfirmedMessage(contact: string | null, vehicleId: string, reservationId: string): Promise<boolean> {
   if (!contact) return false;
   const message = renderTemplate(getMessageTemplate("reserva_confirmada"), { vehiculo: vehicleLabel(vehicleId) });
   try {
     if (contact.includes("@")) {
       if (!isGoogleConnected()) return false;
-      const result = await deliverEmail(contact, "Reserva confirmada -- Automóviles Lucero", message);
+      // Excepción explícita (18/11/2026, outbound-guard.ts, mismo criterio que
+      // la rama de WhatsApp más abajo): confirmación de una reserva REAL ya
+      // registrada (señal pagada/comprometida), nunca bloqueada por falta de
+      // un correo entrante reciente.
+      const result = await deliverEmail(contact, "Reserva confirmada -- Automóviles Lucero", message, undefined, { allowProactive: true, reason: "confirmacion_reserva_real" });
       return result.status === "sent";
     }
-    const result = await sendWhatsapp({ lead_phone: contact, message });
+    // Excepción explícita (17/11/2026, outbound-guard.ts): esto es la
+    // confirmación de una reserva REAL ya registrada (señal pagada/
+    // comprometida) -- nunca debe bloquearse por falta de un mensaje
+    // entrante reciente.
+    const result = await sendWhatsapp({ lead_phone: contact, message, allowProactive: true, outboundReason: "confirmacion_reserva_real" });
     if (result.status === "ok") return true;
     // FALLO REAL detectado (04/11/2026, "pero la plantilla no estaba
     // activa?" -- mismo fallo que en appointments.ts, sendWhatsapp nunca
     // cae en la plantilla aprobada como respaldo).
     if (!(await isContactoInicialTemplateApproved())) return false;
-    const templateSent = await sendZernioWhatsappVehicleContactTemplate(contact, vehicleLabel(vehicleId));
+    // FASE 2D (18/11/2026): releída de la reserva en el instante del envío
+    // -- solo se abre la conversación con la plantilla si la reserva SIGUE
+    // confirmada ahora mismo (verifyReservationConfirmedNow), no la que
+    // había en memoria al llamar a esta función.
+    const templateSent = await sendVehicleContactTemplateGuardedForReservation(contact, vehicleLabel(vehicleId), reservationId, "confirmacion_reserva_real");
     if (!templateSent.ok) return false;
-    const retrySent = await sendWhatsapp({ lead_phone: contact, message });
+    const retrySent = await sendWhatsapp({ lead_phone: contact, message, allowProactive: true, outboundReason: "confirmacion_reserva_real" });
     return retrySent.status === "ok";
   } catch (err) {
     console.error("[reservations] no se pudo enviar la confirmación de reserva al cliente:", err instanceof Error ? err.message : err);
@@ -84,6 +97,37 @@ function readReservations() {
 }
 
 async function createReservationPending_sinBloqueo(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
+  // Fase 2B (17/11/2026, auditoría de las 8 reservas reales que apuntaban a
+  // vehicle_id inexistentes): getOfficialStatus NUNCA basta por sí sola para
+  // decidir si se puede reservar -- un vehicle_id inventado, o huérfano tras
+  // una reimportación de Dealcar que le cambió el id, también devuelve
+  // "AVAILABLE" por defecto (es justo el fallo que causó esas 8 reservas).
+  // Antes de nada, se exige que el vehicle_id exista DE VERDAD en el
+  // catálogo actual real (currentVehicles(), no vehicle_state). Si
+  // currentVehicles() falla (feed roto, archivo corrupto, lo que sea), se
+  // falla CERRADO -- nunca se trata un catálogo no consultable como
+  // disponibilidad confirmada.
+  let catalogVehicle;
+  try {
+    catalogVehicle = currentVehicles().find((v) => v.id === args.vehicle_id);
+  } catch (err) {
+    console.error("[reservations] no se pudo consultar el catálogo actual, se rechaza la reserva por seguridad:", err instanceof Error ? err.message : err);
+    return envelope({
+      status: "denied",
+      error_code: "catalog_unavailable",
+      data: { vehicle_id: args.vehicle_id },
+      source: "catálogo actual (currentVehicles).",
+    });
+  }
+  if (!catalogVehicle) {
+    return envelope({
+      status: "denied",
+      error_code: "vehicle_not_found_in_catalog",
+      data: { vehicle_id: args.vehicle_id },
+      source: "catálogo actual (currentVehicles) -- este vehicle_id no existe en el inventario real vigente. Puede haber sido reimportado con otro id, vendido y retirado, o ser un id inventado -- en ningún caso se trata como disponible.",
+    });
+  }
+
   const currentStatus = getOfficialStatus(args.vehicle_id);
   if (currentStatus === "RESERVED" || currentStatus === "SOLD") {
     return envelope({
@@ -175,10 +219,61 @@ function submitPaymentReceipt_sinBloqueo(args: { reservation_id: string; note?: 
 // validación"). Se exponen por una ruta administrativa separada, protegida
 // por un token simple, para que Ramón/José/el equipo las use manualmente --
 // no están en la lista de tools que se declaran a Retell.
+// Estados de partida válidos para confirmar una reserva. Igual que
+// submitPaymentReceipt_sinBloqueo exige "pending_payment", confirmar exige
+// que siga en uno de los dos estados "vivos" previos a confirmed -- nunca
+// se fuerza desde confirmed/expired/cancelled.
+const CONFIRMABLE_FROM: ReadonlySet<Reservation["status"]> = new Set(["pending_payment", "pending_verification"]);
+
+// Trazabilidad de cada intento de confirmación (BUG 1, 18/11/2026, Fase 2C
+// autorizada por el cliente: "dos confirmaciones casi simultáneas del mismo
+// vehículo pueden dejar DOS reservas confirmed para el mismo coche").
+// confirmReservation_sinBloqueo nunca comprobaba el estado ACTUAL (leído de
+// disco en el instante de escribir, dentro del mismo lock) antes de forzar
+// "confirmed" -- dos llamadas casi simultáneas (misma reserva, dos clics, o
+// dos reservas del mismo vehículo) podían pisarse. Se registra tanto el
+// éxito como el rechazo, mismo patrón que outbound-guard.ts (appendToCollection
+// a una colección simple, nunca se inventa una tabla nueva de verdad).
+function registrarIntentoConfirmacion(input: { reservation_id: string; verified_by: string; result: "confirmed" | "rejected"; motivo?: string; estado_actual?: string }): void {
+  try {
+    appendToCollection("reservation_confirm_attempts", {
+      id: crypto.randomUUID(),
+      reservation_id: input.reservation_id,
+      verified_by: input.verified_by,
+      result: input.result,
+      motivo: input.motivo ?? null,
+      estado_actual: input.estado_actual ?? null,
+      created_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("[reservations] no se pudo registrar el intento de confirmación:", err instanceof Error ? err.message : err);
+  }
+}
+
 async function confirmReservation_sinBloqueo(args: { reservation_id: string; verified_by: string }) {
+  // Leído DE NUEVO aquí, dentro del mismo lock ya tomado por el wrapper
+  // exportado (withPersistentLock "col_reservations") -- nunca se confía en
+  // un estado capturado antes de entrar al lock, que pudo cambiar entre que
+  // se leyó para decidir llamar a esta función y el instante de escribir.
   const reservations = readReservations();
   const reservation = reservations.find((r) => r.id === args.reservation_id);
   if (!reservation) return envelope({ status: "not_found", error_code: "reservation_not_found" });
+
+  if (!CONFIRMABLE_FROM.has(reservation.status)) {
+    registrarIntentoConfirmacion({
+      reservation_id: args.reservation_id,
+      verified_by: args.verified_by,
+      result: "rejected",
+      motivo: "estado_actual_no_confirmable",
+      estado_actual: reservation.status,
+    });
+    return envelope({
+      status: "denied",
+      error_code: "reservation_already_resolved",
+      data: reservation,
+      source: "registro interno -- esta reserva ya no estaba en un estado confirmable (posible doble confirmación casi simultánea, o ya resuelta antes).",
+    });
+  }
 
   reservation.status = "confirmed";
   reservation.verified_by = args.verified_by;
@@ -189,15 +284,16 @@ async function confirmReservation_sinBloqueo(args: { reservation_id: string; ver
   // canceladas automáticamente, nunca se confirman dos para el mismo coche.
   const superseded: string[] = [];
   for (const other of reservations) {
-    if (other.id !== reservation.id && other.vehicle_id === reservation.vehicle_id && (other.status === "pending_payment" || other.status === "pending_verification")) {
+    if (other.id !== reservation.id && other.vehicle_id === reservation.vehicle_id && CONFIRMABLE_FROM.has(other.status)) {
       other.status = "cancelled";
       superseded.push(other.id);
     }
   }
 
   writeCollection("reservations", reservations);
+  registrarIntentoConfirmacion({ reservation_id: args.reservation_id, verified_by: args.verified_by, result: "confirmed" });
   setOfficialStatus(reservation.vehicle_id, "RESERVED", reservation.id);
-  const entregado = await sendReservationConfirmedMessage(reservation.lead_phone, reservation.vehicle_id);
+  const entregado = await sendReservationConfirmedMessage(reservation.lead_phone, reservation.vehicle_id, reservation.id);
   if (!entregado) {
     raiseAlert({
       kind: "gestion_portal",

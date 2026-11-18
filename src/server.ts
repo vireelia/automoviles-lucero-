@@ -41,7 +41,7 @@ import {
   getClientReminderTemplateId,
 } from "./integrations/zernio.js";
 import { notifyVisitScheduled, team } from "./tools/team-notify.js";
-import { sendTeamAlertViaTemplate } from "./integrations/zernio.js";
+import { sendTeamAlertTemplateGuarded, sendVehicleContactTemplateGuarded } from "./outbound-guard.js";
 import { currentVehicles } from "./data/vehicles-current.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
@@ -52,7 +52,8 @@ import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured, shrinkForStorage } from "./chat/agent.js";
 import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
 import { withPersistentLockOrSkip } from "./locks.js";
-import { createAutoTask } from "./tools/tasks.js";
+import { enqueueWhatsappBatchMessage, startWhatsappBatchPoller, combineBatchText, claimBatchOnce, type BatchItem } from "./chat/whatsapp-batch.js";
+import { createAutoTask, listTasks, completeTask } from "./tools/tasks.js";
 
 // Reintento de respuestas pendientes por fallo de la IA, con las mismas
 // protecciones que el mensaje entrante (agente/chat pausado, modo prueba).
@@ -382,6 +383,20 @@ app.get("/admin/diagnostico_wallapop", requireAdminToken, (_req, res) => {
     .filter((l) => (l.notes ?? "").includes("Wallapop"))
     .map((l) => ({ phone: l.phone, name: l.name, vehicle_interest: l.vehicle_interest, created_at: l.created_at }));
   res.json({ status: "ok", total: wallapop.length, leads: wallapop });
+});
+
+// MIGRACIÓN REAL (12/11/2026, "las incidencias para qué cojones son si no
+// se resuelven" -- 5.792 tareas "revisar_handoff" pendientes acumuladas
+// porque atender la incidencia en Incidencias nunca completaba su tarea
+// gemela, arreglado ahora de cara al futuro en crm/app.ts). Esta ruta
+// limpia el backlog YA acumulado: completa la tarea gemela de toda
+// incidencia que YA esté marcada como atendida (status "done") de verdad,
+// sin tocar las que siguen de verdad pendientes.
+app.post("/admin/tasks/completar_gemelas_de_handoffs_atendidos", requireAdminToken, (_req, res) => {
+  const handoffsAtendidosIds = new Set(readCollection<{ id: string; status: string }>("handoffs").filter((h) => h.status === "done").map((h) => h.id));
+  const tareasACompletar = listTasks().filter((t) => t.type === "revisar_handoff" && t.status === "pendiente" && t.source_ref && handoffsAtendidosIds.has(t.source_ref));
+  for (const t of tareasACompletar) completeTask(t.id, "migracion-admin");
+  res.json({ status: "ok", completadas: tareasACompletar.length });
 });
 
 app.get("/admin/diagnostico_tareas", requireAdminToken, (_req, res) => {
@@ -724,7 +739,7 @@ app.post("/admin/test_avisar_citas_de_hoy", requireAdminToken, route(async (a: {
     const vehicleStr = vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.version}` : (appt.vehicle_id ?? "sin vehículo indicado");
     const when = appt.requested_date && appt.requested_time ? `${appt.requested_date} a las ${appt.requested_time}` : appt.requested_date || "fecha por confirmar";
     const texto = `[PRUEBA -- iría a Ramón/José] 📅 Nueva visita -- ${contact} -- ${vehicleStr} -- ${when}`;
-    const r = await sendTeamAlertViaTemplate(testPhone, texto);
+    const r = await sendTeamAlertTemplateGuarded(testPhone, texto, "test_avisar_citas_de_hoy");
     resultados.push({ lead_phone: appt.lead_phone, texto, ok: r.ok, error: r.ok ? null : r.error });
   }
   return { ok: true, fecha: hoy, enviadas_a_prueba: resultados };
@@ -747,7 +762,7 @@ app.get("/admin/zernio/estado_real_entrega", requireAdminToken, async (req, res)
 app.post("/admin/aviso_equipo_texto_libre", requireAdminToken, route(async (a: { texto: string }) => {
   const resultados: unknown[] = [];
   for (const member of team()) {
-    const r = await sendTeamAlertViaTemplate(member.phone, a.texto);
+    const r = await sendTeamAlertTemplateGuarded(member.phone, a.texto, "aviso_equipo_texto_libre");
     resultados.push({ to: member.name, ok: r.ok, error: r.ok ? null : r.error });
   }
   return { ok: true, resultados };
@@ -833,7 +848,10 @@ app.post(
     if (a.approved && a.approved.length > 0) {
       const report: Array<Record<string, unknown>> = [];
       for (const item of a.approved) {
-        const sent = await sendWhatsappText(item.phone, item.text);
+        // Excepción explícita (17/11/2026, outbound-guard.ts): ruta admin
+        // (requireAdminToken) con texto exacto ya revisado a mano -- es la
+        // propia revisión humana la autorización real, no debe bloquearse.
+        const sent = await sendWhatsappText(item.phone, item.text, { allowProactive: true, reason: "admin_process_whatsapp_backlog_aprobado" });
         report.push({ phone: item.phone, respuesta: item.text, enviado: sent.ok, error_envio: sent.ok ? null : sent.error });
       }
       return { status: "ok", modo: "envio_aprobado", report };
@@ -926,11 +944,19 @@ app.post(
       // falta, se abre primero con la plantilla real ya aprobada (mismo
       // camino real que usa email/agent.ts), y solo entonces se manda el
       // texto aprobado.
+      // NOTA honesta (18/11/2026, Fase 2D): esta ruta queda sin pasar por
+      // sendVehicleContactTemplateGuarded a propósito -- a.vehicle_label es
+      // texto libre de un admin autenticado replayando un caso concreto ya
+      // revisado a mano (requireAdminToken), no hay vehicle_id real que
+      // releer contra el catálogo. El riesgo que el encargo pide cerrar es
+      // el envío AUTOMÁTICO sin revisión humana, que no es este caso.
       if (!findWhatsappConversation(phone) && a.vehicle_label) {
         const templateSent = await sendZernioWhatsappVehicleContactTemplate(phone, a.vehicle_label);
         if (!templateSent.ok) return { status: "ok", enviado: false, error_envio: `no se pudo abrir la conversación: ${templateSent.error}` };
       }
-      const sent = await sendWhatsappText(phone, a.send_text);
+      // Excepción explícita (17/11/2026, outbound-guard.ts): ruta admin
+      // (requireAdminToken), replay manual de un caso concreto ya revisado.
+      const sent = await sendWhatsappText(phone, a.send_text, { allowProactive: true, reason: "admin_replay_single_whatsapp" });
       return { status: "ok", enviado: sent.ok, respuesta: a.send_text, error_envio: sent.ok ? null : sent.error };
     }
     if (!a.user_text) return { status: "error", error: "falta_user_text_o_send_text" };
@@ -1041,6 +1067,35 @@ app.post("/admin/delete_gestion_portal_whatsapp_pendientes", requireAdminToken, 
 app.get("/debug/reservations", requireAdminToken, debugSlice("reservations", 50));
 app.get("/debug/leads", requireAdminToken, debugSlice("leads", 200));
 app.get("/debug/appointments", requireAdminToken, debugSlice("appointments", 100));
+
+// FASE 2D (18/11/2026, encargo autorizado por escrito "exclusivamente en
+// desarrollo"): tres rutas de SOLO LECTURA (GET, mismo requireAdminToken y
+// mismo patrón debugLimit/debugSlice ya usado arriba) para auditar los
+// bloqueos/autorizaciones de outbound-guard.ts, los lotes de WhatsApp
+// descartados por antigüedad (whatsapp-batch.ts) y los intentos de
+// confirmación de reserva (reservations.ts). Ninguna de las tres acepta
+// otro método ni llama a ninguna función de envío/reprocesamiento --
+// léelas de nuevo tú mismo antes de dar esto por cerrado.
+// Filtro opcional ?phone=... (coincidencia exacta sobre el campo phone,
+// cuando la colección lo tiene) además del ?limit=N/all ya estándar.
+function debugSliceFiltrablePorTelefono<T extends { phone?: string | null; lead_phone?: string | null }>(collection: string, def: number, max = 500) {
+  return (req: express.Request, res: express.Response) => {
+    const limit = debugLimit(req, def, max);
+    const phone = typeof req.query.phone === "string" ? req.query.phone.trim() : "";
+    let all = readCollection<T>(collection);
+    if (phone) {
+      all = all.filter((row) => row.phone === phone || row.lead_phone === phone);
+    }
+    res.json(Number.isFinite(limit) ? all.slice(-limit) : all);
+  };
+}
+app.get("/debug/outbound_guard_blocks", requireAdminToken, debugSliceFiltrablePorTelefono("outbound_guard_blocks", 100));
+app.get("/debug/whatsapp_batch_discarded", requireAdminToken, debugSliceFiltrablePorTelefono("whatsapp_batch_discarded", 50));
+app.get("/debug/reservation_confirm_attempts", requireAdminToken, (req, res) => {
+  const limit = debugLimit(req, 100, 500);
+  const all = readCollection<{ reservation_id: string; verified_by: string; result: string; created_at: string }>("reservation_confirm_attempts");
+  res.json(Number.isFinite(limit) ? all.slice(-limit) : all);
+});
 
 app.get("/debug/crm_users", requireAdminToken, (_req, res) => {
   res.json(listUsers().map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, created_at: u.created_at })));
@@ -1208,7 +1263,10 @@ app.post("/admin/send_appointment_reminder_now", requireAdminToken, async (req, 
   }
   const message = `Recordatorio: hoy tienes una cita en Automóviles Lucero a las ${appt.requested_time}.`;
   if (appt.lead_phone.includes("@")) {
-    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`);
+    // Excepción explícita (18/11/2026, outbound-guard.ts): mismo recordatorio
+    // de cita ya agendada que el scheduler automático, disparado a mano por
+    // el equipo desde una ruta admin -- no un envío proactivo adivinado.
+    const result = await deliverEmail(appt.lead_phone, "Recordatorio de tu visita -- Automóviles Lucero", `${message}\n\nAutomóviles Lucero`, undefined, { allowProactive: true, reason: "recordatorio_cita_agendada_manual_admin" });
     res.json({ enviado: result.status === "sent", detalle: result });
   } else {
     const result = await sendWhatsapp({ lead_phone: appt.lead_phone, message });
@@ -1506,6 +1564,68 @@ app.post("/channels/whatsapp/inbound", requireAdminToken, async (req, res) => {
 // Guardamos el conversationId del remitente para poder responder después
 // (whatsapp.ts/zernio.ts lo necesita: en WhatsApp solo se puede enviar texto
 // libre dentro de una conversación ya abierta).
+// Handler real del lote agrupado (17/11/2026, corrección del fallo de
+// "7 fotos -> 7 respuestas"): llamado por el sondeo de whatsapp-batch.ts
+// como máximo una vez por lote (batchId), con TODOS los mensajes/fotos que
+// llegaron dentro de la misma ventana de silencio ya combinados en orden.
+// Un único try/catch envuelve todo -- cualquier fallo (IA, envío) se
+// registra y deriva a revisión humana (enqueuePendingReply/whatsapp_errors),
+// nunca se inventa una respuesta ni se reintenta en bucle sin límite (eso
+// ya lo gestiona el backoff con tope de drainPendingReplies).
+async function handleWhatsappZernioBatch(phone: string, items: BatchItem[], batchId: string): Promise<void> {
+  const combinedText = combineBatchText(items);
+  // Nota de tardanza real (PUNTO del encargo de 23/10/2026): se calcula
+  // sobre el mensaje MÁS ANTIGUO del lote, el peor caso real de espera.
+  const sentAts = items.map((it) => (it.sentAt ? new Date(it.sentAt).getTime() : NaN)).filter((t) => Number.isFinite(t));
+  const oldestSentAtMs = sentAts.length > 0 ? Math.min(...sentAts) : NaN;
+  const delayHours = Number.isFinite(oldestSentAtMs) ? (Date.now() - oldestSentAtMs) / 3600000 : 0;
+  const realDelayNote =
+    delayHours >= 1
+      ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
+      : undefined;
+
+  let result: { reply: string; tool_runs: number; ai_failed: boolean };
+  try {
+    result = await handleChatMessage(phone, combinedText, "WHATSAPP", phone, realDelayNote);
+  } catch (err) {
+    // El propio handleChatMessage ya captura casi todo internamente y
+    // devuelve ai_failed en vez de lanzar -- pero si algo imprevisto se
+    // escapa, el mismo criterio: nunca inventar una respuesta, derivar.
+    console.error(`[wa-batch] fallo real procesando el lote ${batchId} de ${phone}:`, err instanceof Error ? err.message : err);
+    if (await claimBatchOnce(batchId)) enqueuePendingReply("WHATSAPP", phone, combinedText, err instanceof Error ? err.message : String(err));
+    return;
+  }
+
+  // Guarda de una sola respuesta por lote (PUNTO 8): si el proceso se
+  // reinició justo después de obtener `result` pero antes de enviarlo, el
+  // sondeo reintenta este mismo `inflight` -- claimBatchOnce asegura que
+  // solo la primera vez de verdad manda algo al cliente o lo encola.
+  if (!(await claimBatchOnce(batchId))) return;
+
+  if (result.ai_failed) {
+    enqueuePendingReply("WHATSAPP", phone, combinedText);
+    return;
+  }
+  const sent = await sendWhatsappText(phone, result.reply);
+  if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta del lote:", sent.error);
+  try {
+    const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
+    const ids = new Set(items.map((it) => it.whatsappInboxId));
+    let changed = false;
+    for (const rec of inbox) {
+      if (!ids.has(rec.id)) continue;
+      rec.reply_text = result.reply;
+      rec.delivered = sent.ok;
+      rec.answered = true;
+      rec.answered_by = "ia";
+      changed = true;
+    }
+    if (changed) writeCollection("whatsapp_inbox", inbox);
+  } catch (err) {
+    console.error("[zernio-whatsapp] no se pudo actualizar el registro del CRM tras el lote:", err instanceof Error ? err.message : err);
+  }
+}
+
 const MAX_ZERNIO_WHATSAPP_PROCESSED_KEPT = 500;
 app.post("/webhooks/zernio-whatsapp", async (req, res) => {
   const raw = (req as express.Request & { rawBody?: string }).rawBody ?? "";
@@ -1651,8 +1771,6 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     // mensaje real del cliente es de hace horas de verdad (sentAt real,
     // nunca inventado), que Carolina lo sepa y se disculpe por la tardanza
     // en vez de responder como si acabara de llegar.
-    const sentAtMs = typeof body.message?.sentAt === "string" ? new Date(body.message.sentAt).getTime() : NaN;
-    const delayHours = Number.isFinite(sentAtMs) ? (Date.now() - sentAtMs) / 3600000 : 0;
     // Barrera de activación (10/11/2026): este es el canal real de entrada
     // de WhatsApp (Zernio) -- mira la fecha REAL del mensaje (sentAt),
     // nunca la de llegada al servidor. Un mensaje reenviado o un backlog
@@ -1666,30 +1784,26 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
       });
       return;
     }
-    const realDelayNote =
-      delayHours >= 1
-        ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
-        : undefined;
-    const result = await handleChatMessage(phone, text.trim().slice(0, 2000), "WHATSAPP", phone, realDelayNote);
-    if (result.ai_failed) {
-      enqueuePendingReply("WHATSAPP", phone, text.trim().slice(0, 2000));
-      return;
-    }
-    const sent = await sendWhatsappText(phone, result.reply);
-    if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta:", sent.error);
-    try {
-      const inbox = readCollection<WhatsappInboxRecord>("whatsapp_inbox");
-      const rec = inbox.find((m) => m.id === whatsappInboxId);
-      if (rec) {
-        rec.reply_text = result.reply;
-        rec.delivered = sent.ok;
-        rec.answered = true;
-        rec.answered_by = "ia";
-        writeCollection("whatsapp_inbox", inbox);
-      }
-    } catch (err) {
-      console.error("[zernio-whatsapp] no se pudo actualizar el registro del CRM:", err instanceof Error ? err.message : err);
-    }
+    // FALLO REAL detectado en auditoría (17/11/2026, "7 fotos seguidas -> 7
+    // respuestas de Carolina"): antes esto llamaba a handleChatMessage AQUÍ,
+    // una vez por cada mensaje/foto entrante -- un envío de varias fotos
+    // generaba una respuesta real por foto. Ahora el mensaje solo se encola
+    // en la cola de agrupación (src/chat/whatsapp-batch.ts); el sondeo de esa
+    // cola es quien llama UNA sola vez a handleChatMessage por lote, cuando
+    // pasan 8s (configurable) sin que llegue nada nuevo de este mismo
+    // teléfono. La dedup por eventId de arriba (claimOnce) sigue intacta.
+    await enqueueWhatsappBatchMessage(phone, {
+      eventId,
+      whatsappInboxId,
+      text: text.trim().slice(0, 2000),
+      // media_type depende del tipo de ADJUNTO real (para que combineBatchText
+      // sepa marcarlo como "[imagen N]"/"[nota de voz N]"), nunca de si la
+      // descarga tuvo éxito -- media_path sí depende de la descarga, solo
+      // sirve para mostrar el archivo en el CRM.
+      ...(mediaAttachment ? { media_type: audioAttachment ? ("audio" as const) : ("image" as const) } : {}),
+      ...(mediaPath ? { media_path: mediaPath } : {}),
+      sentAt: typeof body.message?.sentAt === "string" ? body.message.sentAt : undefined,
+    });
   } catch (err) {
     // Pedido real (03/11/2026, "como podemos poner avisos en el sistema,
     // para cuando haya algún error"): este catch solo hacía console.error
@@ -1897,4 +2011,5 @@ app.listen(port, () => {
   startScheduler();
   startEmailPoller();
   startDailySummary();
+  startWhatsappBatchPoller(handleWhatsappZernioBatch);
 });

@@ -111,13 +111,28 @@ async function runRetryBatch(job: WhatsappRetryJob, alerts: Alert[]): Promise<vo
           continue;
         }
         const texto = extractRealDraftText(alert.draft_note);
+        // NOTA honesta (18/11/2026, Fase 2D): este lote solo corre cuando un
+        // admin autenticado lo dispara a mano (POST /admin/retry_...,
+        // requireAdminToken) sobre alertas reales ya existentes -- no hay
+        // vehicle_id en Alert para releer contra el catálogo (queda como
+        // riesgo restante documentado: si ese vehículo concreto se vendió
+        // entre que se generó la alerta y este reintento manual, el texto
+        // genérico "el vehículo que consultaste" no lo refleja). El riesgo
+        // que el encargo pide cerrar es el envío AUTOMÁTICO sin revisión
+        // humana -- este es un reintento explícito pedido por el equipo.
         const templateSent = await sendZernioWhatsappVehicleContactTemplate(phone, "el vehículo que consultaste");
         if (!templateSent.ok) {
           job.fallidos++;
           job.fallos.push({ lead_phone: phone, name: alert.name, error: explainWhatsappSendError(templateSent.error) });
           saveJob(job);
         } else {
-          const textSent = texto ? await sendWhatsappText(phone, texto) : { ok: false as const, error: "draft_note_vacio" };
+          // Excepción explícita (17/11/2026, outbound-guard.ts): reintento
+          // disparado a mano por el dueño/admin sobre alertas reales ya
+          // registradas (petición explícita del propio pedido de portal),
+          // no es un bot adivinando interés -- no debe bloquearse.
+          const textSent = texto
+            ? await sendWhatsappText(phone, texto, { allowProactive: true, reason: "whatsapp_retry_backlog_admin" })
+            : { ok: false as const, error: "draft_note_vacio" };
           if (textSent.ok) {
             markAlertDone(alert.id);
             job.enviados++;

@@ -10,7 +10,8 @@ import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
-import { isContactoInicialTemplateApproved, sendZernioWhatsappVehicleContactTemplate } from "../integrations/zernio.js";
+import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
+import { sendVehicleContactTemplateGuardedForAppointment } from "../outbound-guard.js";
 
 function now() {
   return new Date().toISOString();
@@ -81,13 +82,16 @@ function formatVisitDate(dateStr: string): string {
 // cuando en realidad nunca le llegó nada -- una confirmación falsa. Ahora
 // devuelve si de verdad se entregó, para que el llamador pueda avisar al
 // equipo si no.
-async function sendVisitConfirmationMessage(contact: string | undefined, vehicleId: string | undefined, dateStr: string, timeStr: string): Promise<boolean> {
+async function sendVisitConfirmationMessage(contact: string | undefined, vehicleId: string | undefined, dateStr: string, timeStr: string, appointmentId: string): Promise<boolean> {
   if (!contact) return false;
   const message = `Hola, le escribe Automóviles Lucero. Su visita para ver ${vehicleLabel(vehicleId)} queda confirmada para el ${formatVisitDate(dateStr)} a las ${timeStr}. Le esperamos.`;
   try {
     if (contact.includes("@")) {
       if (!isGoogleConnected()) return false;
-      const result = await deliverEmail(contact, "Visita confirmada -- Automóviles Lucero", message);
+      // Excepción explícita (18/11/2026, outbound-guard.ts): confirmación de
+      // una visita YA registrada -- señal real del propio sistema, no un
+      // contacto proactivo adivinado.
+      const result = await deliverEmail(contact, "Visita confirmada -- Automóviles Lucero", message, undefined, { allowProactive: true, reason: "confirmacion_visita_real" });
       return result.status === "sent";
     }
     const result = await sendWhatsapp({ lead_phone: contact, message });
@@ -99,7 +103,10 @@ async function sendVisitConfirmationMessage(contact: string | undefined, vehicle
     // (caso normal: la IA ya cerró la conversación antes de la cita),
     // esto fallaba siempre aunque la plantilla sí esté aprobada.
     if (!(await isContactoInicialTemplateApproved())) return false;
-    const templateSent = await sendZernioWhatsappVehicleContactTemplate(contact, vehicleLabel(vehicleId));
+    // FASE 2D (18/11/2026): releída de la cita en el instante del envío --
+    // solo se abre con la plantilla si la cita SIGUE activa (no cancelada,
+    // no histórica) ahora mismo, no la que había en memoria al llamar.
+    const templateSent = await sendVehicleContactTemplateGuardedForAppointment(contact, vehicleLabel(vehicleId), appointmentId, "confirmacion_visita_real");
     if (!templateSent.ok) return false;
     const retrySent = await sendWhatsapp({ lead_phone: contact, message });
     return retrySent.status === "ok";
@@ -194,7 +201,7 @@ export async function createAppointment(args: {
     // un hecho todavía -- esas quedan en una tarea interna (ver el else),
     // así que no se pierde ninguna, solo deja de sonar el aviso.
     await notifyVisitScheduled({ lead_phone: args.lead_phone ?? null, vehicle_id: args.vehicle_id, requested_date: args.requested_date, requested_time: args.requested_time, channel: args.channel ?? null });
-    const entregado = await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!);
+    const entregado = await sendVisitConfirmationMessage(args.lead_phone, args.vehicle_id, args.requested_date!, args.requested_time!, appointment.id);
     if (!entregado) {
       raiseAlert({
         kind: "gestion_portal",
