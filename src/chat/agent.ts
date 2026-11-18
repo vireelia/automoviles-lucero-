@@ -7,6 +7,7 @@ import { getBusinessConfig } from "../data/business-config.js";
 import { businessInfo } from "../data/business-info.js";
 import { conversationStage, maxUserTurnsFor, esComercial, type Stage } from "./conversion.js";
 import { withPersistentLock, markOncePerWindow } from "../locks.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 // Agente de chat propio (fuera de Retell). Usa el mismo prompt (núcleo
 // común + addendum de chat) y las mismas 26 herramientas que el agente de
@@ -158,17 +159,29 @@ function apiKeyForChannel(channel: Channel): string | undefined {
 // "10-20 € mensuales" -- este es el tope de UN SOLO día, deliberadamente
 // amplio para no cortar un día real ajetreado, solo un descontrol real).
 const DAILY_BUDGET_EUR = Number(process.env.LUCERO_DAILY_LLM_BUDGET_EUR ?? 15);
+// Tope mensual, mismo criterio que el diario (05/11/2026) pero a más largo
+// plazo -- añadido en la auditoría de control de coste de OpenAI
+// (18/11/2026, "LUCERO -- CONTROL CRÍTICO DEL CONSUMO OPENAI"). Desactivado
+// por defecto (0) a propósito: el tope diario ya existe y ya protege contra
+// un descontrol agudo en un solo día; este es un segundo cinturón para un
+// goteo sostenido varios días, y requiere que el negocio decida un número
+// real antes de activarlo -- no se inventa aquí un valor mensual "seguro".
+// IMPORTANTE: esto es un límite de la APLICACIÓN (sólo decide si Lucero
+// sigue llamando a OpenAI), nunca un sustituto de los límites de
+// facturación reales configurados en la cuenta de OpenAI -- seguir
+// configurando esos límites ahí es responsabilidad aparte, no sustituible
+// por esta variable.
+const MONTHLY_BUDGET_EUR = Number(process.env.LUCERO_MONTHLY_LLM_BUDGET_EUR ?? 0);
 const PRECIO_INPUT_POR_1M = 0.4;
 const PRECIO_CACHED_POR_1M = 0.1;
 const PRECIO_OUTPUT_POR_1M = 1.6;
 
-function estimatedSpendTodayEur(): number {
+function estimatedSpendEur(prefix: string): number {
   try {
     const log = readCollection<LlmUsage & { at: string }>("llm_usage_logs");
-    const today = new Date().toISOString().slice(0, 10);
     let total = 0;
     for (const r of log) {
-      if (!r.at.startsWith(today)) continue;
+      if (!r.at.startsWith(prefix)) continue;
       const sinCache = Math.max(0, r.prompt_tokens - r.cached_tokens);
       total += (sinCache / 1_000_000) * PRECIO_INPUT_POR_1M + (r.cached_tokens / 1_000_000) * PRECIO_CACHED_POR_1M + (r.completion_tokens / 1_000_000) * PRECIO_OUTPUT_POR_1M;
     }
@@ -178,33 +191,94 @@ function estimatedSpendTodayEur(): number {
   }
 }
 
+function estimatedSpendTodayEur(): number {
+  return estimatedSpendEur(new Date().toISOString().slice(0, 10));
+}
+
+function estimatedSpendThisMonthEur(): number {
+  return estimatedSpendEur(new Date().toISOString().slice(0, 7));
+}
+
 export class DailyBudgetExceeded extends Error {
   constructor() {
     super("daily_llm_budget_exceeded");
   }
 }
 
+export class MonthlyBudgetExceeded extends Error {
+  constructor() {
+    super("monthly_llm_budget_exceeded");
+  }
+}
+
+export class ConcurrencyLimitExceeded extends Error {
+  constructor() {
+    super("llm_concurrency_limit_exceeded");
+  }
+}
+
+// Límite de concurrencia global (mismo encargo, punto "límite de
+// concurrencia global" + escenario real "50 clientes escribiendo a la
+// vez"): a diferencia del Studio (studio/jobs.ts, MAX_CONCURRENT), el chat
+// nunca tuvo un tope -- cada mensaje entrante dispara su propia llamada
+// sin límite de cuántas corren a la vez. No es solo coste: 50 llamadas
+// reales simultáneas a OpenAI desde un proceso pequeño es justo el patrón
+// que dispara rate-limits reales (429) en cadena. Por defecto 20 (holgado
+// para el tráfico real de hoy, muy por debajo de lo que dispararía un
+// problema real de rate-limit) -- configurable sin tocar código.
+// Por defecto 50: cubre holgadamente el escenario real más exigente que
+// el propio negocio describió como tráfico NORMAL ("50 clientes
+// escribiendo simultáneamente"), para no derivar al equipo ni una sola
+// conversación legítima en ese caso -- el corte real solo debería llegar
+// muy por encima de eso (p. ej. un bucle real o un ataque), nunca en un
+// pico de tráfico normal de un concesionario de este tamaño.
+const MAX_CONCURRENT_LLM_CALLS = Number(process.env.LUCERO_MAX_CONCURRENT_LLM_CALLS ?? 50);
+let activeLlmCalls = 0;
+
+// Alertas reales (mismo raiseAlert que el resto del negocio) cuando se
+// dispara un corte de coste/concurrencia -- antes el tope diario cortaba
+// en silencio (solo console.error vía el catch de arriba). raiseAlert ya
+// deduplica por (kind, reason) durante unas horas, así que 50 llamadas
+// cortadas a la vez generan una sola alerta real, no 50.
+function alertaCorteLlm(reason: string): void {
+  raiseAlert({ kind: "fallo_tecnico", reason });
+}
+
 async function callLlm(messages: ChatMessage[], channel: Channel, forceText = false, model: string = MODEL): Promise<{ message: ChatMessage; usage: LlmUsage | null }> {
   if (DAILY_BUDGET_EUR > 0 && estimatedSpendTodayEur() >= DAILY_BUDGET_EUR) {
+    alertaCorteLlm(`Tope diario de gasto de IA alcanzado (${DAILY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo en vez de gastar de más hoy.`);
     throw new DailyBudgetExceeded();
+  }
+  if (MONTHLY_BUDGET_EUR > 0 && estimatedSpendThisMonthEur() >= MONTHLY_BUDGET_EUR) {
+    alertaCorteLlm(`Tope mensual de gasto de IA alcanzado (${MONTHLY_BUDGET_EUR} €) -- los mensajes nuevos se derivan al equipo hasta el mes que viene o hasta que se amplíe el tope.`);
+    throw new MonthlyBudgetExceeded();
+  }
+  if (activeLlmCalls >= MAX_CONCURRENT_LLM_CALLS) {
+    alertaCorteLlm(`Demasiadas conversaciones de IA a la vez (límite ${MAX_CONCURRENT_LLM_CALLS}) -- algunos mensajes se derivan al equipo en vez de arriesgar un bloqueo real por rate-limit del proveedor.`);
+    throw new ConcurrencyLimitExceeded();
   }
   const apiKey = apiKeyForChannel(channel);
   if (!apiKey) throw new LlmNotConfigured();
-  const body: Record<string, unknown> = { model, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
-  const res = await fetch(`${BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`llm_http_${res.status}`);
-  const data = (await res.json()) as {
-    choices: { message: ChatMessage }[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
-  };
-  const usage = data.usage
-    ? { prompt_tokens: data.usage.prompt_tokens ?? 0, completion_tokens: data.usage.completion_tokens ?? 0, cached_tokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0 }
-    : null;
-  return { message: data.choices[0].message, usage };
+  activeLlmCalls++;
+  try {
+    const body: Record<string, unknown> = { model, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`llm_http_${res.status}`);
+    const data = (await res.json()) as {
+      choices: { message: ChatMessage }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+    };
+    const usage = data.usage
+      ? { prompt_tokens: data.usage.prompt_tokens ?? 0, completion_tokens: data.usage.completion_tokens ?? 0, cached_tokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0 }
+      : null;
+    return { message: data.choices[0].message, usage };
+  } finally {
+    activeLlmCalls--;
+  }
 }
 
 function recordLlmUsage(channel: Channel, sessionId: string, usage: LlmUsage): void {
