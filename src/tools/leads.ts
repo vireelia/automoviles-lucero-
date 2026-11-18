@@ -97,12 +97,81 @@ function identityArgsForChannel(channel: "WHATSAPP" | "FACEBOOK" | "EMAIL" | "CH
 // Nunca bloquea si no se puede identificar con certeza al mismo cliente
 // en el otro canal -- "mejor no vincular que fusionar mal" (regla
 // explícita del cliente).
+// Red de seguridad REAL (Fase 3, 18/11/2026, "más allá de los 90s"):
+// a diferencia de checkCrossChannelCollision (capa de conversación,
+// solo para canales que pasan por handleChatMessage), esto se usa
+// directamente en el punto donde se CREAN/CONFIRMAN visitas y reservas
+// -- incluida Miguel/voz, que nunca pasa por la capa de conversación de
+// arriba. Identidad CIERTA únicamente.
+export function isUnderHumanControl(args: { phone?: string | null; email?: string | null }): boolean {
+  const lead = findLeadByIdentity(args);
+  return Boolean(lead?.canal_activo_humano);
+}
+
+// Coordinación con Miguel/voz (Fase 2, 18/11/2026). Auditado antes de
+// construir nada: Retell NUNCA manda un webhook de "llamada iniciada" --
+// el único evento real es /webhooks/retell (call_analyzed/chat_analyzed),
+// que llega DESPUÉS de colgar. Lo que SÍ llega de verdad, en cada
+// petición a /tools/* mientras la llamada está en curso, es
+// `call.from_number` (el teléfono real de quien llama) -- eso es la única
+// señal real de "hay una llamada activa ahora mismo con este teléfono",
+// así que se usa para refrescar esta marca en cada tool real que Miguel
+// llame durante la conversación (ver route() en server.ts).
+//
+// Por diseño, nunca depende solo del webhook de fin (puede no llegar) ni
+// de un cierre explícito: expira sola por TTL si no hay ninguna tool
+// nueva de esa llamada en los últimos 10 minutos -- cubre reinicio del
+// servidor a mitad de llamada, llamadas que terminan sin webhook de fin,
+// y eventos duplicados (claimOnce ya deduplica el webhook en
+// tools/webhooks.ts; aquí no hace falta deduplicar más, refrescar la
+// misma marca dos veces no tiene efecto distinto de refrescarla una).
+const VOICE_CALL_TTL_MS = 10 * 60_000;
+type VoiceActiveCall = { phone: string; last_seen_at: string };
+
+export function markVoiceCallActive(phoneRaw: string): void {
+  try {
+    const phone = normalizePhone(phoneRaw);
+    const calls = readCollection<VoiceActiveCall>("voice_active_calls").filter((c) => c.phone !== phone);
+    calls.push({ phone, last_seen_at: now() });
+    writeCollection("voice_active_calls", calls.slice(-500));
+  } catch {
+    // Nunca debe tumbar una llamada real de voz en curso.
+  }
+}
+
+export function clearVoiceCallActive(phoneRaw: string): void {
+  try {
+    const phone = normalizePhone(phoneRaw);
+    writeCollection("voice_active_calls", readCollection<VoiceActiveCall>("voice_active_calls").filter((c) => c.phone !== phone));
+  } catch {
+    // idem.
+  }
+}
+
+export function isVoiceCallActive(phoneRaw: string): boolean {
+  try {
+    const phone = normalizePhone(phoneRaw);
+    const call = readCollection<VoiceActiveCall>("voice_active_calls").find((c) => c.phone === phone);
+    if (!call) return false;
+    return Date.now() - new Date(call.last_seen_at).getTime() < VOICE_CALL_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 export function checkCrossChannelCollision(channel: "WHATSAPP" | "FACEBOOK" | "EMAIL" | "CHAT", contact: string): { blocked: boolean; reason?: string } {
   if (channel === "CHAT") return { blocked: false }; // el widget web no tiene un canal "hermano" con el que colisionar.
   const lead = findLeadByIdentity(identityArgsForChannel(channel, contact));
   if (!lead) return { blocked: false };
   if (lead.canal_activo_humano) {
     return { blocked: true, reason: `intervención humana activa (${lead.comercial_responsable ?? "equipo"})` };
+  }
+  // Coordinación con Miguel/voz (Fase 2): si hay una llamada real en
+  // curso con este mismo teléfono (identidad cierta), Carolina/Daniel se
+  // suspenden igual que si fuera el otro canal de chat -- nunca se
+  // pierde el mensaje (mismo mecanismo ai_failed -> cola de pendientes).
+  if (lead.phone && isVoiceCallActive(lead.phone)) {
+    return { blocked: true, reason: "Miguel está atendiendo una llamada real con este mismo cliente ahora mismo" };
   }
   const otroCanal = channel === "EMAIL" ? "WHATSAPP" : "EMAIL";
   if (lead.canal_activo_agente === otroCanal && lead.canal_activo_agente_at) {

@@ -10,6 +10,7 @@ import { sendWhatsapp } from "./delivery.js";
 import { isGoogleConnected } from "../integrations/google.js";
 import { deliverEmail } from "../email/agent.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
+import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
@@ -97,6 +98,25 @@ function readReservations() {
 }
 
 async function createReservationPending_sinBloqueo(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
+  // Red de seguridad real (Fase 3, 18/11/2026, "más allá de los 90s"):
+  // protege igual a Miguel/voz (que nunca pasa por la capa de
+  // conversación de chat/agent.ts) que a Carolina/Daniel.
+  if (args.lead_phone && isUnderHumanControl({ phone: args.lead_phone })) {
+    return envelope({
+      status: "denied",
+      error_code: "human_intervention_active",
+      source: "un comercial ya está gestionando a este cliente -- la reserva no se crea sola mientras tanto.",
+    });
+  }
+  // Coordinación con Miguel/voz: nunca bloquea a Miguel reservando dentro
+  // de su propia llamada (args.channel === "VOICE").
+  if (args.lead_phone && args.channel !== "VOICE" && isVoiceCallActive(args.lead_phone)) {
+    return envelope({
+      status: "denied",
+      error_code: "voice_call_active",
+      source: "Miguel está atendiendo una llamada real con este mismo cliente ahora mismo -- la reserva no se crea en paralelo.",
+    });
+  }
   // Fase 2B (17/11/2026, auditoría de las 8 reservas reales que apuntaban a
   // vehicle_id inexistentes): getOfficialStatus NUNCA basta por sí sola para
   // decidir si se puede reservar -- un vehicle_id inventado, o huérfano tras

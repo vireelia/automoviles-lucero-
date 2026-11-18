@@ -47,6 +47,7 @@ import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "./tools/agent-toggle.js";
+import { markVoiceCallActive } from "./tools/leads.js";
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
 import { handleChatMessage, LlmNotConfigured, shrinkForStorage } from "./chat/agent.js";
@@ -154,6 +155,12 @@ function route(fn: (args: any) => unknown) {
     const toolName = req.path.replace(/^\/tools\//, "");
     try {
       const body = req.body ?? {};
+      // Coordinación con voz (Fase 2, 18/11/2026): cada tool real que
+      // Retell llama durante una llamada en curso trae call.from_number --
+      // se usa para refrescar la marca de "llamada activa" (ver
+      // tools/leads.ts), nunca para crear ni vincular ningún lead aquí.
+      const liveCallPhone = body?.call?.from_number;
+      if (typeof liveCallPhone === "string" && liveCallPhone) markVoiceCallActive(liveCallPhone);
       const args = body && typeof body === "object" && "args" in body && body.args && typeof body.args === "object" ? body.args : body;
       const result = await fn(args);
       res.json(result);
@@ -2017,6 +2024,9 @@ app.post("/webhooks/retell", async (req, res) => {
   }
   try {
     forwardVoiceAnalysis(req.body ?? {});
+    // La liberación real de la marca de llamada activa al terminar vive
+    // dentro de handleRetellWebhook (tools/webhooks.ts), no aquí -- así
+    // cualquier llamador real de esa función dispara el mismo efecto.
     res.json(await handleRetellWebhook(req.body ?? {}));
   } catch (err) {
     console.error("[webhook] error:", err);

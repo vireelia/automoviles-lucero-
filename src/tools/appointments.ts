@@ -8,6 +8,7 @@ import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
+import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
 import { markLeadRealIntent } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
@@ -414,20 +415,49 @@ export async function getAppointmentSlots() {
 // teléfono+fecha+hora, se devuelve esa en vez de crear un duplicado.
 export async function createAppointmentWithCalendar(args: Parameters<typeof createAppointment>[0]) {
   return withAppointmentLock(async () => {
-    const existing = readCollection<{ id: string; lead_phone?: string; requested_date?: string; requested_time?: string; status: string }>(
+    // Red de seguridad real (Fase 3, 18/11/2026, "más allá de los 90s"):
+    // esto corre DENTRO del mismo lock real, así que protege igual sea
+    // Carolina, Daniel o Miguel/voz quien llame -- a diferencia de
+    // checkCrossChannelCollision (capa de conversación, Miguel nunca pasa
+    // por ahí), esto es el punto final real donde se persiste el dato.
+    if (args.lead_phone && isUnderHumanControl({ phone: args.lead_phone })) {
+      return envelope({
+        status: "denied",
+        error_code: "human_intervention_active",
+        source: "un comercial ya está gestionando a este cliente -- la visita no se crea sola mientras tanto.",
+      });
+    }
+    // Coordinación con Miguel/voz: solo bloquea si quien llama NO es la
+    // propia llamada activa (si args.channel === "VOICE", es Miguel
+    // creando su propia visita durante SU llamada -- nunca se bloquea a
+    // sí mismo).
+    if (args.lead_phone && args.channel !== "VOICE" && isVoiceCallActive(args.lead_phone)) {
+      return envelope({
+        status: "denied",
+        error_code: "voice_call_active",
+        source: "Miguel está atendiendo una llamada real con este mismo cliente ahora mismo -- la visita no se crea en paralelo.",
+      });
+    }
+    const existing = readCollection<{ id: string; lead_phone?: string; vehicle_id?: string; requested_date?: string; requested_time?: string; status: string }>(
       "appointments",
     ).find(
       (a) =>
         a.status !== "cancelled" &&
         a.lead_phone === args.lead_phone &&
-        a.requested_date === args.requested_date &&
-        a.requested_time === args.requested_time,
+        (
+          (a.requested_date === args.requested_date && a.requested_time === args.requested_time) ||
+          // Mismo cliente + mismo vehículo, visita todavía abierta (sin
+          // fecha exacta coincidente) -- caso real que pide la auditoría:
+          // Miguel ya creó una visita para este vehículo y este cliente,
+          // Carolina no debe crear una segunda aunque proponga otra hora.
+          (Boolean(a.vehicle_id) && a.vehicle_id === args.vehicle_id && (a.status === "requested" || a.status === "confirmed"))
+        ),
     );
     if (existing) {
       return envelope({
         status: "ok",
         data: existing,
-        source: "registro interno (ya existía -- reintento detectado)",
+        source: "registro interno (ya existía una visita abierta para este cliente y vehículo -- reintento o duplicado evitado)",
         conflicts: [],
       });
     }

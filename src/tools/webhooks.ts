@@ -1,4 +1,5 @@
 import { mutateCollection } from "../store.js";
+import { clearVoiceCallActive } from "./leads.js";
 
 // Receptor de webhooks de Retell (call_analyzed / chat_analyzed). Guarda el
 // análisis automático (custom_analysis_data) que configuramos en el agente
@@ -38,6 +39,13 @@ export async function handleRetellWebhook(payload: any) {
   if (event !== "call_analyzed" && event !== "chat_analyzed") {
     return { received: true, ignored: true, event };
   }
+  // Coordinación con voz (Fase 2, 18/11/2026): señal de fin REAL, cuando
+  // llega -- libera la marca de "llamada activa" (tools/leads.ts) sin
+  // esperar al TTL. Aquí mismo (no solo en server.ts) para que cualquier
+  // llamador real de esta función, incluida una prueba directa, dispare
+  // el mismo efecto real.
+  const endedPhone = payload?.call?.from_number;
+  if (typeof endedPhone === "string" && endedPhone) clearVoiceCallActive(endedPhone);
 
   const call = payload.call ?? payload.chat ?? {};
   const analysis = call.call_analysis ?? call.chat_analysis ?? {};
