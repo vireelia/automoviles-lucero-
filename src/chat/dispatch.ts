@@ -3,6 +3,7 @@ import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles } fro
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups } from "../tools/leads.js";
 import { createServiceRequest, createHandoff, createVehicleValuation } from "../tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "../tools/appointments.js";
+import { createReservationPending } from "../tools/reservations.js";
 import { sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, getResponsableContact, saveConversation, createConversationSummary } from "../tools/delivery.js";
 import { requestFinancing } from "../tools/financing.js";
 
@@ -10,7 +11,20 @@ import { requestFinancing } from "../tools/financing.js";
 // así el agente de chat no necesita que las herramientas estén expuestas por HTTP.
 const HANDLERS: Record<string, (args: any) => unknown> = {
   get_business_info: () => getBusinessInfo(),
-  search_vehicle: (a) => searchVehicles(a),
+  // FALLO REAL CRÍTICO detectado en auditoría (18/11/2026): esta clave
+  // estaba en singular ("search_vehicle") pero el prompt (prompt-core.md,
+  // compartido por voz y chat) y Retell (sync-retell.mjs) siempre
+  // llamaron a "search_vehicles" (plural) -- y esa tool ni siquiera
+  // estaba declarada en tool-schemas.json para WhatsApp/correo/chat web,
+  // así que la IA en esos 3 canales JAMÁS pudo buscar vehículos: cada
+  // intento habría devuelto { error_code: "unknown_tool" } si el nombre
+  // llegaba a declararse alguna vez, o ni siquiera habría podido
+  // intentarlo (la API de OpenAI solo permite llamar a tools declaradas).
+  // Mismo fallo exacto que create_reservation_pending, mismo origen: el
+  // chat propio (fuera de Retell) nunca llegó a sincronizar su lista de
+  // tools con la intención real documentada ("herramientas compartidas
+  // por voz y chat", sync-retell.mjs:156).
+  search_vehicles: (a) => searchVehicles(a),
   get_vehicle: (a) => getVehicle(a),
   get_vehicle_status: (a) => getVehicleStatus(a),
   find_similar_vehicles: (a) => findSimilarVehicles(a),
@@ -27,6 +41,19 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   cancel_appointment: (a) => cancelAppointment(a),
   request_financing: (a) => requestFinancing(a),
   create_vehicle_valuation: (a) => createVehicleValuation(a),
+  // FALLO REAL CRÍTICO detectado en auditoría (18/11/2026): prompt-chat.md
+  // instruye explícitamente a Carolina/Daniel a llamar a
+  // create_reservation_pending en cuanto el cliente confirma que quiere
+  // reservar -- pero esta tool nunca estuvo en este mapa (solo existía la
+  // ruta HTTP /tools/create_reservation_pending para Retell/voz). Cada
+  // intento real de esta herramienta desde WhatsApp/correo/chat web
+  // devolvía { status: "error", error_code: "unknown_tool" } en silencio
+  // -- la reserva JAMÁS se creaba de verdad en esos tres canales, solo el
+  // create_handoff (aviso suelto) llegaba al equipo. Coincide exactamente
+  // con el incidente ya documentado el 18/10/2026 ("jamás apareció la
+  // reserva de verdad en el sistema") -- la causa raíz real de ese
+  // incidente era esta, no solo un fallo de seguimiento del prompt.
+  create_reservation_pending: (a) => createReservationPending(a),
   create_service_request: (a) => createServiceRequest(a),
   create_handoff: (a) => createHandoff(a),
   // En el chat el enlace viaja dentro de la respuesta, así que sí se entrega.

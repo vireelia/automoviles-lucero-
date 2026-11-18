@@ -571,5 +571,120 @@
         ]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_vehicles",
+      "description": "Busca vehículos reales del inventario actual por texto libre, marca, modelo, categoría/carrocería, precio, km o combustible. Usa esto siempre que el cliente pregunte por un coche concreto o un tipo de coche -- nunca inventes datos de vehículos sin consultarlo primero.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "max_price_eur": {
+            "type": "number"
+          },
+          "min_price_eur": {
+            "type": "number"
+          },
+          "max_km": {
+            "type": "number"
+          },
+          "fuel": {
+            "type": "string"
+          },
+          "page": {
+            "type": "number"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_vehicle",
+      "description": "Devuelve los datos reales de un vehículo concreto del inventario por su id (precio, km, año, combustible, potencia, garantía, estado).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_vehicle_status",
+      "description": "Comprueba el estado interno real de un vehículo (disponible/reservado/vendido según nuestras propias reservas) y sus defectos conocidos, si los hay. No es el estado en vivo del portal.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_similar_vehicles",
+      "description": "Busca alternativas reales del inventario con precio y km similares al vehículo indicado, cuando ese vehículo no encaja o ya no está disponible.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "vehicle_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicle_id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_reservation_pending",
+      "description": "Inicia una reserva (pending_payment) para un vehículo ya identificado y disponible -- NUNCA confirma el pago. Úsalo cuando el cliente confirme de verdad que quiere reservar un vehículo ya identificado con claridad, después de comprobar disponibilidad real con get_vehicle_status.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "vehicle_id": {
+            "type": "string"
+          },
+          "lead_phone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicle_id"
+        ]
+      }
+    }
   }
 ]
