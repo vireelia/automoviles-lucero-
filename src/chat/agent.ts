@@ -686,8 +686,21 @@ async function handleChatMessageUnlocked(
         `Teléfonos: Ramón ${cfg.ramonPhone} · José ${cfg.josePhone}.`,
         "Todo nuestro catálogo: https://www.coches.net/concesionario/autolunaslagunamadrid/",
       ].join("\n");
+      // FALLO REAL detectado (19/11/2026, caso real sin nombre ni coche en
+      // el aviso -- "sin nombre -- Conversación cortada... revisar si el
+      // cliente sigue necesitando algo"): esta llamada a create_handoff
+      // nunca mandaba lead_phone, aunque `contact` ya está disponible en
+      // este mismo scope (se usa dos líneas más abajo para create_lead) --
+      // createHandoff() SÍ busca el nombre del lead por teléfono, pero sin
+      // el teléfono nunca lo encontraba. Se añade aquí, y se enriquece el
+      // motivo con el vehículo real de interés cuando el lead ya lo tiene
+      // guardado de turnos anteriores -- nunca inventado, solo lo que ya
+      // existe en el lead.
+      const leadParaAviso = readCollection<{ phone: string | null; vehicle_interest?: string | null }>("leads").find((l) => l.phone === contact);
+      const cocheInteres = leadParaAviso?.vehicle_interest;
       await dispatchTool("create_handoff", {
-        reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (estado comercial: ${stage}) -- revisar si el cliente sigue necesitando algo.`,
+        lead_phone: contact,
+        reason: `Conversación cortada al llegar al tope de ${MAX_RESPUESTAS_BREVEDAD} respuestas (estado comercial: ${stage}${cocheInteres ? `, interesado en ${cocheInteres}` : ""}) -- revisar si el cliente sigue necesitando algo.`,
         notes: `Canal ${channel}, sesión ${sessionId}.`,
         urgency: "normal",
         channel,
