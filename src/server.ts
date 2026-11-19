@@ -46,7 +46,7 @@ import { currentVehicles } from "./data/vehicles-current.js";
 import { sendFacebookText, isFacebookConnected, verifyFacebookSignature } from "./integrations/facebook.js";
 import twilioPkg from "twilio";
 import { verifyTwilioSignature } from "./integrations/twilio-signature.js";
-import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "./tools/agent-toggle.js";
+import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappChatPaused, setWhatsappChatPaused } from "./tools/agent-toggle.js";
 import { markVoiceCallActive } from "./tools/leads.js";
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
@@ -686,6 +686,17 @@ app.post("/admin/restore_from_trash", requireAdminToken, (req, res) => {
 app.post("/admin/whatsapp_agent/:enabled", requireAdminToken, (req, res) => {
   setWhatsappZernioAgentEnabled(req.params.enabled === "activar", "admin-token");
   res.json({ status: "ok", whatsapp_agent_enabled: isWhatsappZernioAgentEnabled(), email_auto_send_enabled: isEmailAutoSendEnabled() });
+});
+
+// Mismo interruptor que "Activar envío automático" en /crm/integraciones,
+// sin pasar por sesión -- creado tras confirmar (19/11/2026, vía
+// /debug/agent_toggles) que un intento real de activación desde el CRM
+// nunca llegó a escribir el registro (updated_at se quedó en el 17/11,
+// sin fila nueva), así que la activación de Daniel no puede depender
+// solo de ese camino.
+app.post("/admin/email_agent/:enabled", requireAdminToken, (req, res) => {
+  setEmailAutoSendEnabled(req.params.enabled === "activar", "admin-token");
+  res.json({ status: "ok", email_auto_send_enabled: isEmailAutoSendEnabled() });
 });
 
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
