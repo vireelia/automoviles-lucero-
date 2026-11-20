@@ -78,6 +78,7 @@ setInterval(async () => {
 }, 60_000);
 import { getBusinessConfig } from "./data/business-config.js";
 import { processInboundEmail, deliverEmail } from "./email/agent.js";
+import { filtrarCandidatosSinResponder } from "./email/backlog.js";
 import { startEmailPoller } from "./email/poller.js";
 import { crm } from "./crm/app.js";
 import { bootstrapAdmin, listUsers } from "./crm/auth.js";
@@ -698,6 +699,57 @@ app.post("/admin/email_agent/:enabled", requireAdminToken, (req, res) => {
   setEmailAutoSendEnabled(req.params.enabled === "activar", "admin-token");
   res.json({ status: "ok", email_auto_send_enabled: isEmailAutoSendEnabled() });
 });
+
+// Hueco real descubierto (20/11/2026): el poller normal solo llama a
+// gmailListUnread() ("is:unread in:inbox") cada 30s -- un correo real de
+// cliente que un humano (Ramón/José/Eliud) abrio y leyo en el propio Gmail
+// ANTES de que Daniel lo viera queda invisible para siempre, aunque nunca
+// se haya contestado. Caso real confirmado 20/11/2026: Gmail estuvo
+// desconectado un tiempo sin que nadie se diera cuenta, y mientras tanto
+// alguien abrio a mano varios correos reales en la bandeja.
+//
+// Esto es DELIBERADAMENTE un proceso de dos pasos, nunca "contestar todo
+// solo": 1) listar candidatos reales (solo lectura, sin IA, sin enviar
+// nada) para que un humano los revise, 2) reprocesar EXPLICITAMENTE solo
+// los IDs que el humano confirme, pasando por exactamente el mismo
+// processInboundEmail() de siempre -- mismas protecciones (corte
+// historico, dedup, inventario, presupuesto, pausas), ni una linea nueva
+// de logica de negocio.
+app.get("/admin/email/candidatos_sin_responder", requireAdminToken, route(async () => {
+  const cutoffEnv = process.env.LUCERO_NO_AUTO_BEFORE;
+  const sinceIso = typeof cutoffEnv === "string" && cutoffEnv ? cutoffEnv : "2026-11-19T00:00:00Z";
+  const sinceEpochSeconds = Math.floor(new Date(sinceIso).getTime() / 1000);
+  // Gmail "after:" en query de busqueda acepta epoch en segundos -- sin
+  // "is:unread", a proposito, para que SI encuentre correos ya leidos.
+  const ids = await gmailSearch(`in:inbox after:${sinceEpochSeconds}`, 200);
+  const mensajes = await Promise.all(ids.map(({ id }) => gmailGet(id)));
+  const candidatos = filtrarCandidatosSinResponder(mensajes.map((m) => ({ id: m.id, from: m.from, fromName: m.fromName, subject: m.subject, received_at: m.received_at, text: m.text, automated: m.automated })));
+  return { status: "ok", desde: sinceIso, total_revisados: ids.length, total_candidatos: candidatos.length, candidatos };
+}));
+
+app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {
+  const ids = Array.isArray(a.message_ids) ? a.message_ids.filter((x) => typeof x === "string" && x) : [];
+  if (ids.length === 0) {
+    return { status: "error", error: "message_ids vacio -- se exige una lista explicita, nunca 'todos' por defecto" };
+  }
+  const resultados: Array<{ id: string; outcome: string; error?: string }> = [];
+  for (const id of ids) {
+    const m = await gmailGet(id);
+    const result = await processInboundEmail({
+      messageKey: id,
+      from: m.from,
+      fromName: m.fromName,
+      subject: m.subject,
+      text: m.text,
+      threadId: m.threadId,
+      inReplyTo: m.messageId,
+      automated: m.automated,
+      receivedAt: m.received_at,
+    });
+    resultados.push({ id, outcome: result.outcome, error: result.error });
+  }
+  return { status: "ok", resultados };
+}));
 
 // Da de alta a mano la conversación de Zernio de un número del EQUIPO
 // (Ramón/José), nunca de un cliente -- a diferencia del resto de
