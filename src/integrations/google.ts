@@ -336,6 +336,42 @@ export async function gmailSearch(query: string, maxResults = 5): Promise<{ id: 
   return (data.messages ?? []).map((m: { id: string; threadId: string }) => ({ id: m.id, threadId: m.threadId }));
 }
 
+// Metadatos baratos (20/11/2026, causa real de un 429/403 de cuota en
+// produccion): el endpoint de "candidatos sin responder" listaba hasta 200
+// correos de un rango de fechas y pedia el CUERPO COMPLETO (`format=full`,
+// ~5 unidades cada uno en la API de Gmail) de los 200 a la vez con
+// Promise.all -- eso agotaba "Units per minute per user" de un solo golpe,
+// de forma sostenida (confirmado con varios reintentos reales espaciados
+// minutos). Esta version usa `format=metadata` con solo los headers que
+// hacen falta para filtrar (From/Subject) mas el snippet que Gmail ya
+// incluye gratis en la respuesta -- mucho mas barato, suficiente para
+// decidir que correos son candidatos reales. El cuerpo completo (gmailGet)
+// solo se pide despues, para los pocos que de verdad sobrevivan el filtro.
+export async function gmailGetMetadata(id: string): Promise<GmailMessage> {
+  const m = (await googleFetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+  )) as any;
+  const headers: { name: string; value: string }[] = m.payload?.headers ?? [];
+  const fromRaw = header(headers, "From");
+  const parsedFrom = parseFromHeader(fromRaw);
+  const from = parsedFrom.email;
+  const automated =
+    /no-?reply|mailer-daemon|postmaster|do-?not-?reply/i.test(from) ||
+    Boolean(header(headers, "List-Unsubscribe")) ||
+    /auto/i.test(header(headers, "Auto-Submitted"));
+  return {
+    id: m.id,
+    threadId: m.threadId,
+    from,
+    fromName: parsedFrom.name,
+    subject: header(headers, "Subject"),
+    messageId: "",
+    automated,
+    text: typeof m.snippet === "string" ? m.snippet : "",
+    received_at: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : new Date().toISOString(),
+  };
+}
+
 export async function gmailGet(id: string): Promise<GmailMessage> {
   const m = (await googleFetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`)) as any;
   const headers: { name: string; value: string }[] = m.payload?.headers ?? [];

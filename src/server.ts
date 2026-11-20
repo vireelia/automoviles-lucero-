@@ -18,7 +18,7 @@ import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection, claimOnce, mutateCollectionSync, writeShard, readAllShards, deleteShard, readShard } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
-import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailListUnread, calendarBusy, calendarListEvents } from "./integrations/google.js";
+import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailGetMetadata, gmailListUnread, calendarBusy, calendarListEvents, type GmailMessage } from "./integrations/google.js";
 import { extractWallapopContact } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import { esAnteriorAlCorte } from "./deploy-safety.js";
@@ -722,7 +722,13 @@ app.get("/admin/email/candidatos_sin_responder", requireAdminToken, route(async 
   // Gmail "after:" en query de busqueda acepta epoch en segundos -- sin
   // "is:unread", a proposito, para que SI encuentre correos ya leidos.
   const ids = await gmailSearch(`in:inbox after:${sinceEpochSeconds}`, 200);
-  const mensajes = await Promise.all(ids.map(({ id }) => gmailGet(id)));
+  // Secuencial y con solo metadatos (20/11/2026, fallo real de cuota: pedir
+  // el cuerpo completo de hasta 200 correos a la vez con Promise.all agotaba
+  // "Units per minute per user" de Gmail de un solo golpe). Uno a uno, barato.
+  const mensajes: GmailMessage[] = [];
+  for (const { id } of ids) {
+    mensajes.push(await gmailGetMetadata(id));
+  }
   const candidatos = filtrarCandidatosSinResponder(mensajes.map((m) => ({ id: m.id, from: m.from, fromName: m.fromName, subject: m.subject, received_at: m.received_at, text: m.text, automated: m.automated })));
   return { status: "ok", desde: sinceIso, total_revisados: ids.length, total_candidatos: candidatos.length, candidatos };
 }));
