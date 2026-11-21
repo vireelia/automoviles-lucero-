@@ -2212,10 +2212,10 @@ crm.get("/", (req, res) => {
   const financingToday = readCollection<{ lead_phone?: string; status: string }>("financing_requests");
   const newLeadsToday = allLeads
     .filter((l) => !l.archived && !l.marketing_list && l.created_at && madridDateOnly(l.created_at) === today)
-    .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   const todayAppts = appts.filter((a) => a.requested_date === today).sort((x, y) => (x.requested_time ?? "").localeCompare(y.requested_time ?? ""));
   const upcoming = appts.filter((a) => (a.requested_date ?? "") > today).sort((x, y) => (x.requested_date ?? "").localeCompare(y.requested_date ?? "")).slice(0, 6);
-  const toAttend = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification");
+  const toAttend = reservations.filter((r) => r.status === "pending_payment" || r.status === "pending_verification").sort((a, b) => b.created_at.localeCompare(a.created_at));
   // Indicadores nuevos del rediseño visual (25/10/2026): solo con datos ya
   // reales, nada inventado. "Activa" usa el mismo criterio que ya existe
   // en el resto del CRM para una reserva viva (:416/:1132). "Sin
