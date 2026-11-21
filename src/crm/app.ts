@@ -2043,7 +2043,11 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   // caducada, el plazo ya no significa nada. Aviso en rojo si quedan 3
   // días o menos, para que el equipo no se entere tarde.
   const daysLeft = r.expires_at ? Math.ceil((new Date(r.expires_at).getTime() - Date.now()) / 86400000) : null;
-  const expiring = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification");
+  // Petición real (21/11/2026): desde que confirmar fija un plazo nuevo de
+  // verdad (coche apartado 15 días tras el pago, no antes), el aviso de
+  // caducidad también tiene que verse en "confirmed" -- antes solo se
+  // mostraba mientras estaba pendiente de pagar/verificar.
+  const expiring = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification" || r.status === "confirmed");
   const contactPart = r.lead_phone && !r.lead_phone.includes("@") ? r.lead_phone : lead?.email ?? null;
   const flags = [
     !lead?.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",

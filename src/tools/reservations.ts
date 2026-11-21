@@ -323,9 +323,17 @@ async function confirmReservation_sinBloqueo(args: { reservation_id: string; ver
     });
   }
 
+  // FALLO REAL detectado (21/11/2026, "los 15 días de reservado es una vez
+  // el cliente haya pagado el dinero, no cuando dice reserva y ya"):
+  // expires_at se fijaba al CREAR la reserva (pending_payment) y nunca se
+  // tocaba al confirmar -- así que el plazo real de 15 días de
+  // apartado del coche se consumía ya desde que el cliente solo pedía
+  // reservar, antes incluso de pagar. Ahora el plazo de verdad (que el
+  // coche queda apartado) empieza aquí, al confirmar el pago real.
   reservation.status = "confirmed";
   reservation.verified_by = args.verified_by;
   reservation.verified_at = now().toISOString();
+  reservation.expires_at = new Date(now().getTime() + businessInfo.reservation.duration_days * 24 * 60 * 60 * 1000).toISOString();
 
   // Si había otras reservas pendientes en paralelo para el mismo vehículo
   // (Sección 27: puede pasar), esta es la que ganó -- las demás quedan
