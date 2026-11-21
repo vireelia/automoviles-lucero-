@@ -1628,8 +1628,8 @@ window.toggleAllMsgs = function (master, name) {
   }
   check();
   checkBadges();
-  setInterval(check, 5000);
-  setInterval(checkBadges, 5000);
+  setInterval(check, 2000);
+  setInterval(checkBadges, 2000);
 })();
 </script>
 </body></html>`;
