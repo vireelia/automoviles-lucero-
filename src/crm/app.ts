@@ -3927,10 +3927,10 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
         // venga con el teléfono, tenía que abrir una pestaña para que yo le
         // pueda hablar por WhatsApp directamente"): cuando Wallapop SÍ trae
         // un teléfono real en el aviso (la mayoría de sus avisos lo traen,
-        // es obligatorio para el comprador), se ofrece un botón directo a
-        // WhatsApp -- sigue siendo un envío manual, con un clic del equipo,
-        // nunca un mensaje automático nuevo.
-        ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí.</b> Tiene teléfono real: puedes hablarle directo por WhatsApp.<br>${waButton(phone, `Hola${contact?.name ? ` ${contact.name}` : ""}, le escribe Automóviles Lucero por tu interés en${vehicleLabel ? ` el ${vehicleLabel}` : " el vehículo"}.`)}</div>`
+        // es obligatorio para el comprador), se avisa de que hay que
+        // hablarle por WhatsApp -- el botón en sí vive en contactarEquipoBtn
+        // (siempre visible más abajo, ver esa constante), para no duplicarlo.
+        ? `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí.</b> Tiene teléfono real: puedes hablarle directo por WhatsApp (botón más abajo).</div>`
         : `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>Wallapop no deja responder desde aquí</b> y no se pudo extraer un teléfono real de este aviso -- hay que abrir Wallapop y contestarle desde ahí.<br><a class="btn" style="margin-top:8px;display:inline-block" target="_blank" rel="noopener" href="${esc(businessInfo.profiles.wallapop)}">Abrir Wallapop ↗</a></div>`;
   // Indicador real (21/11/2026, "que ponga un botón donde diga Carolina ya
   // le contactó... y si no le contactó, que salga también"): mismo dato
@@ -3940,10 +3940,19 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
   const contactoPill = yaContactado
     ? `<span class="btn ok" style="pointer-events:none;display:inline-block;margin-top:6px">✓ Carolina ya le contactó</span>`
     : `<span class="btn" style="pointer-events:none;display:inline-block;margin-top:6px;background:var(--urgent-bg,#fdecea);color:var(--urgent,#b3261e);border:1px solid var(--urgent,#b3261e)">✕ Carolina no le ha contactado todavía</span>`;
+  // Petición real (21/11/2026, "tampoco está el botón... para que el
+  // equipo también le pueda enviar un mensaje por WhatsApp"): el equipo
+  // necesita poder escribirle siempre a mano, incluso cuando el sistema ya
+  // marca "ya le contactó" (ej. Ramón quiere confirmar la entrega de
+  // verdad, o retomar la conversación) -- nunca debe depender de que el
+  // envío automático haya fallado para tener este botón disponible.
+  const contactarEquipoBtn = phone
+    ? `<div style="margin-top:6px">${waButton(phone, `Hola${contact?.name ? ` ${contact.name}` : ""}, le escribe Automóviles Lucero por tu interés en${vehicleLabel ? ` el ${vehicleLabel}` : " el vehículo"}.`)}</div>`
+    : "";
   const detail = `${contactDetailHeader(lead, contact?.name || "Contacto de Wallapop", phone, null, null)}
 <div class="meta-grid"><div>Portal<b>Wallapop</b></div><div>Recibido<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${statusPill(selected.answered ? "Gestionado" : "Pendiente", selected.answered ? "ok" : "warn")}</b></div></div>
 ${vehicleLabel ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(vehicleLabel)}</b></p>` : ""}
-<div style="margin:8px 0">${contactoPill}</div>
+<div style="margin:8px 0">${contactoPill}${contactarEquipoBtn}</div>
 ${statusBox}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
 ${contact?.inquiry ? `<h3 style="margin-bottom:6px">Mensaje real del cliente</h3><div class="box" style="white-space:pre-wrap">${esc(contact.inquiry)}</div>` : ""}
