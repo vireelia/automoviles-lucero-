@@ -225,6 +225,10 @@
           "lead_phone": {
             "type": "string"
           },
+          "lead_name": {
+            "type": "string",
+            "description": "El nombre del cliente, si lo ha dicho en la conversación. Nunca lo inventes si no te lo ha dicho."
+          },
           "vehicle_id": {
             "type": "string"
           },

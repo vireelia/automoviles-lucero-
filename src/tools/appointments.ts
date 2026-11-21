@@ -9,7 +9,7 @@ import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
-import { markLeadRealIntent } from "./leads.js";
+import { markLeadRealIntent, upsertLead } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
 import { sendVehicleContactTemplateGuardedForAppointment } from "../outbound-guard.js";
@@ -124,6 +124,7 @@ async function sendVisitConfirmationMessage(contact: string | undefined, vehicle
 // negocio ya dijo que no atiende.
 export async function createAppointment(args: {
   lead_phone?: string;
+  lead_name?: string;
   vehicle_id?: string;
   appointment_type?: "visita" | "prueba" | "tasacion" | "reserva_comercial";
   requested_date?: string;
@@ -135,6 +136,14 @@ export async function createAppointment(args: {
 }) {
   const minutes = parseTime(args.requested_time);
   const nonBookingDay = isNonBookingDay(args.requested_date);
+  // FALLO REAL grave detectado (21/11/2026, mismo patrón ya encontrado y
+  // corregido en create_reservation_pending): esta función nunca llamaba a
+  // upsertLead -- una cita real agendada por voz/WhatsApp/correo de un
+  // cliente sin ficha previa se quedaba sin nombre ni datos para siempre,
+  // aunque el cliente lo hubiera dicho en la conversación.
+  if (args.lead_phone) {
+    upsertLead({ phone: args.lead_phone, name: args.lead_name, channel: args.channel });
+  }
 
   if (nonBookingDay) {
     const appointment = {

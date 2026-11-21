@@ -20,6 +20,7 @@ import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { sendTeamAlertTemplateGuarded } from "../outbound-guard.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { callUrgentAlert } from "../integrations/twilio-voice.js";
+import { normalizePhone } from "./leads.js";
 
 // Solo para esto se llama por voz si falla el WhatsApp (22/10/2026, caso
 // real de Ramón: el número de WhatsApp del negocio ES su número personal,
@@ -56,7 +57,14 @@ export function team(): { name: string; phone: string }[] {
 
 function leadName(phone: string | null | undefined): string {
   if (!phone) return "sin nombre";
-  const lead = readCollection<{ phone: string | null; name: string | null }>("leads").find((l) => l.phone === phone);
+  // FALLO REAL detectado (21/11/2026, auditoría completa): upsertLead
+  // SIEMPRE guarda el teléfono normalizado (+34XXXXXXXXX), pero este
+  // archivo comparaba el teléfono crudo tal cual llegaba (p. ej. sin el
+  // "+", como lo manda el webhook de WhatsApp) -- así que un aviso urgente
+  // a Ramón/José podía decir "sin nombre" aunque la ficha del cliente sí
+  // tuviera su nombre real guardado.
+  const normalizado = normalizePhone(phone);
+  const lead = readCollection<{ phone: string | null; name: string | null }>("leads").find((l) => l.phone === normalizado);
   return lead?.name?.trim() || "sin nombre";
 }
 
