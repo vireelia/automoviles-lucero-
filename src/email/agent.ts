@@ -962,11 +962,24 @@ export async function processInboundEmail(
     return { outcome: "tope_diario_alcanzado", reply: body };
   }
 
+  // FALLO REAL grave detectado (21/11/2026, caso real confirmado:
+  // b148c23e-...@contactos.coches.net, "No se pudo enviar" en Gmail):
+  // deliverEmail, sin un lastInboundAt explícito, lo busca él mismo en
+  // email_inbox por dirección -- pero esta misma respuesta automática se
+  // dispara ANTES de que recordInbox() guarde el propio correo que la
+  // autoriza (ver más abajo), así que para una dirección de relé nueva de
+  // un solo uso (Coches.net genera una distinta por cada aviso) la
+  // búsqueda nunca encuentra nada y bloquea SIEMPRE el primer intento.
+  // Se pasa aquí la fecha real de este mismo correo (su propio
+  // receivedAt, nunca inventada) para que se autorice con el evento que
+  // de verdad lo causó, sin depender de un guardado que todavía no ha
+  // ocurrido.
   const delivery = await deliverEmail(
     replyToAddress,
     subject,
     body,
     email.threadId && email.inReplyTo ? { threadId: email.threadId, inReplyTo: email.inReplyTo } : undefined,
+    { lastInboundAt: email.receivedAt ? new Date(email.receivedAt).getTime() : null, reason: `deliverEmail_auto:${portalInfo.portal ?? "directo"}` },
   );
   const status = delivery.status;
   const error = delivery.error;
