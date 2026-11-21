@@ -604,7 +604,11 @@ function situation(l: Lead): string {
     return res.status === "confirmed" ? `Tiene reservado ${car(res.vehicle_id)}` : `Quiere reservar ${car(res.vehicle_id)}: espera el pago de 500 €`;
   }
   if (l.vehicle_interest) return `Pregunta por ${l.vehicle_interest}`;
-  return l.temperature === "HOT" ? "Quiere comprar ya" : "Todavía está informándose";
+  // Petición real (21/11/2026, "tiene que salir... vehículo... siempre"):
+  // antes, sin cita/reserva/vehicle_interest, el texto no mencionaba el
+  // coche en absoluto -- ahora lo dice explícitamente en vez de omitirlo,
+  // sin inventar ningún coche que el cliente no haya mencionado.
+  return `Sin coche de interés todavía -- ${l.temperature === "HOT" ? "quiere comprar ya" : "todavía está informándose"}`;
 }
 const DAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -2050,7 +2054,7 @@ function leadCard(l: Lead, user: CrmUser, phase: LeadPhase, duplicate: Lead | nu
 <div class="lc-head">
 ${sel}
 <div class="avatar" style="background:${avatarBg};color:${avatarFg}">${esc(avatarInitials(displayName))}</div>
-<div class="lc-who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "")}</span></div>
+<div class="lc-who"><b>${esc(displayName)}</b><span>${esc(l.phone || l.email || "Sin teléfono ni correo")}</span></div>
 ${menu}
 </div>
 <div class="lc-vehicle" title="${esc(situation(l))}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16.5h14M6.5 16.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm11 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5 12.5l1.3-4a2 2 0 0 1 1.9-1.4h7.6a2 2 0 0 1 1.9 1.4l1.3 4H5Z"/></svg>${esc(situation(l))}</div>
