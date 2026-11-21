@@ -211,7 +211,7 @@ const AGENT_TOOLS = [
   // de verdad -- solo lo deja en pending_payment, protegiendo la unidad
   // mientras el equipo gestiona el cobro.
   tool("create_reservation_pending", "Inicia una reserva (pending_payment) para un vehículo ya identificado y disponible -- NUNCA confirma el pago. Úsalo SOLO cuando el cliente ya pidió reservar y ni Ramón ni José contestaron la transferencia.", {
-    vehicle_id: S, lead_phone: S,
+    vehicle_id: S, lead_phone: S, lead_name: S,
   }, ["vehicle_id"]),
   tool("request_financing", "Registra una solicitud de financiación y comprueba los criterios orientativos confirmados. Nunca aprueba ni calcula cuota.", { lead_phone: S, vehicle_id: S }),
   tool("create_vehicle_valuation", "Registra una solicitud de tasación/compra de un vehículo que trae el cliente (venta a particular). Nunca tasa automáticamente.", {

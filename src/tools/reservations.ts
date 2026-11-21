@@ -11,7 +11,7 @@ import { isGoogleConnected } from "../integrations/google.js";
 import { deliverEmail } from "../email/agent.js";
 import { getMessageTemplate, renderTemplate } from "../data/message-templates.js";
 import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
-import { markLeadRealIntent } from "./leads.js";
+import { markLeadRealIntent, upsertLead } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
 import { sendVehicleContactTemplateGuardedForReservation } from "../outbound-guard.js";
@@ -97,7 +97,7 @@ function readReservations() {
   return readCollection<Reservation>("reservations", []);
 }
 
-async function createReservationPending_sinBloqueo(args: { vehicle_id: string; lead_phone?: string; channel?: string }) {
+async function createReservationPending_sinBloqueo(args: { vehicle_id: string; lead_phone?: string; lead_name?: string; channel?: string }) {
   // Red de seguridad real (Fase 3, 18/11/2026, "más allá de los 90s"):
   // protege igual a Miguel/voz (que nunca pasa por la capa de
   // conversación de chat/agent.ts) que a Carolina/Daniel.
@@ -193,6 +193,17 @@ async function createReservationPending_sinBloqueo(args: { vehicle_id: string; l
   writeCollection("reservations", reservations);
   setOfficialStatus(args.vehicle_id, "RESERVATION_PENDING", reservation.id);
   markLeadRealIntent(args.lead_phone ?? null); // 03/11/2026: una reserva real es la intención real por excelencia.
+  // FALLO REAL grave detectado (21/11/2026, "no tiene que estar ninguna
+  // ficha sin nombre ni datos"): esta función nunca llamaba a upsertLead --
+  // una reserva creada por voz (Miguel) o por cualquier canal sin que YA
+  // existiera un lead previo por otra vía se quedaba sin ficha alguna en
+  // Clientes, así que la tarjeta de la reserva nunca tenía nombre ni datos
+  // que mostrar, por mucho que el cliente lo hubiera dicho en la llamada.
+  // Se asegura aquí una ficha real como mínimo con el teléfono, y con el
+  // nombre si el agente lo sabe (nunca inventado si no lo pasa).
+  if (args.lead_phone) {
+    upsertLead({ phone: args.lead_phone, name: args.lead_name, channel: args.channel, vehicle_interest: vehicleLabel(args.vehicle_id) });
+  }
   await notifyReservation({ lead_phone: args.lead_phone, vehicle_id: args.vehicle_id, amount_eur: amount, channel: args.channel ?? null });
 
   const conflicts = [

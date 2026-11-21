@@ -2321,9 +2321,12 @@ ${me(res).role === "admin" ? `<form method="post" action="/crm/alertas/${esc(a.i
     : "";
   const todoLinks = (items: { href: string; text: string }[]) =>
     items.slice(0, 8).map((t) => `<a href="${esc(t.href)}"${t.href.startsWith("https://wa.me/") ? ' target="_blank" rel="noopener"' : ""}>→ ${esc(t.text)}</a>`).join("");
+  // Petición real (21/11/2026, "este texto quítalo se ve feo"): la lista
+  // genérica "Lo que tienes que hacer" (→ Atender: ...) se quita de Inicio
+  // -- ese mismo contenido real sigue entero y accesible en
+  // Incidencias/Correos/Seguimiento, solo deja de duplicarse aquí.
   const todoBlock = `${todoConfirmar.length ? `<div class="todo"><h2 style="margin-top:0">Visitas y reservas por confirmar</h2>${todoLinks(todoConfirmar)}</div>` : ""}
-${todoOtros.length ? `<div class="todo"><h2 style="margin-top:0">Lo que tienes que hacer</h2>${todoLinks(todoOtros)}</div>` : ""}
-${todoConfirmar.length === 0 && todoOtros.length === 0 ? `<div class="allok">Todo hecho. No hay nada pendiente.</div>` : ""}`;
+${todoConfirmar.length === 0 ? `<div class="allok">Todo hecho. No hay nada pendiente.</div>` : ""}`;
   const body = `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
 <div><h1 style="margin:0">Hoy</h1><p class="sub" style="margin:0">${esc(d.weekday)} ${esc(d.day)} de ${esc(d.month)}</p></div>
 <a class="btn light noprint" href="/crm/ayuda" style="white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${navIcon("help", 16)}Guía CRM</a>

@@ -758,6 +758,36 @@ app.post("/admin/email/backfill_portal", requireAdminToken, route(async (a: { dr
   return { status: "ok", dry_run: dryRun, total_revisados: inbox.length, total_a_corregir: cambios.length, cambios };
 }));
 
+// Backfill de nombre en reservas sin ficha (21/11/2026, petición real: "no
+// tiene que estar ninguna ficha sin nombre ni datos"): causa real
+// encontrada -- create_reservation_pending nunca llamaba a upsertLead
+// (ya corregido para las reservas nuevas), así que varias reservas reales
+// ya creadas no tienen ninguna ficha en Clientes, nunca por falta de dato:
+// el nombre real SÍ existe (dicho en la llamada de voz), solo nunca se
+// guardó. Esto NUNCA inventa un nombre -- solo lo recupera de
+// call_analyses.custom_analysis_data.customer_name cuando el teléfono
+// coincide exactamente con una llamada real ya analizada. dryRun por
+// defecto, igual que el backfill de portal.
+app.post("/admin/reservas/backfill_nombre_desde_llamadas", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const reservas = readCollection<{ lead_phone?: string | null; status: string }>("reservations").filter((r) => r.status === "pending_payment" || r.status === "pending_verification" || r.status === "confirmed");
+  const leads = readCollection<{ phone?: string }>("leads");
+  const llamadas = readCollection<{ from_number?: string | null; custom_analysis_data?: { customer_name?: string | null } }>("call_analyses");
+  const cambios: Array<{ phone: string; nombre_encontrado: string }> = [];
+  for (const r of reservas) {
+    if (!r.lead_phone || r.lead_phone.includes("@")) continue;
+    const normalizado = normalizePhone(r.lead_phone);
+    const yaTieneFicha = leads.some((l) => l.phone === normalizado);
+    if (yaTieneFicha) continue;
+    const llamada = llamadas.find((c) => c.from_number && normalizePhone(c.from_number) === normalizado && c.custom_analysis_data?.customer_name);
+    const nombre = llamada?.custom_analysis_data?.customer_name;
+    if (!nombre) continue;
+    cambios.push({ phone: r.lead_phone, nombre_encontrado: nombre });
+    if (!dryRun) upsertLead({ phone: r.lead_phone, name: nombre, channel: "VOICE" });
+  }
+  return { status: "ok", dry_run: dryRun, total_reservas_revisadas: reservas.length, total_a_corregir: cambios.length, cambios };
+}));
+
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {
   const ids = Array.isArray(a.message_ids) ? a.message_ids.filter((x) => typeof x === "string" && x) : [];
   if (ids.length === 0) {
