@@ -365,6 +365,18 @@ async function syncVoice(state) {
     // explícita -- PATCH no borra un valor previo si simplemente se deja de
     // enviar el campo, hay que mandarlo a 0 para que deje de aplicarse.
     begin_message_delay_ms: 0,
+    // Incidencia real (21/11/2026, llamada +33610630581): 51:30 min de
+    // llamada donde el interlocutor nunca se entendió (audio ininteligible),
+    // Miguel repitió la misma pregunta una y otra vez sin colgar, gastando
+    // créditos de Retell durante casi una hora. No existía ningún límite de
+    // duración ni de silencio -- se añaden los dos:
+    // - max_call_duration_ms: corte duro a los 10 minutos, tiempo de sobra
+    //   para cualquier consulta real (la mayoría de llamadas normales duran
+    //   unos pocos minutos).
+    // - end_call_after_silence_ms: si no se oye nada (ni Miguel ni el
+    //   cliente) durante 30s seguidos, cuelga solo.
+    max_call_duration_ms: 600000,
+    end_call_after_silence_ms: 30000,
     // responsiveness (0-1): más bajo = Miguel espera más antes de responder,
     // para no cortar a un cliente que se queda pensando a media frase. No
     // confundir con interruption_sensitivity (ese es al revés: si el CLIENTE
