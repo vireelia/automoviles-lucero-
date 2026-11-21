@@ -785,6 +785,17 @@ function mailIconLink(email: string | null | undefined): string {
   if (!email) return "";
   return `<a class="ibtn" href="mailto:${esc(email)}" aria-label="Correo" title="Correo" style="border-color:#c7d4e8;color:#2d5fa8">${ICON_MAIL}</a>`;
 }
+// Botón "Verificar entrega real" reutilizable (21/11/2026, petición real:
+// "cada tarjeta de visita o reserva tiene que estar completa... y un botón
+// para contactar y verificar si es real"): mismo mecanismo ya construido
+// para Wallapop (consulta a Zernio en el momento, nunca el dato guardado),
+// generalizado aquí a cualquier tarjeta con teléfono real -- vale para
+// visitas y reservas de cualquier canal, no solo Wallapop.
+function verificarEntregaIcon(contact: string | null | undefined): string {
+  const num = waNumber(contact);
+  if (!num) return "";
+  return `<span data-verif-phone="${esc(num)}"><button type="button" class="ibtn" title="Verificar entrega real por WhatsApp" onclick="luceroVerificarEntregaIcon(this)" style="border-color:#e0c9a6;color:#92600a">🔍</button></span>`;
+}
 // Petición real del negocio (28/10/2026, "cuando un cliente deje su
 // número que salga una sección de enviar mensaje a whatsapp" en
 // Correo): muchos avisos reales de Coches.net llevan el teléfono del
@@ -1605,6 +1616,32 @@ window.luceroVerificarEntrega = function (btn) {
       btn.textContent = "Verificar entrega real";
     });
 };
+// Misma verificación real de entrega, versión compacta en icono (21/11/2026)
+// para las filas de Visitas/Reservas -- mismo endpoint real, solo que aquí
+// el resultado se muestra en una alerta por falta de sitio en la fila.
+window.luceroVerificarEntregaIcon = function (btn) {
+  var wrap = btn.closest("[data-verif-phone]");
+  var phone = wrap.getAttribute("data-verif-phone");
+  btn.disabled = true;
+  var original = btn.textContent;
+  btn.textContent = "...";
+  fetch("/crm/whatsapp/verificar_entrega.json?phone=" + encodeURIComponent(phone))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      btn.disabled = false;
+      btn.textContent = original;
+      if (!d.ok) { alert("No se pudo comprobar (" + d.error + ")."); return; }
+      if (!d.ultimo_mensaje_saliente) { alert("Zernio no tiene ningún mensaje saliente registrado para este número."); return; }
+      var m = d.ultimo_mensaje_saliente;
+      var estado = m.deliveryStatus === "failed" ? "❌ FALLÓ: WhatsApp no lo entregó" : m.readAt ? "✓✓ Leído por el cliente" : m.deliveredAt ? "✓✓ Entregado al teléfono" : m.deliveryStatus === "sent" ? "✓ Enviado (pendiente de confirmación de entrega)" : "Estado: " + (m.deliveryStatus || "desconocido");
+      alert(estado);
+    })
+    .catch(function () {
+      btn.disabled = false;
+      btn.textContent = original;
+      alert("No se pudo comprobar (fallo de red).");
+    });
+};
 window.toggleAllMsgs = function (master, name) {
   document.querySelectorAll('input[type=checkbox][name="' + name + '"]').forEach(function (cb) {
     cb.checked = master.checked;
@@ -1915,6 +1952,7 @@ function apptCard(a: Appointment): string {
   const veh = appointmentVehicleLabel(a, lead);
   const whatsapp = waIconButton(a.lead_phone, renderTemplate(getMessageTemplate("visita_confirmacion"), { dia_semana: d.weekday, dia: d.day, mes: d.month, hora: a.requested_time ?? "", vehiculo: veh }));
   const mail = mailIconLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
+  const verifBtn = verificarEntregaIcon(a.lead_phone);
   const contactPart = a.lead_phone && !a.lead_phone.includes("@") ? a.lead_phone : lead?.email ?? null;
   const actions = [
     a.status === "requested" ? button("Confirmar", "confirmar", "ok") : "",
@@ -1952,7 +1990,7 @@ ${simpleCheckbox("citas-bulk", a.id)}
 <div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span><span class="lastcontact">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/citas/${esc(a.id)}" style="display:contents">
-<div class="acts">${phoneIconLink(a.lead_phone)}${whatsapp}${mail}${actions}</div>
+<div class="acts">${phoneIconLink(a.lead_phone)}${whatsapp}${mail}${verifBtn}${actions}</div>
 <div class="flags"><span class="tag">Preguntó el ${esc(fmtDate(a.created_at))}${lead?.updated_at && lead.updated_at !== a.created_at ? ` · Último contacto ${esc(fmtDate(lead.updated_at))}` : ""}</span>${flags}</div>
 <div class="edits"><div><label>Otro día</label><input type="date" name="fecha" value="${esc(a.requested_date ?? "")}"></div>
 <div><label>Otra hora</label><input type="time" name="hora" value="${esc(a.requested_time ?? "")}"></div>
@@ -1990,9 +2028,14 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   if ((r.status === "cancelled" || r.status === "expired") && user.role === "admin") {
     actions.push(confirmButton("Eliminar", "eliminar", "danger", `"${veh}" se borra para siempre del registro, no se puede deshacer.`));
   }
+  // Petición real (21/11/2026, "cada tarjeta de visita o reserva tiene que
+  // estar completa... un botón para contactar"): antes el icono de
+  // WhatsApp solo salía con el pago pendiente -- una reserva confirmada o
+  // cancelada se quedaba sin forma rápida de escribir al cliente.
   const whatsapp = r.status === "pending_payment"
     ? waIconButton(r.lead_phone, renderTemplate(getMessageTemplate("reserva_pago"), { vehiculo: veh, importe: String(businessInfo.reservation.amount_eur) }))
-    : "";
+    : waIconButton(r.lead_phone, `Hola${lead?.name ? ` ${lead.name}` : ""}, le escribe Automóviles Lucero sobre tu reserva de ${veh}.`);
+  const verifBtn = verificarEntregaIcon(r.lead_phone);
   const canBulkDelete = (r.status === "cancelled" || r.status === "expired") && user.role === "admin";
   // Caducidad visible (22/10/2026): solo importa mientras la reserva sigue
   // viva (pagada/por verificar) -- una vez confirmada, cancelada o
@@ -2013,7 +2056,7 @@ ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="lastcontact">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/reservas/${esc(r.id)}" style="display:contents">
-<div class="acts">${phoneIconLink(r.lead_phone)}${whatsapp}${mail}${actions.join("")}</div>
+<div class="acts">${phoneIconLink(r.lead_phone)}${whatsapp}${mail}${verifBtn}${actions.join("")}</div>
 <div class="flags"><span class="tag">Preguntó el ${esc(fmtDate(r.created_at))}${lead?.updated_at && lead.updated_at !== r.created_at ? ` · Último contacto ${esc(fmtDate(lead.updated_at))}` : ""}</span>${flags}</div>
 <div class="edits"><div><label>Teléfono del cliente</label><input name="telefono" value="${esc(r.lead_phone ?? "")}"></div>
 <div><label>Importe (€)</label><input type="number" name="importe" value="${r.amount_eur}" min="0"></div>
