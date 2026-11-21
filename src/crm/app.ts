@@ -2267,7 +2267,10 @@ crm.get("/", (req, res) => {
   // de conversación de WhatsApp cortada) queda fuera de Inicio -- sigue
   // registrado y visible en Pendientes, solo deja de ocupar sitio aquí.
   const ALERTAS_INICIO_KINDS: AlertKind[] = ["reserva_pendiente", "visita_agendada", "visita_cancelada", "visita_proxima"];
-  const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind));
+  // Petición real (21/11/2026, "que se organice por fechas, las nuevas de
+  // primero y las viejas de último"): antes salían en el orden en que se
+  // guardaron (más antiguas primero), nunca ordenadas de verdad.
+  const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   // FALLO REAL grave encontrado 12/11/2026 (Inicio sentido como "lento"
   // tras arreglar Agenda): mismo patrón, pintar TODAS las alertas
   // pendientes reales (3.213 en la colección) sin límite. Se recorta a
@@ -2579,7 +2582,7 @@ crm.get("/reservas", async (req, res) => {
   // verdad no tienen ninguna reserva real todavía (ambiguos o sin match
   // único de vehículo -- la función nunca adivina, ver tools/requests.ts).
   const allReservationsForCheck = list<Reservation>("reservations");
-  const interesados = interesHandoffs.filter((h) => !allReservationsForCheck.some((r) => r.lead_phone === h.lead_phone));
+  const interesados = interesHandoffs.filter((h) => !allReservationsForCheck.some((r) => r.lead_phone === h.lead_phone)).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const canalPill = (k: string, label: string) => `<a href="/crm/reservas?c=${k}" class="tag" style="text-decoration:none;${c === k ? "background:var(--accent);color:#fff" : ""}">${label}</a>`;
   const body = `<h1>Reservas</h1>
 <p class="sub">Una reserva aparta un coche con 500 €. Cuando el cliente paga, compruébalo y pulsa "Confirmar la reserva".</p>
