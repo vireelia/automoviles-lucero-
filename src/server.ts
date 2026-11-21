@@ -19,7 +19,7 @@ import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection, claimOnce, mutateCollectionSync, writeShard, readAllShards, deleteShard, readShard } from "./store.js";
 import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailGetMetadata, gmailListUnread, calendarBusy, calendarListEvents, type GmailMessage } from "./integrations/google.js";
-import { extractWallapopContact } from "./email/interest.js";
+import { extractWallapopContact, detectPortal } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
 import { esAnteriorAlCorte } from "./deploy-safety.js";
 import {
@@ -731,6 +731,31 @@ app.get("/admin/email/candidatos_sin_responder", requireAdminToken, route(async 
   }
   const candidatos = filtrarCandidatosSinResponder(mensajes.map((m) => ({ id: m.id, from: m.from, fromName: m.fromName, subject: m.subject, received_at: m.received_at, text: m.text, automated: m.automated })));
   return { status: "ok", desde: sinceIso, total_revisados: ids.length, total_candidatos: candidatos.length, candidatos };
+}));
+
+// Backfill de portal (21/11/2026, petición real: "que salga Coches.net en
+// vez de Origen desconocido" en correos antiguos que sí son de Coches.net/
+// Wallapop de verdad) -- NUNCA inventa el portal: reaplica la misma función
+// real (detectPortal, por remitente) que ya usa el flujo en vivo, solo
+// sobre registros de email_inbox que se guardaron SIN portal (antes de que
+// detectPortal cubriera ese remitente, o de un reproceso antiguo). Solo
+// rellena el campo portal cuando detectPortal confirma uno real; nunca toca
+// outcome/answered/draft_note ni ningún otro dato. dryRun=true por defecto
+// para poder ver el resultado antes de escribir nada.
+app.post("/admin/email/backfill_portal", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const inbox = readCollection<{ id: string; from: string; subject: string; text: string; portal?: string | null }>("email_inbox");
+  const cambios: Array<{ id: string; from: string; subject: string; portal_nuevo: string }> = [];
+  for (const m of inbox) {
+    if (m.portal && m.portal.trim()) continue;
+    const detected = detectPortal({ from: m.from, subject: m.subject, text: m.text });
+    if (detected.portal) {
+      cambios.push({ id: m.id, from: m.from, subject: m.subject, portal_nuevo: detected.portal });
+      if (!dryRun) m.portal = detected.portal;
+    }
+  }
+  if (!dryRun && cambios.length > 0) writeCollection("email_inbox", inbox);
+  return { status: "ok", dry_run: dryRun, total_revisados: inbox.length, total_a_corregir: cambios.length, cambios };
 }));
 
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {
