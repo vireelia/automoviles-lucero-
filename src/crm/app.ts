@@ -791,10 +791,10 @@ function mailIconLink(email: string | null | undefined): string {
 // para Wallapop (consulta a Zernio en el momento, nunca el dato guardado),
 // generalizado aquí a cualquier tarjeta con teléfono real -- vale para
 // visitas y reservas de cualquier canal, no solo Wallapop.
-function verificarEntregaIcon(contact: string | null | undefined): string {
+function verificarEntregaIcon(contact: string | null | undefined, name?: string | null): string {
   const num = waNumber(contact);
   if (!num) return "";
-  return `<span data-verif-phone="${esc(num)}"><button type="button" class="ibtn" title="Verificar entrega real por WhatsApp" onclick="luceroVerificarEntregaIcon(this)" style="border-color:#e0c9a6;color:#92600a">🔍</button></span>`;
+  return `<span data-verif-phone="${esc(num)}" data-verif-name="${esc(name || "este cliente")}"><button type="button" class="ibtn" title="Verificar entrega real por WhatsApp" onclick="luceroVerificarEntregaIcon(this)" style="border-color:#e0c9a6;color:#92600a">🔍</button></span>`;
 }
 // Petición real del negocio (28/10/2026, "cuando un cliente deje su
 // número que salga una sección de enviar mensaje a whatsapp" en
@@ -1622,6 +1622,7 @@ window.luceroVerificarEntrega = function (btn) {
 window.luceroVerificarEntregaIcon = function (btn) {
   var wrap = btn.closest("[data-verif-phone]");
   var phone = wrap.getAttribute("data-verif-phone");
+  var name = wrap.getAttribute("data-verif-name") || "este cliente";
   btn.disabled = true;
   var original = btn.textContent;
   btn.textContent = "...";
@@ -1630,16 +1631,16 @@ window.luceroVerificarEntregaIcon = function (btn) {
     .then(function (d) {
       btn.disabled = false;
       btn.textContent = original;
-      if (!d.ok) { alert("No se pudo comprobar (" + d.error + ")."); return; }
-      if (!d.ultimo_mensaje_saliente) { alert("Zernio no tiene ningún mensaje saliente registrado para este número."); return; }
+      if (!d.ok) { alert(name + " (" + phone + "): no se pudo comprobar (" + d.error + ")."); return; }
+      if (!d.ultimo_mensaje_saliente) { alert(name + " (" + phone + "): Zernio no tiene ningún mensaje saliente registrado."); return; }
       var m = d.ultimo_mensaje_saliente;
       var estado = m.deliveryStatus === "failed" ? "❌ FALLÓ: WhatsApp no lo entregó" : m.readAt ? "✓✓ Leído por el cliente" : m.deliveredAt ? "✓✓ Entregado al teléfono" : m.deliveryStatus === "sent" ? "✓ Enviado (pendiente de confirmación de entrega)" : "Estado: " + (m.deliveryStatus || "desconocido");
-      alert(estado);
+      alert(name + " (" + phone + "):\n" + estado);
     })
     .catch(function () {
       btn.disabled = false;
       btn.textContent = original;
-      alert("No se pudo comprobar (fallo de red).");
+      alert(name + " (" + phone + "): no se pudo comprobar (fallo de red).");
     });
 };
 window.toggleAllMsgs = function (master, name) {
@@ -1952,7 +1953,7 @@ function apptCard(a: Appointment): string {
   const veh = appointmentVehicleLabel(a, lead);
   const whatsapp = waIconButton(a.lead_phone, renderTemplate(getMessageTemplate("visita_confirmacion"), { dia_semana: d.weekday, dia: d.day, mes: d.month, hora: a.requested_time ?? "", vehiculo: veh }));
   const mail = mailIconLink(lead?.email ?? (a.lead_phone?.includes("@") ? a.lead_phone : null));
-  const verifBtn = verificarEntregaIcon(a.lead_phone);
+  const verifBtn = verificarEntregaIcon(a.lead_phone, lead?.name);
   const contactPart = a.lead_phone && !a.lead_phone.includes("@") ? a.lead_phone : lead?.email ?? null;
   const actions = [
     a.status === "requested" ? button("Confirmar", "confirmar", "ok") : "",
@@ -2035,7 +2036,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   const whatsapp = r.status === "pending_payment"
     ? waIconButton(r.lead_phone, renderTemplate(getMessageTemplate("reserva_pago"), { vehiculo: veh, importe: String(businessInfo.reservation.amount_eur) }))
     : waIconButton(r.lead_phone, `Hola${lead?.name ? ` ${lead.name}` : ""}, le escribe Automóviles Lucero sobre tu reserva de ${veh}.`);
-  const verifBtn = verificarEntregaIcon(r.lead_phone);
+  const verifBtn = verificarEntregaIcon(r.lead_phone, lead?.name);
   const canBulkDelete = (r.status === "cancelled" || r.status === "expired") && user.role === "admin";
   // Caducidad visible (22/10/2026): solo importa mientras la reserva sigue
   // viva (pagada/por verificar) -- una vez confirmada, cancelada o
