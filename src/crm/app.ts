@@ -984,7 +984,11 @@ function computeHeaderBadgeCounts() {
   const msgHref = pendingWhatsapp > pendingMails ? "/crm/contactos/whatsapp?f=sin_leer" : "/crm/contactos/correo?f=sin_leer";
   const msgTitle = `${pendingMails} correo(s) y ${pendingWhatsapp} WhatsApp sin leer`;
   const overdueTasks = listTasks().filter((t) => t.status === "pendiente" && (t.priority === "alta" || (t.due_at && t.due_at < new Date().toISOString()))).length;
-  const alertCount = pendingAlerts().length;
+  // "gestion_portal" (Wallapop/Coches.net sin teléfono extraíble) es un
+  // flujo propio con su propia cola en Correos -- se excluye del timbre
+  // para que no infle el contador con miles de avisos ya conocidos y
+  // gestionados por ese otro camino (mismo criterio que ya usa Inicio).
+  const alertCount = pendingAlerts().filter((a) => a.kind !== "gestion_portal").length;
   const notifTotal = overdueTasks + alertCount;
   const notifTitle = `${alertCount} aviso(s) urgente(s) y ${overdueTasks} tarea(s) vencida(s)`;
   return { msgTotal, msgHref, msgTitle, notifTotal, notifTitle };
@@ -2160,7 +2164,11 @@ crm.get("/", (req, res) => {
   // entran aquí reserva_pendiente y handoff_urgente -- el resto de tipos
   // siguen existiendo y registrados (nunca se borran), pero no ocupan el
   // sitio pensado para "esto hay que llamarlo ya por una visita o reserva".
-  const ALERTAS_INICIO_KINDS: AlertKind[] = ["reserva_pendiente", "handoff_urgente"];
+  // Petición real (21/11/2026, "ahí que salgan solo las visitas o
+  // reservas, para no llenar eso de información"): handoff_urgente (avisos
+  // de conversación de WhatsApp cortada) queda fuera de Inicio -- sigue
+  // registrado y visible en Pendientes, solo deja de ocupar sitio aquí.
+  const ALERTAS_INICIO_KINDS: AlertKind[] = ["reserva_pendiente", "visita_agendada", "visita_cancelada", "visita_proxima"];
   const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind));
   // FALLO REAL grave encontrado 12/11/2026 (Inicio sentido como "lento"
   // tras arreglar Agenda): mismo patrón, pintar TODAS las alertas
