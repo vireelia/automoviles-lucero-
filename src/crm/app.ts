@@ -22,7 +22,7 @@ import { sendWhatsappText } from "../integrations/whatsapp.js";
 import { STUDIO_TEMPLATES, findTemplate, VIDEO_ENGINES, VIDEO_STYLES, IMAGE_ENGINES, IMAGE_ASPECT_RATIOS, findVideoEngine, findVideoStyle, findImageEngine } from "../studio/templates.js";
 import { createStudioJob, listStudioJobs, getStudioJob, pollStudioJob, saveUploadedPhoto, absolutePathFor, budgetInfo, PUBLIC_BASE_URL, PHOTO_EXT_BY_MIME, type StudioJob } from "../studio/jobs.js";
 import { isHiggsfieldConnected } from "../studio/higgsfield.js";
-import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, absoluteWhatsAppAudioPath, absoluteOutboundWhatsappAttachmentPath, saveOutboundWhatsappAttachment, sendZernioWhatsappAttachment, OUTBOUND_ATTACHMENT_EXT_BY_MIME, type ZernioAccount } from "../integrations/zernio.js";
+import { isZernioConnected, listZernioAccounts, publishZernioPost, isZernioWhatsappConfigured, getWhatsappConnectUrl, absoluteWhatsAppAudioPath, absoluteOutboundWhatsappAttachmentPath, saveOutboundWhatsappAttachment, sendZernioWhatsappAttachment, OUTBOUND_ATTACHMENT_EXT_BY_MIME, getRealDeliveryStatus, type ZernioAccount } from "../integrations/zernio.js";
 import { businessInfo } from "../data/business-info.js";
 import { getBusinessConfig, saveBusinessOverrides } from "../data/business-config.js";
 import { getMessageTemplate, isMessageTemplateOverridden, saveMessageTemplate, resetMessageTemplate, renderTemplate, MESSAGE_TEMPLATE_DEFAULTS, MESSAGE_TEMPLATE_VARS, type MessageTemplateKey } from "../data/message-templates.js";
@@ -1573,6 +1573,38 @@ document.addEventListener("keydown", function (e) {
 // Selección masiva de mensajes (módulo mensajes/clientes, 18/10/2026):
 // la casilla "Seleccionar todos" marca/desmarca todas las de su misma
 // bandeja de un golpe. Genérico, lo usan Correos/WhatsApp/Llamadas.
+// Verificación real de entrega (21/11/2026): consulta a Zernio en el
+// momento (nunca un dato guardado) si el último WhatsApp saliente de
+// verdad llegó, se leyó, o falló -- dice la verdad tal cual la devuelve
+// Meta, nunca "entregado" por defecto.
+window.luceroVerificarEntrega = function (btn) {
+  var wrap = btn.closest("#verif-entrega");
+  var phone = wrap.getAttribute("data-phone");
+  btn.disabled = true;
+  btn.textContent = "Comprobando...";
+  fetch("/crm/whatsapp/verificar_entrega.json?phone=" + encodeURIComponent(phone))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var out = document.createElement("p");
+      out.style.marginTop = "6px";
+      out.style.fontSize = "13px";
+      if (!d.ok) {
+        out.textContent = "No se pudo comprobar (" + d.error + ").";
+      } else if (!d.ultimo_mensaje_saliente) {
+        out.textContent = "Zernio no tiene ningún mensaje saliente registrado para este número.";
+      } else {
+        var m = d.ultimo_mensaje_saliente;
+        var estado = m.deliveryStatus === "failed" ? "❌ FALLÓ: WhatsApp no lo entregó" : m.readAt ? "✓✓ Leído por el cliente" : m.deliveredAt ? "✓✓ Entregado al teléfono" : m.deliveryStatus === "sent" ? "✓ Enviado (pendiente de confirmación de entrega)" : "Estado: " + (m.deliveryStatus || "desconocido");
+        out.textContent = estado;
+      }
+      wrap.appendChild(out);
+      btn.remove();
+    })
+    .catch(function () {
+      btn.disabled = false;
+      btn.textContent = "Verificar entrega real";
+    });
+};
 window.toggleAllMsgs = function (master, name) {
   document.querySelectorAll('input[type=checkbox][name="' + name + '"]').forEach(function (cb) {
     cb.checked = master.checked;
@@ -1617,6 +1649,15 @@ window.toggleAllMsgs = function (master, name) {
   // que ya usaba el aviso de alertas de arriba, solo que este actualiza los
   // contadores de mensajes/notificaciones directamente en el DOM -- en
   // cualquier página del CRM, no solo en /crm.
+  var MSG_KEY = "lucero_last_msg_total";
+  function softRefreshCurrentPage() {
+    fetch(location.pathname + location.search).then(function (r) { return r.text(); }).then(function (html) {
+      var start = html.indexOf("<main>");
+      var end = html.lastIndexOf("</main>");
+      var main = document.querySelector("main");
+      if (start !== -1 && end !== -1 && main) main.innerHTML = html.slice(start + 6, end);
+    }).catch(function () {});
+  }
   function checkBadges() {
     fetch("/crm/badge-counts.json").then(function (r) { return r.json(); }).then(function (d) {
       var msgLink = document.getElementById("topbar-msg-link");
@@ -1632,6 +1673,15 @@ window.toggleAllMsgs = function (master, name) {
         notifBadge.textContent = d.notifTotal > 99 ? "99+" : String(d.notifTotal);
         notifBadge.style.display = d.notifTotal > 0 ? "" : "none";
       }
+      // WhatsApp/correo en tiempo real (21/11/2026, "que los whassap salgan
+      // en tiempo real"): si el total de mensajes sin leer sube mientras
+      // estás viendo esa misma lista de contactos, se refresca sola -- solo
+      // en esas páginas, nunca interrumpe un formulario a medio rellenar en
+      // otra pantalla.
+      var prevMsg = parseInt(localStorage.getItem(MSG_KEY) || "0", 10);
+      localStorage.setItem(MSG_KEY, String(d.msgTotal));
+      var enListaContactos = /^\/crm\/contactos\/(whatsapp|correo)/.test(location.pathname);
+      if (enListaContactos && d.msgTotal > prevMsg) softRefreshCurrentPage();
     }).catch(function () {});
   }
   check();
@@ -2820,6 +2870,27 @@ crm.get("/badge-counts.json", (_req, res) => {
   res.json(headerBadgeCounts());
 });
 
+// Verificación REAL de entrega por WhatsApp (21/11/2026, petición real:
+// "arregla eso, que salga en WhatsApp siempre, para verificar que es
+// verdad" -- caso confirmado: el sistema marcaba "Carolina ya le contactó"
+// solo porque Zernio aceptó el envío, pero el estado real en Meta era
+// "failed", nunca entregado). Esto consulta a Zernio en el momento (nunca
+// el dato guardado en outbound_guard_blocks, que solo sabe si SE INTENTÓ
+// enviar) y dice la verdad tal cual la devuelve WhatsApp: entregado, leído,
+// fallido, o "sin dato" si Zernio no lo sabe. Nunca inventa un estado.
+crm.get("/whatsapp/verificar_entrega.json", (req, res) => {
+  const phoneRaw = typeof req.query.phone === "string" ? req.query.phone : "";
+  const phone = phoneRaw.replace(/^\+/, "").replace(/\D/g, "");
+  if (!phone) return res.json({ ok: false, error: "telefono_invalido" });
+  const convo = readCollection<{ phone: string; conversation_id: string }>("zernio_whatsapp_conversations").find((c) => c.phone === phone);
+  if (!convo) return res.json({ ok: false, error: "sin_conversacion_conocida" });
+  getRealDeliveryStatus(convo.conversation_id, 5).then((r) => {
+    if (!r.ok) return res.json({ ok: false, error: r.error });
+    const ultimoSaliente = r.messages.find((m) => m.direction === "outgoing") ?? null;
+    res.json({ ok: true, ultimo_mensaje_saliente: ultimoSaliente });
+  }).catch((err) => res.json({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+});
+
 // Avisos ya atendidos (21/10/2026, petición real: "que no me sigan
 // apareciendo tantos números en pendientes" -- con 28+ avisos reales
 // acumulados, la lista única se volvía inmanejable). Antes, al pulsar "Ya
@@ -3949,10 +4020,16 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
   const contactarEquipoBtn = phone
     ? `<div style="margin-top:6px">${waButton(phone, `Hola${contact?.name ? ` ${contact.name}` : ""}, le escribe Automóviles Lucero por tu interés en${vehicleLabel ? ` el ${vehicleLabel}` : " el vehículo"}.`)}</div>`
     : "";
+  // Botón "Verificar entrega real" (21/11/2026): solo tiene sentido cuando
+  // el sistema dice que ya se contactó por WhatsApp -- ahí es donde puede
+  // haber discrepancia entre "se intentó enviar" y "de verdad llegó".
+  const verificarEntregaBtn = yaContactado && phone
+    ? `<div id="verif-entrega" style="margin-top:6px" data-phone="${esc(phone)}"><button type="button" class="btn light" onclick="luceroVerificarEntrega(this)">Verificar entrega real</button></div>`
+    : "";
   const detail = `${contactDetailHeader(lead, contact?.name || "Contacto de Wallapop", phone, null, null)}
 <div class="meta-grid"><div>Portal<b>Wallapop</b></div><div>Recibido<b>${esc(fmtDate(selected.created_at))}</b></div><div>Estado<b>${statusPill(selected.answered ? "Gestionado" : "Pendiente", selected.answered ? "ok" : "warn")}</b></div></div>
 ${vehicleLabel ? `<p class="sub" style="margin:4px 0 0">Interés: <b>${esc(vehicleLabel)}</b></p>` : ""}
-<div style="margin:8px 0">${contactoPill}${contactarEquipoBtn}</div>
+<div style="margin:8px 0">${contactoPill}${contactarEquipoBtn}${verificarEntregaBtn}</div>
 ${statusBox}
 <h3 style="margin-bottom:6px">Asunto</h3><p>${esc(selected.subject || "(sin asunto)")}</p>
 ${contact?.inquiry ? `<h3 style="margin-bottom:6px">Mensaje real del cliente</h3><div class="box" style="white-space:pre-wrap">${esc(contact.inquiry)}</div>` : ""}
