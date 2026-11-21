@@ -1471,8 +1471,8 @@ real del texto -- solo se ven como una sola caja. */
 <button class="sidebar-toggle mobile-menu-btn" type="button" aria-label="Abrir menú" onclick="luceroToggleSidebar()">☰</button>
 <form class="topbar-search" method="get" action="/crm/buscar">${navIcon("search", 16)}<input id="lucero-search" name="q" placeholder="Buscar contactos, vehículos, matrículas..." required><kbd>⌘K</kbd></form>
 <a class="topbar-icon" href="/crm/seguimiento" title="Crear una tarea">${navIcon("plus", 18)}</a>
-<a class="topbar-icon" href="${msgHref}" title="${esc(msgTitle)}">${navIcon("message", 18)}${msgTotal > 0 ? `<span class="badge">${msgTotal > 99 ? "99+" : msgTotal}</span>` : ""}</a>
-<a class="topbar-icon" href="/crm" title="${esc(notifTitle)}">${navIcon("bell", 18)}${notifTotal > 0 ? `<span class="badge">${notifTotal > 99 ? "99+" : notifTotal}</span>` : ""}</a>
+<a class="topbar-icon" id="topbar-msg-link" href="${msgHref}" title="${esc(msgTitle)}">${navIcon("message", 18)}<span class="badge" id="topbar-msg-badge" style="${msgTotal > 0 ? "" : "display:none"}">${msgTotal > 99 ? "99+" : msgTotal}</span></a>
+<a class="topbar-icon" id="topbar-notif-link" href="/crm" title="${esc(notifTitle)}">${navIcon("bell", 18)}<span class="badge" id="topbar-notif-badge" style="${notifTotal > 0 ? "" : "display:none"}">${notifTotal > 99 ? "99+" : notifTotal}</span></a>
 <a class="topbar-icon" href="/crm/ayuda" title="Guía rápida: qué es cada sección">${navIcon("help", 18)}</a>
 <span class="topbar-status"><span class="dot ${integrationsOk ? "ok" : "down"}"></span>${integrationsOk ? "Asistentes activos" : "Revisar asistentes"}</span>
 <a class="topbar-biz" href="/crm/integraciones" style="margin-left:auto">Automóviles Lucero${navIcon("chevron", 14)}</a>
@@ -1605,8 +1605,31 @@ window.toggleAllMsgs = function (master, name) {
       if (fresh.length > 0 && (location.pathname === "/crm" || location.pathname === "/crm/")) softRefreshHoy();
     }).catch(function () {});
   }
+  // Badges del topbar en tiempo real (21/11/2026): mismo intervalo de 15s
+  // que ya usaba el aviso de alertas de arriba, solo que este actualiza los
+  // contadores de mensajes/notificaciones directamente en el DOM -- en
+  // cualquier página del CRM, no solo en /crm.
+  function checkBadges() {
+    fetch("/crm/badge-counts.json").then(function (r) { return r.json(); }).then(function (d) {
+      var msgLink = document.getElementById("topbar-msg-link");
+      var msgBadge = document.getElementById("topbar-msg-badge");
+      var notifBadge = document.getElementById("topbar-notif-badge");
+      if (msgLink && d.msgHref) msgLink.setAttribute("href", d.msgHref);
+      if (msgLink && d.msgTitle) msgLink.setAttribute("title", d.msgTitle);
+      if (msgBadge) {
+        msgBadge.textContent = d.msgTotal > 99 ? "99+" : String(d.msgTotal);
+        msgBadge.style.display = d.msgTotal > 0 ? "" : "none";
+      }
+      if (notifBadge) {
+        notifBadge.textContent = d.notifTotal > 99 ? "99+" : String(d.notifTotal);
+        notifBadge.style.display = d.notifTotal > 0 ? "" : "none";
+      }
+    }).catch(function () {});
+  }
   check();
+  checkBadges();
   setInterval(check, 15000);
+  setInterval(checkBadges, 15000);
 })();
 </script>
 </body></html>`;
@@ -2771,6 +2794,18 @@ ${EMBUDO_COLUMNS.map((phase) => {
 // activas ahora mismo, para que el navegador detecte cuáles son nuevas.
 crm.get("/alertas-activas.json", (_req, res) => {
   res.json({ ids: pendingAlerts().map((a) => a.id) });
+});
+
+// Contadores del topbar en tiempo real (21/11/2026, petición real: "hay
+// que recargar [para ver los pendientes nuevos], lo de las notificaciones
+// también" -- antes headerBadgeCounts() solo se calculaba al renderizar la
+// página entera, así que un correo/WhatsApp/alerta nueva no aparecía en el
+// topbar hasta la siguiente recarga manual). Mismo cálculo real que ya usa
+// page() (headerBadgeCounts), nada inventado -- solo se expone también como
+// JSON para que el polling ya existente (cada 15s, ver check() en page())
+// pueda refrescar los badges sin recargar la página entera.
+crm.get("/badge-counts.json", (_req, res) => {
+  res.json(headerBadgeCounts());
 });
 
 // Avisos ya atendidos (21/10/2026, petición real: "que no me sigan
