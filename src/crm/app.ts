@@ -2267,10 +2267,17 @@ crm.get("/", (req, res) => {
   // de conversación de WhatsApp cortada) queda fuera de Inicio -- sigue
   // registrado y visible en Pendientes, solo deja de ocupar sitio aquí.
   const ALERTAS_INICIO_KINDS: AlertKind[] = ["reserva_pendiente", "visita_agendada", "visita_cancelada", "visita_proxima"];
+  // Petición real (21/11/2026, "que se queden solo las visitas por semana,
+  // para llevar un orden" / "que si hay visitas de hace 5 semanas que se
+  // quiten del inicio"): ventana móvil de 7 días -- un aviso real de hace
+  // más de una semana deja de ocupar sitio en Inicio, nunca se borra (sigue
+  // entero en Pendientes/Incidencias para quien quiera verlo igualmente).
+  const UNA_SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
+  const corteSemanal = Date.now() - UNA_SEMANA_MS;
   // Petición real (21/11/2026, "que se organice por fechas, las nuevas de
   // primero y las viejas de último"): antes salían en el orden en que se
   // guardaron (más antiguas primero), nunca ordenadas de verdad.
-  const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const alertsReales = pendingAlerts().filter((a) => ALERTAS_INICIO_KINDS.includes(a.kind) && new Date(a.created_at).getTime() >= corteSemanal).sort((a, b) => b.created_at.localeCompare(a.created_at));
   // FALLO REAL grave encontrado 12/11/2026 (Inicio sentido como "lento"
   // tras arreglar Agenda): mismo patrón, pintar TODAS las alertas
   // pendientes reales (3.213 en la colección) sin límite. Se recorta a
