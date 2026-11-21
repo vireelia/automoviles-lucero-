@@ -235,7 +235,18 @@ export function extractWallapopContact(
   text: string,
 ): { name: string | null; phone: string | null; make: string | null; model: string | null; version: string | null; inquiry: string | null } | null {
   const phoneMatch = /"client":\{[^}]*"phone":"(\+?\d+)"/.exec(text);
-  if (!phoneMatch) return null;
+  // FALLO REAL detectado (21/11/2026, aviso real "Llamada recibida" de
+  // Wallapop): este tipo de aviso (llamada por el relé de Wallapop, en vez
+  // de mensaje de chat) no trae ningún bloque JSON "client" -- el teléfono
+  // va en texto plano ("Número de teléfono: +34XXXXXXXXX"). Antes esto
+  // devolvía null (ningún teléfono real), aunque el teléfono SÍ estaba en
+  // el correo, solo que en otro formato. Nunca hay coche/nombre/mensaje
+  // reales que extraer de este formato -- solo el teléfono.
+  if (!phoneMatch) {
+    const plainPhoneMatch = /Número de teléfono:\s*(\+?\d{9,15})/.exec(text);
+    if (!plainPhoneMatch) return null;
+    return { phone: plainPhoneMatch[1].replace(/^\+/, ""), name: null, make: null, model: null, version: null, inquiry: null };
+  }
   if (phoneMatch[1].replace(/^\+?34/, "") === TELEFONO_RELLENO_WALLAPOP) return null;
   const firstMatch = /"first_name":"([^"]*)"/.exec(text);
   const lastMatch = /"last_name":"([^"]*)"/.exec(text);

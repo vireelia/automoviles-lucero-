@@ -50,11 +50,27 @@ export function searchVehicles(args: {
 }) {
   let results: Vehicle[] = currentVehicles();
 
+  // FALLO REAL detectado (21/11/2026, llamada real: "una furgoneta de unos
+  // 11.000 euros" -- el agente no la encontró aunque existían 2 reales en
+  // ese rango de precio): query solo comparaba contra marca/modelo/versión,
+  // nunca contra la categoría -- ningún coche tiene literalmente
+  // "furgoneta" en su marca o modelo, así que una búsqueda de texto libre
+  // con solo el tipo de vehículo (sin marca/modelo concretos) siempre
+  // devolvía 0 resultados, aunque category si lo habría encontrado. Ahora
+  // también compara contra la categoría normalizada (mismos sinónimos ya
+  // reales de CATEGORY_SYNONYMS), sin tocar el resto del comportamiento.
   const q = args.query ? normalize(args.query) : null;
   if (q) {
-    results = results.filter((v) =>
-      normalize(`${v.make} ${v.model} ${v.version}`).includes(q)
-    );
+    // La consulta puede traer más palabras que solo el tipo de vehículo
+    // ("furgoneta de unos 11000 euros") -- se busca cualquier sinónimo de
+    // categoría conocido como palabra suelta dentro de la consulta, nunca
+    // una igualdad exacta de la frase completa.
+    const qWords = q.split(/[^a-z0-9]+/).filter(Boolean);
+    const categoryFromQuery = qWords.map((w) => CATEGORY_SYNONYMS[w]).find(Boolean) ?? null;
+    results = results.filter((v) => {
+      if (normalize(`${v.make} ${v.model} ${v.version}`).includes(q)) return true;
+      return categoryFromQuery !== null && normalize(v.category) === categoryFromQuery;
+    });
   }
   if (args.make) results = results.filter((v) => normalize(v.make) === normalize(args.make!));
   if (args.model) results = results.filter((v) => normalize(v.model).includes(normalize(args.model!)));
