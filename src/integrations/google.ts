@@ -349,7 +349,7 @@ export async function gmailSearch(query: string, maxResults = 5): Promise<{ id: 
 // solo se pide despues, para los pocos que de verdad sobrevivan el filtro.
 export async function gmailGetMetadata(id: string): Promise<GmailMessage> {
   const m = (await googleFetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe&metadataHeaders=Auto-Submitted`,
   )) as any;
   const headers: { name: string; value: string }[] = m.payload?.headers ?? [];
   const fromRaw = header(headers, "From");
