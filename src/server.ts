@@ -902,6 +902,31 @@ app.post("/admin/portal/contactar_pendientes_plantilla", requireAdminToken, rout
   return { status: "ok", dry_run: false, ...(await startPortalTemplateBacklog()) };
 }));
 
+// Reimportación de stock (23/11/2026): el export de Dealcar puede cambiar el
+// identificador de un coche que sigue en venta, dejando sus visitas, reservas y
+// estado oficial apuntando a un id que ya no existe. Esta ruta los reengancha
+// con un mapa explícito {id_viejo: id_nuevo} calculado comparando ambos
+// exports (mismo coche: marca, modelo y año). Solo acepta ids nuevos que existen
+// de verdad en el catálogo actual. dryRun por defecto.
+app.post("/admin/vehiculos/remapear_ids", requireAdminToken, route(async (a: { mapping?: Record<string, string>; dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const mapping = a?.mapping && typeof a.mapping === "object" ? a.mapping : {};
+  const actuales = new Set(currentVehicles().map((v) => v.id));
+  const validos = Object.entries(mapping).filter(([viejo, nuevo]) => typeof viejo === "string" && typeof nuevo === "string" && actuales.has(nuevo) && !actuales.has(viejo));
+  const mapa = new Map(validos);
+  const remap = <T extends { vehicle_id?: string | null }>(col: string) => {
+    const rows = readCollection<T>(col);
+    let n = 0;
+    for (const r of rows) if (r.vehicle_id && mapa.has(r.vehicle_id)) { n++; if (!dryRun) r.vehicle_id = mapa.get(r.vehicle_id)!; }
+    if (!dryRun && n > 0) writeCollection(col, rows);
+    return n;
+  };
+  const citas = remap<{ vehicle_id?: string | null }>("appointments");
+  const reservas = remap<{ vehicle_id?: string | null }>("reservations");
+  const estados = remap<{ vehicle_id?: string | null }>("vehicle_state");
+  return { status: "ok", dry_run: dryRun, mapeos_validos: validos.length, mapeos_ignorados: Object.keys(mapping).length - validos.length, citas, reservas, estado_oficial: estados };
+}));
+
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {
   const ids = Array.isArray(a.message_ids) ? a.message_ids.filter((x) => typeof x === "string" && x) : [];
   if (ids.length === 0) {

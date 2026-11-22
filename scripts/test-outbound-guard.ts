@@ -157,7 +157,11 @@ await test("vector confirmado: AUDI A7 marcado SOLD -> primer contacto NO ofrece
   writeCollection("first_contact_sent", []);
   writeCollection("email_processed", []);
   writeCollection("vehicle_state", []);
-  setOfficialStatus("lucero-dealcar-20838078", "SOLD", null);
+  // Se busca el Audi A7 por marca y modelo: su id interno cambia en cada
+  // reimportación del stock (23/11/2026), nunca se escribe a mano.
+  const a7 = vehiclesSeed.find((v) => v.make === "AUDI" && v.model.startsWith("A7"));
+  assert.ok(a7, "el stock de prueba debe contener un Audi A7");
+  setOfficialStatus(a7.id, "SOLD", null);
   const email = cochesNetEmail({
     phone: "34611111113",
     make: "AUDI",
