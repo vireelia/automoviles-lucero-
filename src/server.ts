@@ -52,7 +52,7 @@ import { isVoiceAgentEnabled, setVoiceAgentEnabled, isWhatsappZernioAgentEnabled
 import { markVoiceCallActive } from "./tools/leads.js";
 import { raiseAlert, deleteAlert } from "./alerts/alerts.js";
 import { startGestionPortalWhatsappRetry } from "./alerts/whatsapp-retry.js";
-import { handleChatMessage, LlmNotConfigured, shrinkForStorage } from "./chat/agent.js";
+import { handleChatMessage, LlmNotConfigured, shrinkForStorage, type ChatTurnResult } from "./chat/agent.js";
 import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
 import { withPersistentLockOrSkip } from "./locks.js";
 import { enqueueWhatsappBatchMessage, startWhatsappBatchPoller, combineBatchText, claimBatchOnce, type BatchItem } from "./chat/whatsapp-batch.js";
@@ -73,6 +73,7 @@ setInterval(async () => {
       }
       const result = await handleChatMessage(item.contact, item.text, item.channel, item.contact);
       if (result.ai_failed) return { ok: false, error: "ai_failed" };
+      if (result.silent) return { ok: true }; // el cierre ya se le mandó una vez: no se repite
       const sent = item.channel === "WHATSAPP" ? await sendWhatsappText(item.contact, result.reply) : await sendFacebookText(item.contact, result.reply);
       return sent.ok ? { ok: true } : { ok: false, error: String(sent.error) };
     });
@@ -1841,7 +1842,7 @@ async function handleWhatsappZernioBatch(phone: string, items: BatchItem[], batc
       ? `Dato real: este mensaje del cliente se escribió hace aproximadamente ${Math.round(delayHours)} horas -- hubo un fallo técnico real (ya resuelto) que retrasó la respuesta. Empieza tu respuesta disculpándote brevemente por la tardanza, con naturalidad, sin dar detalles técnicos, y luego responde a lo que preguntó.`
       : undefined;
 
-  let result: { reply: string; tool_runs: number; ai_failed: boolean };
+  let result: ChatTurnResult;
   try {
     result = await handleChatMessage(phone, combinedText, "WHATSAPP", phone, realDelayNote);
   } catch (err) {
@@ -1863,6 +1864,10 @@ async function handleWhatsappZernioBatch(phone: string, items: BatchItem[], batc
     enqueuePendingReply("WHATSAPP", phone, combinedText);
     return;
   }
+  // Cierre por tope de mensajes ya enviado antes (22/11/2026, "si lo envía una
+  // vez que no vuelva a enviarlo más"): no se manda nada; el mensaje del cliente
+  // queda en el CRM como pendiente para que el equipo lo vea.
+  if (result.silent) return;
   const sent = await sendWhatsappText(phone, result.reply);
   if (!sent.ok) console.error("[zernio-whatsapp] no se pudo enviar la respuesta del lote:", sent.error);
   try {
@@ -2137,6 +2142,7 @@ app.post("/channels/facebook/webhook", async (req, res) => {
           enqueuePendingReply("FACEBOOK", psid, text.trim().slice(0, 2000));
           continue;
         }
+        if (result.silent) continue; // el cierre ya se le mandó una vez: no se repite
         if (isFacebookConnected()) {
           const sent = await sendFacebookText(psid, result.reply);
           if (!sent.ok) console.error("[facebook] no se pudo enviar la respuesta:", sent.error);

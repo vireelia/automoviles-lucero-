@@ -39,7 +39,14 @@ type ConversationRecord = {
   updated_at: string;
   user_turn_count?: number;
   known_facts?: { business_info?: unknown; responsable_contact?: unknown };
+  // Instante en que ya se mandó el cierre duro por tope de mensajes
+  // (22/11/2026): mientras la conversación siga viva, no se vuelve a enviar.
+  cap_closure_sent_at?: string;
 };
+
+// `silent: true` = no hay nada que enviar al cliente en este turno (el
+// cierre ya se le mandó una vez). Quien llama NO debe enviar nada.
+export type ChatTurnResult = { reply: string; tool_runs: number; ai_failed: boolean; silent?: boolean };
 
 const MODEL = process.env.LUCERO_CHAT_MODEL ?? "gpt-4.1-mini";
 const BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
@@ -544,7 +551,7 @@ async function handleChatMessageUnlocked(
   // verdad pasó), nunca inventado -- quien llama lo calcula con la fecha
   // real del mensaje original.
   realDelayNote?: string,
-): Promise<{ reply: string; tool_runs: number; ai_failed: boolean }> {
+): Promise<ChatTurnResult> {
   // FALLO REAL de producción (10/11/2026, caída repetida con la CPU al
   // ~105% sostenido): con el presupuesto diario agotado por una avalancha
   // real de mensajes, cada uno todavía hacía TODO el trabajo pesado
@@ -671,6 +678,21 @@ async function handleChatMessageUnlocked(
     // mensaje real que manda el cliente es un turno, sin importar cuántas
     // rondas de relleno/herramientas haya por dentro.
     const respuestasReales = conversation.messages.filter((m) => m.role === "user").length;
+    if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD && conversation.cap_closure_sent_at) {
+      // FALLO REAL detectado (22/11/2026, caso real de 27 mensajes: "Carolina
+      // envió como 4 veces ese mismo mensaje"): cada mensaje nuevo del cliente
+      // volvía a cumplir el tope y repetía el mismo cierre. Se manda UNA vez;
+      // después se guarda lo que escribe el cliente (para que el equipo lo
+      // vea como pendiente en el CRM) pero no se vuelve a responder solo, ni
+      // se vuelve a avisar: el aviso ya salió al mandar el cierre.
+      saveConversation({
+        ...conversation,
+        messages: trimToTurns([...conversation.messages, { role: "user", content: userText }]),
+        updated_at: new Date().toISOString(),
+        user_turn_count: userTurnCount,
+      });
+      return { reply: "", tool_runs: 0, ai_failed: false, silent: true };
+    }
     if (respuestasReales >= MAX_RESPUESTAS_BREVEDAD) {
       // Cierre enriquecido con datos reales (05/11/2026, "que ponga
       // direccion de la tienda... el como llegar, numero de telefono de
@@ -710,6 +732,7 @@ async function handleChatMessageUnlocked(
         messages: trimToTurns([...conversation.messages, { role: "user", content: userText }, { role: "assistant", content: cierre }]),
         updated_at: new Date().toISOString(),
         user_turn_count: userTurnCount,
+        cap_closure_sent_at: new Date().toISOString(),
       });
       return { reply: cierre, tool_runs: 0, ai_failed: false };
     }

@@ -856,6 +856,12 @@ export async function processInboundEmail(
     const chatResult = await handleChatMessage(`mail:${identityKey}`, userText, "EMAIL", identityKey);
     reply = chatResult.reply;
     aiFailedStructured = chatResult.ai_failed;
+    if (chatResult.silent) {
+      // Cierre por tope de mensajes ya enviado antes (22/11/2026): no se repite;
+      // el correo queda como pendiente para el equipo.
+      recordInbox(email, "cierre_ya_enviado_pendiente_equipo", { portal: portalInfo.portal, messageKey: email.messageKey });
+      return { outcome: "cierre_ya_enviado_pendiente_equipo" };
+    }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     // Aviso de este fallo desactivado (03/11/2026, "quita esa mierda del
