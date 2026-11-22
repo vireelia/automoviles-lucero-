@@ -888,6 +888,12 @@ function normalizePhoneDigits(p: string | null | undefined): string {
 }
 // Nombre que se muestra en una visita/reserva: el de la ficha si es real, y si
 // no el que guardó la propia visita; nunca un relleno tipo "cliente".
+// Burbuja con el número de mensajes sin leer de un chat, como en WhatsApp
+// (22/11/2026): desaparece sola al abrir el chat (abrirlo los marca leídos).
+function unreadBubble(n: number): string {
+  if (n <= 0) return "";
+  return `<span class="tag" style="background:var(--ok);color:#fff;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700">${n > 99 ? "99+" : n}</span>`;
+}
 function shownName(lead: Lead | undefined, fallback?: string | null): string | null {
   if (isRealName(lead?.name)) return lead!.name!.trim();
   if (isRealName(fallback)) return fallback!.trim();
@@ -4342,7 +4348,7 @@ function whatsappContactos(f: MsgFilter, q: string, pageNum: number, navBase: st
 ${convoCheckbox("/crm/whatsapp", c.all.map((x) => x.id))}
 ${avatarBadge(m.phone, name)}
 <div class="rbody"><b>${esc(name)}${isWhatsappChatPaused(m.phone) ? ` <span title="Carolina pausada en este chat">🔇</span>` : ""}</b><span class="rsub">${esc(m.text)}</span>${rowStatus.kind === "typing" ? `<span class="rsub" style="color:var(--ok);font-weight:600">${esc(rowStatus.label)}</span>` : ""}</div>
-<div class="rmeta"><time>${esc(time)}</time>${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
+<div class="rmeta"><time>${esc(time)}</time>${unreadBubble(c.all.filter((x) => !x.read).length)}${!c.answered ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>` : ""}</div>
 </a>`;
   }).join("");
   // Petición real (27/10/2026, "secciones de eliminar... para eliminar
@@ -4433,7 +4439,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
 ${convoCheckbox("/crm/correos", c.all.map((x) => x.id))}
 ${avatarBadge(wallapopContact?.phone || m.from, name)}
 <div class="rbody"><b>${esc(name)}${isEmailContactPaused(m.from) ? ` <span title="Daniel pausado para este remitente">🔇</span>` : ""}</b><span class="rsub">${esc(m.subject || "(sin asunto)")}</span></div>
-<div class="rmeta"><time>${esc(time)}</time>${estadoTag}</div>
+<div class="rmeta"><time>${esc(time)}</time>${unreadBubble(c.all.filter((x) => !x.read).length)}${estadoTag}</div>
 </a>`;
   }).join("");
   // Petición real (27/10/2026, "secciones de eliminar... para eliminar
@@ -4975,21 +4981,25 @@ crm.get("/contactos/:canal", (req, res) => {
   // correoContactos marcan leído solas al seleccionar una conversación),
   // no "sin responder" -- eso sigue viéndose por fila con la etiqueta
   // "Pendiente", que no depende de si se ha leído.
-  const pendingWa = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
-  const pendingCo = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
-  const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
-  const tabLink = (key: ContactoCanal, label: string, count: number) =>
-    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag">${count > 99 ? "99+" : count}</span>` : ""}</a>`;
-  const tabs = `<div class="htabs">
-${tabLink("whatsapp", "WhatsApp", pendingWa)}
-${tabLink("correo", "Correo", pendingCo)}
-${tabLink("llamadas", "Llamadas", unreadLl)}
-</div>`;
   const built = canal === "whatsapp"
     ? whatsappContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw)
     : canal === "correo"
       ? correoContactos(f, q, pageNum, navBase, allLeads, appts, resv, today, financing, selectedIdRaw, portalView)
       : callsContactos(cf, q, pageNum, `${navBase}?cf=${cf}`, allLeads, appts, resv, today, financing, selectedIdRaw);
+  // Los números de las pestañas se calculan DESPUÉS de construir el panel
+  // (22/11/2026, "que se vayan quitando el número al clicar el chat, como en
+  // WhatsApp"): construir el panel marca como leída la conversación abierta,
+  // así que contar antes dejaba el número desfasado en uno.
+  const pendingWa = groupMessagesByPhone(list<WhatsappMessage>("whatsapp_inbox")).filter((c) => !c.read).length;
+  const pendingCo = groupMessagesByKey(list<InboxMail>("email_inbox").filter((m) => m.outcome !== "automated_no_reply"), (m) => m.from).filter((c) => !c.read).length;
+  const unreadLl = list<CallAnalysis>("call_analyses").filter((m) => !m.read).length;
+  const tabLink = (key: ContactoCanal, label: string, count: number) =>
+    `<a href="/crm/contactos/${key}" class="${canal === key ? "on-tab" : ""}">${esc(label)}${count > 0 ? ` <span class="tag">${count > 99 ? "99+" : count}</span>` : ""}</a>`;
+  const tabs = `<div class="htabs" id="contactos-tabs">
+${tabLink("whatsapp", "WhatsApp", pendingWa)}
+${tabLink("correo", "Correo", pendingCo)}
+${tabLink("llamadas", "Llamadas", unreadLl)}
+</div>`;
   const withAnswered = canal !== "llamadas";
   const listLabel: Record<ContactoCanal, string> = { whatsapp: "Todo WhatsApp", correo: "Todo el correo", llamadas: "Todas las llamadas" };
   const pagerQs = canal === "llamadas" ? null : f;
@@ -5049,6 +5059,9 @@ ${cpager(canal === "llamadas" ? `${navBase}?cf=${cf}` : navBase, pagerQs, q, pag
           var mio = document.getElementById("contactos-panel");
           if(fresco && mio){
             mio.innerHTML = fresco.innerHTML;
+            var pestanasNuevas = doc.getElementById("contactos-tabs");
+            var pestanasMias = document.getElementById("contactos-tabs");
+            if(pestanasNuevas && pestanasMias) pestanasMias.innerHTML = pestanasNuevas.innerHTML;
             if(actualizarUrl) history.pushState({ contactosUrl: url }, "", url);
             SCROLL_SELECTORS.forEach(function(sel, i){
               if(scrolls[i] == null) return;
