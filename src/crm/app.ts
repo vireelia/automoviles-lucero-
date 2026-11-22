@@ -2669,7 +2669,7 @@ ${tiles ? `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;ma
 ${r.known_issues ? `<p><span class="sub">Problemas conocidos:</span> ${esc(r.known_issues)}</p>` : ""}
 ${r.comments ? `<p><span class="sub">Comentarios del propietario:</span> ${esc(r.comments)}</p>` : ""}
 <p><b>${esc(contactLabel(r.lead_phone, r.lead_name))}</b>${r.lead_phone ? ` · ${esc(r.lead_phone)}` : ""}${r.email ? ` · ${esc(r.email)}` : ""} · recibida el ${esc(fmtDate(r.created_at))}${r.available_for_call ? ` · <span style="color:var(--ok);font-weight:600">quiere que le llamen</span>` : ""}</p>
-<div style="display:flex;gap:8px;flex-wrap:wrap">${actions}${phoneLink(r.lead_phone)}${waButton(r.lead_phone, waMsg)}</div>`;
+<div style="display:flex;gap:8px;flex-wrap:wrap">${actions}${phoneLink(r.lead_phone)}${waButton(r.lead_phone, waMsg)}<form method="post" action="/crm/compras/${esc(r.id)}" style="display:inline"><input type="hidden" name="accion" value="eliminar"><input type="hidden" name="f" value="${esc(f)}"><button class="btn danger" type="submit" onclick="return confirm('¿Eliminar esta solicitud? Se puede recuperar luego desde la Papelera.')">Eliminar</button></form></div>`;
 }
 crm.get("/compras", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "nuevas";
@@ -2690,6 +2690,7 @@ crm.get("/compras", (req, res) => {
   const body = `<h1>Compras</h1>
 <p class="sub">Personas que han rellenado el formulario de vender su coche o furgoneta en la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
 <p>${pill("nuevas", "Nuevas", count((r) => r.status === "pending_review"))} ${pill("contactadas", "Contactadas", count((r) => r.status === "contacted"))} ${pill("cerradas", "Cerradas", count((r) => r.status === "bought" || r.status === "discarded"))} ${pill("todas", "Todas", all.length)}</p>
+${f === "cerradas" && me(res).role === "admin" && rows.length > 0 ? `<form method="post" action="/crm/compras-masivo" style="margin:0 0 12px"><button class="btn danger" type="submit" onclick="return confirm('¿Eliminar las ${rows.length} solicitudes cerradas? Se pueden recuperar luego desde la Papelera.')">Eliminar las ${rows.length} cerradas</button></form>` : ""}
 <style>
 .compras-split{display:grid;grid-template-columns:minmax(260px,330px) 1fr;border:1px solid var(--border);border-radius:14px;overflow:hidden;min-height:480px}
 .compras-list{background:var(--panel);border-right:1px solid var(--border);max-height:70vh;overflow:auto}
@@ -2705,11 +2706,27 @@ ${rows.length === 0 || !selected ? `<div class="empty">No hay solicitudes en est
   res.type("html").send(page("Compras", me(res), body, msgOf(req)));
 });
 
+crm.post("/compras-masivo", (req, res) => {
+  if (me(res).role !== "admin") return back(res, "/crm/compras", "Solo el administrador puede eliminar todas las cerradas");
+  const rows = list<PurchaseRequestRow>("purchase_requests");
+  const cerradas = rows.filter((r) => r.source === "web_form" && (r.status === "bought" || r.status === "discarded"));
+  if (cerradas.length === 0) return back(res, "/crm/compras?f=cerradas", "No había nada que eliminar");
+  moveManyToTrash(cerradas.map((r) => ({ collection: "purchase_requests", record: r, label: `Compra: ${purchaseTitle(r)} (${r.lead_phone ?? "sin contacto"})` })), me(res).email);
+  const ids = new Set(cerradas.map((r) => r.id));
+  save("purchase_requests", rows.filter((r) => !ids.has(r.id)));
+  back(res, "/crm/compras?f=cerradas", `${cerradas.length} solicitud(es) movida(s) a la papelera`);
+});
+
 crm.post("/compras/:id", (req, res) => {
   const accion = String(req.body.accion ?? "");
   const rows = list<PurchaseRequestRow>("purchase_requests");
   const r = rows.find((x) => x.id === req.params.id);
   if (!r) return back(res, "/crm/compras", "No encuentro esa solicitud");
+  if (accion === "eliminar") {
+    moveToTrash("purchase_requests", r, `Compra: ${purchaseTitle(r)} (${r.lead_phone ?? "sin contacto"})`, me(res).email);
+    save("purchase_requests", rows.filter((x) => x.id !== r.id));
+    return back(res, `/crm/compras?f=${encodeURIComponent(String(req.body.f ?? "nuevas"))}`, "Solicitud movida a la papelera");
+  }
   const next: Record<string, string> = { contactado: "contacted", comprado: "bought", descartar: "discarded", reabrir: "pending_review" };
   if (!next[accion]) return back(res, "/crm/compras", "Acción no válida");
   r.status = next[accion];
