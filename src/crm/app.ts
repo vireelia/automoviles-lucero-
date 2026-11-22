@@ -2643,7 +2643,7 @@ function purchaseThumb(r: PurchaseRequestRow, w = 54, h = 42): string {
 }
 function purchaseRow(r: PurchaseRequestRow, selected: boolean, href: string): string {
   const name = contactLabel(r.lead_phone, r.lead_name);
-  return `<a href="${esc(href)}" class="crow${selected ? " sel" : ""}">${purchaseThumb(r)}<div class="rb"><b>${esc(purchaseTitle(r))}</b><span>${esc(name)} · ${esc(fmtDate(r.created_at).split(",")[0])}</span></div>${purchaseStatusPill(r.status)}</a>`;
+  return `<div class="crow-wrap"><input type="checkbox" class="csel" name="ids" value="${esc(r.id)}" form="compras-bulk" aria-label="Seleccionar ${esc(purchaseTitle(r))}"><a href="${esc(href)}" class="crow${selected ? " sel" : ""}">${purchaseThumb(r)}<div class="rb"><b>${esc(purchaseTitle(r))}</b><span>${esc(name)} · ${esc(fmtDate(r.created_at).split(",")[0])}</span></div>${purchaseStatusPill(r.status)}</a></div>`;
 }
 function purchaseDetail(r: PurchaseRequestRow, f: string): string {
   const urls = r.photo_urls ?? [];
@@ -2690,23 +2690,51 @@ crm.get("/compras", (req, res) => {
   const body = `<h1>Compras</h1>
 <p class="sub">Personas que han rellenado el formulario de vender su coche o furgoneta en la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
 <p>${pill("nuevas", "Nuevas", count((r) => r.status === "pending_review"))} ${pill("contactadas", "Contactadas", count((r) => r.status === "contacted"))} ${pill("cerradas", "Cerradas", count((r) => r.status === "bought" || r.status === "discarded"))} ${pill("todas", "Todas", all.length)}</p>
-${f === "cerradas" && me(res).role === "admin" && rows.length > 0 ? `<form method="post" action="/crm/compras-masivo" style="margin:0 0 12px"><button class="btn danger" type="submit" onclick="return confirm('¿Eliminar las ${rows.length} solicitudes cerradas? Se pueden recuperar luego desde la Papelera.')">Eliminar las ${rows.length} cerradas</button></form>` : ""}
+${f === "cerradas" && me(res).role === "admin" && rows.length > 0 ? `<form method="post" action="/crm/compras-masivo" style="margin:0 0 12px"><input type="hidden" name="accion" value="eliminar_cerradas"><button class="btn danger" type="submit" onclick="return confirm('¿Eliminar las ${rows.length} solicitudes cerradas? Se pueden recuperar luego desde la Papelera.')">Eliminar las ${rows.length} cerradas</button></form>` : ""}
 <style>
 .compras-split{display:grid;grid-template-columns:minmax(260px,330px) 1fr;border:1px solid var(--border);border-radius:14px;overflow:hidden;min-height:480px}
 .compras-list{background:var(--panel);border-right:1px solid var(--border);max-height:70vh;overflow:auto}
 .crow{display:grid;grid-template-columns:54px 1fr auto;gap:10px;align-items:center;padding:11px 12px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
 .crow.sel{background:var(--bg);box-shadow:inset 3px 0 0 var(--accent)}
+.crow-wrap{position:relative}.crow-wrap .csel{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:16px;height:16px;z-index:2;cursor:pointer}.crow-wrap .crow{padding-left:34px}
+.cbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:9px 12px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:3;font-size:13px}
 .crow .rb{min-width:0;display:flex;flex-direction:column}.crow .rb b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.crow .rb span{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .compras-detail{padding:18px;min-width:0}
 .kvgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
 .kvc{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:8px 10px}.kvc small{display:block;color:var(--ink-dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 @media(max-width:760px){.compras-split{grid-template-columns:1fr}.compras-list{border-right:0;border-bottom:1px solid var(--border);max-height:260px}}
 </style>
-${rows.length === 0 || !selected ? `<div class="empty">No hay solicitudes en esta lista. Aquí aparecen solo las que un cliente envía desde el formulario de la web.</div>` : `<div class="compras-split"><div class="compras-list">${rows.map((r) => purchaseRow(r, r.id === selected.id, `/crm/compras?f=${f}&id=${r.id}`)).join("")}</div><div class="compras-detail">${purchaseDetail(selected, f)}</div></div>`}`;
+${rows.length === 0 || !selected ? `<div class="empty">No hay solicitudes en esta lista. Aquí aparecen solo las que un cliente envía desde el formulario de la web.</div>` : `<form id="compras-bulk" method="post" action="/crm/compras-masivo"><input type="hidden" name="f" value="${esc(f)}"></form>
+<div class="compras-split"><div class="compras-list"><div class="cbar"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="csel-all"> Seleccionar todas (${rows.length})</label><button class="btn danger" type="submit" form="compras-bulk" name="accion" value="eliminar_seleccionadas" onclick="return comprasConfirmar()">Eliminar seleccionadas</button></div>${rows.map((r) => purchaseRow(r, r.id === selected.id, `/crm/compras?f=${f}&id=${r.id}`)).join("")}</div><div class="compras-detail">${purchaseDetail(selected, f)}</div></div>
+<script>
+(function(){
+  var all = document.getElementById("csel-all");
+  function boxes(){ return Array.prototype.slice.call(document.querySelectorAll(".csel")); }
+  if(all) all.addEventListener("change", function(){ boxes().forEach(function(b){ b.checked = all.checked; }); });
+  window.comprasConfirmar = function(){
+    var n = boxes().filter(function(b){ return b.checked; }).length;
+    if(n === 0){ alert("Marca primero las solicitudes que quieres eliminar."); return false; }
+    return confirm("¿Eliminar " + n + " solicitud(es)? Se pueden recuperar luego desde la Papelera.");
+  };
+})();
+</script>`}`;
   res.type("html").send(page("Compras", me(res), body, msgOf(req)));
 });
 
 crm.post("/compras-masivo", (req, res) => {
+  const accion = String(req.body.accion ?? "eliminar_cerradas");
+  const vuelta = `/crm/compras?f=${encodeURIComponent(String(req.body.f ?? "nuevas"))}`;
+  if (accion === "eliminar_seleccionadas") {
+    const ids = new Set(([] as string[]).concat(req.body.ids ?? []).map(String));
+    if (ids.size === 0) return back(res, vuelta, "No has seleccionado ninguna solicitud");
+    const todas = list<PurchaseRequestRow>("purchase_requests");
+    const elegidas = todas.filter((r) => ids.has(r.id) && r.source === "web_form");
+    if (elegidas.length === 0) return back(res, vuelta, "No había nada que eliminar");
+    moveManyToTrash(elegidas.map((r) => ({ collection: "purchase_requests", record: r, label: `Compra: ${purchaseTitle(r)} (${r.lead_phone ?? "sin contacto"})` })), me(res).email);
+    const quitar = new Set(elegidas.map((r) => r.id));
+    save("purchase_requests", todas.filter((r) => !quitar.has(r.id)));
+    return back(res, vuelta, `${elegidas.length} solicitud(es) movida(s) a la papelera`);
+  }
   if (me(res).role !== "admin") return back(res, "/crm/compras", "Solo el administrador puede eliminar todas las cerradas");
   const rows = list<PurchaseRequestRow>("purchase_requests");
   const cerradas = rows.filter((r) => r.source === "web_form" && (r.status === "bought" || r.status === "discarded"));
