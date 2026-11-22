@@ -625,6 +625,10 @@ function list<T>(name: string): T[] {
 }
 function save<T>(name: string, rows: T[]) {
   writeCollection(name, rows);
+  // Los contadores de la barra superior se guardan 10 s en caché (ver
+  // headerBadgeCounts): al marcar un chat como leído desde el CRM el número
+  // no bajaba hasta pasar ese tiempo, y parecía que "no se marcaba" (22/11/2026).
+  headerBadgeCache = null;
 }
 function now() {
   return new Date().toISOString();
@@ -3341,6 +3345,7 @@ function bulkBar(base: string, f: MsgFilter, q: string, count: number, withAnswe
 <div class="bulkbar">
 <label><input class="msgsel" type="checkbox" onchange="toggleAllMsgs(this,'ids')"> Seleccionar todos (${count})</label>
 <button class="btn light" type="submit" form="${base}-bulk" name="accion" value="marcar_leido">Marcar leído</button>
+<button class="btn light" type="submit" form="${base}-bulk" name="accion" value="marcar_todos_leidos" title="Marca como leído todo lo de esta vista, sin seleccionar nada">Todo leído</button>
 <button class="btn light" type="submit" form="${base}-bulk" name="accion" value="archivar">Archivar</button>
 <button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_seleccionados" onclick="return confirm('¿Eliminar los mensajes seleccionados? Se pueden recuperar luego desde la Papelera.')">Eliminar seleccionados</button>
 <button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_todos" onclick="return confirm('¿Eliminar ${scope.replace(/'/g, "")} (' + document.querySelectorAll(\`input[type=checkbox][name=ids]\`).length + ' en pantalla)? Se pueden recuperar luego desde la Papelera.')">Eliminar todos los de esta vista</button>
@@ -3361,6 +3366,7 @@ function contactosBulkBar(base: string, f: MsgFilter, q: string, count: number):
 <label class="cbulkbar-all"><input class="msgsel" type="checkbox" onchange="toggleAllMsgs(this,'ids')"> Seleccionar todos (${count})</label>
 <div class="cbulkbar-actions">
 <button class="btn light" type="submit" form="${base}-bulk" name="accion" value="marcar_leido">Leído</button>
+<button class="btn light" type="submit" form="${base}-bulk" name="accion" value="marcar_todos_leidos" title="Marca como leído todo lo de esta vista, sin seleccionar nada">Todo leído</button>
 <button class="btn light" type="submit" form="${base}-bulk" name="accion" value="archivar">Archivar</button>
 <button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_seleccionados" onclick="return confirm('¿Eliminar los seleccionados? Se pueden recuperar luego desde la Papelera.')">Eliminar</button>
 <button class="btn danger" type="submit" form="${base}-bulk" name="accion" value="eliminar_todos" onclick="return confirm('¿Eliminar todos los de esta vista (' + document.querySelectorAll(\`input[type=checkbox][name=ids]\`).length + ' en pantalla)? Se pueden recuperar luego desde la Papelera.')">Eliminar todo</button>
@@ -3402,10 +3408,10 @@ function runBulkAction<T extends { id: string; read?: boolean; archived?: boolea
   deletedBy: string,
 ): number {
   const items = list<T>(collection);
-  const targets = accion === "eliminar_todos" ? items.filter((m) => matchesMsgFilter(filterScope.f, m) && filterScope.search(m)) : items.filter((m) => ids.includes(m.id));
+  const targets = accion === "eliminar_todos" || accion === "marcar_todos_leidos" ? items.filter((m) => matchesMsgFilter(filterScope.f, m) && filterScope.search(m)) : items.filter((m) => ids.includes(m.id));
   if (targets.length === 0) return 0;
   const targetIds = new Set(targets.map((t) => t.id));
-  if (accion === "marcar_leido") {
+  if (accion === "marcar_leido" || accion === "marcar_todos_leidos") {
     for (const m of items) if (targetIds.has(m.id)) m.read = true;
     save(collection, items);
   } else if (accion === "archivar") {
