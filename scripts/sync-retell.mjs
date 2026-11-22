@@ -370,12 +370,13 @@ async function syncVoice(state) {
     // Miguel repitió la misma pregunta una y otra vez sin colgar, gastando
     // créditos de Retell durante casi una hora. No existía ningún límite de
     // duración ni de silencio -- se añaden los dos:
-    // - max_call_duration_ms: corte duro a los 10 minutos, tiempo de sobra
-    //   para cualquier consulta real (la mayoría de llamadas normales duran
-    //   unos pocos minutos).
+    // - max_call_duration_ms: corte duro a los 5 minutos (bajado de 10 el
+    //   22/11/2026 a petición del dueño), tiempo de sobra para cualquier
+    //   consulta real (la mayoría de llamadas normales duran unos pocos
+    //   minutos).
     // - end_call_after_silence_ms: si no se oye nada (ni Miguel ni el
     //   cliente) durante 30s seguidos, cuelga solo.
-    max_call_duration_ms: 600000,
+    max_call_duration_ms: 300000,
     end_call_after_silence_ms: 30000,
     // responsiveness (0-1): más bajo = Miguel espera más antes de responder,
     // para no cortar a un cliente que se queda pensando a media frase. No

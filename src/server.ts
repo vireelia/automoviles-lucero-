@@ -2075,6 +2075,16 @@ app.post("/telephony/voice-inbound", express.urlencoded({ extended: false }), (r
     return;
   }
   const response = new twilioPkg.twiml.VoiceResponse();
+  // 22/11/2026: estos dos números llamaron 51 y 35 minutos seguidos sin que se
+  // entendiera nada (música de fondo, ningún interlocutor real) y gastaron
+  // créditos de Retell. Se cuelga al instante, antes de pasar a Miguel.
+  const blockedCallers = ["+33685050354", "+33610630581"];
+  const caller = String(req.body?.From ?? "").replace(/[^\d+]/g, "");
+  if (blockedCallers.includes(caller)) {
+    response.reject();
+    res.type("text/xml").send(response.toString());
+    return;
+  }
   if (isVoiceAgentEnabled()) {
     response.dial().sip("sip:sip.retellai.com");
   } else {
