@@ -2627,39 +2627,49 @@ const PURCHASE_STATUS_LABEL: Record<string, string> = {
   discarded: "Descartada",
 };
 const isVideoUrl = (u: string) => /\.(mp4|mov|webm)(\?|$)/i.test(u);
-function purchaseCard(r: PurchaseRequestRow): string {
-  const title = [r.make, r.model].filter(Boolean).join(" ") || "Vehículo sin identificar";
-  const specs = [
-    r.vehicle_type === "furgoneta" ? "Furgoneta" : r.vehicle_type === "coche" ? "Coche" : null,
-    r.year ? String(r.year) : null,
-    typeof r.km === "number" ? `${r.km.toLocaleString("es-ES")} km` : null,
-    r.fuel || null,
-    r.plate ? `Matrícula ${r.plate}` : null,
-  ].filter(Boolean);
+const CAR_ICON = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16.5h14M6.5 16.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm11 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM5 12.5l1.3-4a2 2 0 0 1 1.9-1.4h7.6a2 2 0 0 1 1.9 1.4l1.3 4H5Z"/></svg>`;
+function purchaseStatusPill(status: string): string {
+  const cls = status === "pending_review" ? "background:var(--accent);color:#fff" : status === "contacted" ? "background:var(--warn);color:#fff" : status === "bought" ? "background:var(--ok);color:#fff" : "background:var(--off);color:#fff";
+  return `<span class="tag" style="${cls}">${esc(PURCHASE_STATUS_LABEL[status] ?? status)}</span>`;
+}
+function purchaseTitle(r: PurchaseRequestRow): string {
+  return [r.make, r.model].filter(Boolean).join(" ") || "Vehículo sin identificar";
+}
+function purchaseThumb(r: PurchaseRequestRow, w = 54, h = 42): string {
+  const first = (r.photo_urls ?? []).find((u) => !isVideoUrl(u));
+  return first
+    ? `<img src="${esc(first)}" alt="" loading="lazy" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:8px;border:1px solid var(--border);display:block">`
+    : `<div style="width:${w}px;height:${h}px;border-radius:8px;background:var(--panel);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--ink-dim)">${CAR_ICON}</div>`;
+}
+function purchaseRow(r: PurchaseRequestRow, selected: boolean, href: string): string {
+  const name = contactLabel(r.lead_phone, r.lead_name);
+  return `<a href="${esc(href)}" class="crow${selected ? " sel" : ""}">${purchaseThumb(r)}<div class="rb"><b>${esc(purchaseTitle(r))}</b><span>${esc(name)} · ${esc(fmtDate(r.created_at).split(",")[0])}</span></div>${purchaseStatusPill(r.status)}</a>`;
+}
+function purchaseDetail(r: PurchaseRequestRow, f: string): string {
+  const urls = r.photo_urls ?? [];
+  const tiles = urls.slice(0, 5).map((u, i) => {
+    const big = i === 0;
+    const more = i === 4 && urls.length > 5 ? `<span style="position:absolute;inset:0;background:rgba(0,0,0,.55);color:#fff;font-weight:800;font-size:20px;display:flex;align-items:center;justify-content:center">+${urls.length - 5}</span>` : "";
+    const box = `position:relative;display:block;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:var(--panel);${big ? "grid-column:1/3;grid-row:1/3;min-height:170px" : "min-height:82px"}`;
+    return isVideoUrl(u)
+      ? `<a href="${esc(u)}" target="_blank" rel="noopener" style="${box};display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--ink);text-decoration:none">▶ Ver vídeo</a>`
+      : `<a href="${esc(u)}" target="_blank" rel="noopener" style="${box}"><img src="${esc(u)}" alt="Foto del vehículo" loading="lazy" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">${more}</a>`;
+  }).join("");
   const price = typeof r.expected_price_eur === "number" && r.expected_price_eur > 0 ? `${r.expected_price_eur.toLocaleString("es-ES")} €` : "";
-  const photos = (r.photo_urls ?? []).map((u) =>
-    isVideoUrl(u)
-      ? `<a href="${esc(u)}" target="_blank" rel="noopener" class="tag" style="text-decoration:none">▶ Ver vídeo</a>`
-      : `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Foto del vehículo" loading="lazy" style="width:110px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--border)"></a>`,
-  ).join("");
-  const tagClass = r.status === "pending_review" ? "t-hot" : r.status === "contacted" ? "t-warm" : "";
-  const btn = (accion: string, label: string, cls = "") => `<form method="post" action="/crm/compras/${esc(r.id)}" style="display:inline"><input type="hidden" name="accion" value="${accion}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-  const waMsg = `Hola${r.lead_name ? " " + r.lead_name : ""}, te escribimos de Automóviles Lucero por la solicitud que nos enviaste para vender tu ${title}. ¿Podemos hablar?`;
+  const kv = (label: string, value: string | null | undefined) => `<div class="kvc"><small>${label}</small><b>${value ? esc(value) : "—"}</b></div>`;
+  const btn = (accion: string, label: string, cls = "") => `<form method="post" action="/crm/compras/${esc(r.id)}" style="display:inline"><input type="hidden" name="accion" value="${accion}"><input type="hidden" name="f" value="${esc(f)}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
+  const waMsg = `Hola${r.lead_name ? " " + r.lead_name : ""}, te escribimos de Automóviles Lucero por la solicitud que nos enviaste para vender tu ${purchaseTitle(r)}. ¿Podemos hablar?`;
   const actions =
     r.status === "pending_review" ? btn("contactado", "Marcar contactada", "ok") + btn("descartar", "Descartar") :
     r.status === "contacted" ? btn("comprado", "Marcar comprada", "ok") + btn("descartar", "Descartar") :
     btn("reabrir", "Reabrir");
-  return `<div class="card${r.status === "pending_review" ? " urgent" : ""}" id="c-${esc(r.id)}"><div class="info">
-<h3>${esc(title)} <span class="tag ${tagClass}">${esc(PURCHASE_STATUS_LABEL[r.status] ?? r.status)}</span></h3>
-${price ? `<p style="font-size:20px;font-weight:700;margin:4px 0">Pide: ${esc(price)}</p>` : ""}
-${specs.length ? `<p>${esc(specs.join(" · "))}</p>` : ""}
-${r.condition ? `<p>Estado: ${esc(r.condition)}</p>` : ""}
-${r.known_issues ? `<p>Problemas conocidos: ${esc(r.known_issues)}</p>` : ""}
-${r.comments ? `<p>Comentarios del propietario: ${esc(r.comments)}</p>` : ""}
-<p>Cliente: <b>${esc(contactLabel(r.lead_phone, r.lead_name))}</b>${r.email ? ` · ${esc(r.email)}` : ""} · ${esc(fmtDate(r.created_at))}${r.available_for_call ? " · quiere que le llamen" : ""}</p>
-${photos ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">${photos}</div>` : `<p class="sub">Sin fotos adjuntas.</p>`}
-<div>${actions}${phoneLink(r.lead_phone)}${waButton(r.lead_phone, waMsg)}</div>
-</div></div>`;
+  return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline"><h2 style="margin:0">${esc(purchaseTitle(r))} ${purchaseStatusPill(r.status)}</h2>${price ? `<div style="font-size:22px;font-weight:800">${esc(price)}</div>` : ""}</div>
+${tiles ? `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:12px 0 14px">${tiles}</div>` : `<p class="sub">Sin fotos adjuntas.</p>`}
+<div class="kvgrid">${kv("Tipo", r.vehicle_type === "furgoneta" ? "Furgoneta" : r.vehicle_type === "coche" ? "Coche" : null)}${kv("Año", r.year ? String(r.year) : null)}${kv("Kilómetros", typeof r.km === "number" ? `${r.km.toLocaleString("es-ES")} km` : null)}${kv("Combustible", r.fuel)}${kv("Matrícula", r.plate)}${kv("Estado", r.condition)}</div>
+${r.known_issues ? `<p><span class="sub">Problemas conocidos:</span> ${esc(r.known_issues)}</p>` : ""}
+${r.comments ? `<p><span class="sub">Comentarios del propietario:</span> ${esc(r.comments)}</p>` : ""}
+<p><b>${esc(contactLabel(r.lead_phone, r.lead_name))}</b>${r.lead_phone ? ` · ${esc(r.lead_phone)}` : ""}${r.email ? ` · ${esc(r.email)}` : ""} · recibida el ${esc(fmtDate(r.created_at))}${r.available_for_call ? ` · <span style="color:var(--ok);font-weight:600">quiere que le llamen</span>` : ""}</p>
+<div style="display:flex;gap:8px;flex-wrap:wrap">${actions}${phoneLink(r.lead_phone)}${waButton(r.lead_phone, waMsg)}</div>`;
 }
 crm.get("/compras", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "nuevas";
@@ -2675,10 +2685,23 @@ crm.get("/compras", (req, res) => {
     all.filter((r) => r.status === "pending_review");
   const count = (fn: (r: PurchaseRequestRow) => boolean) => all.filter(fn).length;
   const pill = (k: string, label: string, n: number) => `<a href="/crm/compras?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label} (${n})</a>`;
+  const idQ = typeof req.query.id === "string" ? req.query.id : "";
+  const selected = rows.find((r) => r.id === idQ) ?? rows[0] ?? null;
   const body = `<h1>Compras</h1>
 <p class="sub">Personas que han rellenado el formulario de vender su coche o furgoneta en la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
 <p>${pill("nuevas", "Nuevas", count((r) => r.status === "pending_review"))} ${pill("contactadas", "Contactadas", count((r) => r.status === "contacted"))} ${pill("cerradas", "Cerradas", count((r) => r.status === "bought" || r.status === "discarded"))} ${pill("todas", "Todas", all.length)}</p>
-${rows.length === 0 ? `<div class="empty">No hay solicitudes en esta lista. Aquí aparecen solo las que un cliente envía desde el formulario de la web.</div>` : `<div class="records-list">${rows.map(purchaseCard).join("")}</div>`}`;
+<style>
+.compras-split{display:grid;grid-template-columns:minmax(260px,330px) 1fr;border:1px solid var(--border);border-radius:14px;overflow:hidden;min-height:480px}
+.compras-list{background:var(--panel);border-right:1px solid var(--border);max-height:70vh;overflow:auto}
+.crow{display:grid;grid-template-columns:54px 1fr auto;gap:10px;align-items:center;padding:11px 12px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--ink)}
+.crow.sel{background:var(--bg);box-shadow:inset 3px 0 0 var(--accent)}
+.crow .rb{min-width:0;display:flex;flex-direction:column}.crow .rb b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.crow .rb span{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.compras-detail{padding:18px;min-width:0}
+.kvgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
+.kvc{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:8px 10px}.kvc small{display:block;color:var(--ink-dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+@media(max-width:760px){.compras-split{grid-template-columns:1fr}.compras-list{border-right:0;border-bottom:1px solid var(--border);max-height:260px}}
+</style>
+${rows.length === 0 || !selected ? `<div class="empty">No hay solicitudes en esta lista. Aquí aparecen solo las que un cliente envía desde el formulario de la web.</div>` : `<div class="compras-split"><div class="compras-list">${rows.map((r) => purchaseRow(r, r.id === selected.id, `/crm/compras?f=${f}&id=${r.id}`)).join("")}</div><div class="compras-detail">${purchaseDetail(selected, f)}</div></div>`}`;
   res.type("html").send(page("Compras", me(res), body, msgOf(req)));
 });
 
@@ -2693,7 +2716,7 @@ crm.post("/compras/:id", (req, res) => {
   r.updated_at = now();
   r.handled_by = me(res).name;
   save("purchase_requests", rows);
-  back(res, "/crm/compras?f=todas", "Solicitud actualizada");
+  back(res, `/crm/compras?f=${encodeURIComponent(String(req.body.f ?? "todas"))}&id=${r.id}`, "Solicitud actualizada");
 });
 
 crm.get("/reservas", async (req, res) => {
