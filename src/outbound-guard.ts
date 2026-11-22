@@ -304,7 +304,7 @@ export const APPOINTMENT_TEMPLATE_STALE_HOURS = 2;
 
 function registrarEnvioPlantilla(input: {
   phone: string;
-  template: "vehicle_contact" | "team_alert" | "client_reminder";
+  template: "vehicle_contact" | "vehicle_contact_generic" | "team_alert" | "client_reminder";
   reason: string;
   resultado: "autorizado" | "bloqueado";
   motivo: string;
@@ -460,6 +460,25 @@ export async function sendVehicleContactTemplateGuarded(
   const { sendZernioWhatsappVehicleContactTemplate } = await import("./integrations/zernio.js");
   const result = await sendZernioWhatsappVehicleContactTemplate(phone, vehicleLabel);
   registrarEnvioPlantilla({ phone, template: "vehicle_contact", reason, resultado: result.ok ? "autorizado" : "bloqueado", motivo: result.ok ? "enviado" : `envio_fallido:${result.error}` });
+  return result;
+}
+
+// Primer contacto con la plantilla aprobada cuando el coche por el que preguntó
+// el cliente YA NO está disponible (22/11/2026, "esos clientes pendientes que
+// se les contacte, que para eso se activó la plantilla"). No nombra ningún coche
+// concreto (solo "el vehículo que consultaste en <portal>"), así que no afirma
+// nada falso; no pasa por la comprobación de catálogo a propósito, porque el
+// motivo de usarla es justo que ese coche ya no está. Cuando el cliente
+// responde se abre la ventana de 24 h y Carolina sigue con la regla de venta
+// perdida (enlace del catálogo y pedir marca y modelo).
+export async function sendGenericContactTemplateGuarded(
+  phone: string,
+  label: string,
+  reason: string,
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  const { sendZernioWhatsappVehicleContactTemplate } = await import("./integrations/zernio.js");
+  const result = await sendZernioWhatsappVehicleContactTemplate(phone, label);
+  registrarEnvioPlantilla({ phone, template: "vehicle_contact_generic", reason, resultado: result.ok ? "autorizado" : "bloqueado", motivo: result.ok ? "enviado" : `envio_fallido:${result.error}` });
   return result;
 }
 

@@ -20,7 +20,7 @@ import { isEmailAutoSendEnabled, isEmailContactPaused, getEmailAiProcessingState
 import { upsertLead } from "../tools/leads.js";
 import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "../integrations/whatsapp.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
-import { authorizeOutboundMessage, sendVehicleContactTemplateGuarded } from "../outbound-guard.js";
+import { authorizeOutboundMessage, sendVehicleContactTemplateGuarded, sendGenericContactTemplateGuarded } from "../outbound-guard.js";
 import { getOfficialStatus } from "../tools/vehicle-state.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 
@@ -557,24 +557,36 @@ async function contactLeadViaWhatsapp(
   // plantilla del todo y caía directo al aviso de "escribir a mano", aunque
   // la plantilla habría funcionado igual con un texto genérico. Ya no exige
   // vehicleLabel -- usa un texto genérico cuando no hay uno real.
-  // La plantilla de Meta ("contacto_inicial_vehiculo") dice literalmente
-  // "vimos su interés... agendar una visita" -- NUNCA puede usarse como
-  // respaldo cuando ya sabemos que el vehículo no está disponible, aunque
-  // falle el texto libre de arriba. En ese caso se deriva directo a
-  // revisión humana con el texto honesto ya redactado.
-  if (!vehicleConfirmedUnavailable && (await isContactoInicialTemplateApproved())) {
-    // FASE 2D (18/11/2026): releído contra el catálogo real en el instante
-    // del envío (sendVehicleContactTemplateGuarded), no solo lo calculado
-    // más arriba (vehicleConfirmedUnavailable) -- defensa en profundidad
-    // ante cualquier reproceso/retraso real entre ambos puntos.
-    const templateSent = await sendVehicleContactTemplateGuarded(waPhone, vehicleLabel || "el vehículo que consultaste", catalogMatch?.id ?? null, `contactLeadViaWhatsapp:${portal}`);
+  // Con el coche YA NO disponible (22/11/2026, "esos clientes pendientes, que se
+  // les contacte, que para eso se activó la plantilla"): antes esto nunca se
+  // intentaba y el aviso se quedaba en Pendiente para siempre. Ahora se manda
+  // la misma plantilla aprobada con texto genérico ("el vehículo que consultaste
+  // en <portal>"), que no afirma nada falso de ese coche, y Carolina lo sabe en
+  // su memoria para decírselo con naturalidad cuando el cliente responda.
+  if (await isContactoInicialTemplateApproved()) {
+    const portalLabel = portal ?? "el portal";
+    let templateSent: { ok: boolean; error?: string };
+    if (vehicleConfirmedUnavailable) {
+      templateSent = await sendGenericContactTemplateGuarded(waPhone, `vehículo que consultaste en ${portalLabel}`, `contactLeadViaWhatsapp:${portalLabel}:no_disponible`);
+    } else {
+      // FASE 2D (18/11/2026): releído contra el catálogo real en el instante
+      // del envío (sendVehicleContactTemplateGuarded), no solo lo calculado
+      // más arriba (vehicleConfirmedUnavailable) -- defensa en profundidad
+      // ante cualquier reproceso/retraso real entre ambos puntos.
+      templateSent = await sendVehicleContactTemplateGuarded(waPhone, vehicleLabel || "el vehículo que consultaste", catalogMatch?.id ?? null, `contactLeadViaWhatsapp:${portal}`);
+    }
     if (templateSent.ok) {
       // La plantilla YA es el primer contacto completo (se presenta, nombra
       // el vehículo e invita a escribir para agendar la visita), así que no
       // se manda nada más detrás. Cuando el cliente responda, se abre la
       // ventana de 24h y Carolina sigue la conversación con normalidad.
       markContacted(firstContact);
-      recordAssistantMessage(waPhone, `(plantilla de primer contacto enviada sobre ${vehicleLabel || "el vehículo consultado"})`);
+      recordAssistantMessage(
+        waPhone,
+        vehicleConfirmedUnavailable
+          ? `(plantilla de primer contacto enviada. IMPORTANTE: el ${vehicleLabel || "vehículo"} por el que preguntó en ${portalLabel} YA NO está disponible. Si responde, díselo con naturalidad y aplica la regla de VENTA PERDIDA: enseña 2-3 opciones reales, envía el enlace del catálogo y pídele marca y modelo para concertarle una visita o reserva.)`
+          : `(plantilla de primer contacto enviada sobre ${vehicleLabel || "el vehículo consultado"})`,
+      );
       recordInbox(email, "sent_whatsapp_plantilla", { portal, answered: true, answeredBy: "ia" });
       await marcarProcesado(email, "sent_whatsapp_plantilla");
       return { outcome: "sent_whatsapp_plantilla" };

@@ -8,6 +8,7 @@ import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, sync
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone, isRealName } from "./tools/leads.js";
 import { withRequiredName } from "./tools/client-name.js";
 import { registerWebLeadsRoutes } from "./web-leads.js";
+import { portalTemplateBacklogCandidates, startPortalTemplateBacklog } from "./alerts/portal-template-backlog.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
@@ -22,7 +23,7 @@ import { readCollection, writeCollection, claimOnce, mutateCollectionSync, write
 import { restoreFromTrash, moveToTrash, moveManyToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailGetMetadata, gmailListUnread, calendarBusy, calendarListEvents, type GmailMessage } from "./integrations/google.js";
 import { extractWallapopContact, detectPortal } from "./email/interest.js";
-import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
+import { sendWhatsappText, isWhatsappConnected, explainWhatsappSendError } from "./integrations/whatsapp.js";
 import { esAnteriorAlCorte } from "./deploy-safety.js";
 import {
   verifyZernioSignature,
@@ -875,6 +876,30 @@ app.post("/admin/compras/borrar_antiguas", requireAdminToken, route(async (a: { 
     writeCollection("purchase_requests", rows.filter((r) => r.source === "web_form"));
   }
   return { status: "ok", dry_run: dryRun, total: rows.length, a_la_papelera: antiguas.length, se_quedan: rows.length - antiguas.length };
+}));
+
+// Traduce los textos técnicos ya guardados en avisos viejos (22/11/2026, "esto
+// que sale así en las secciones en pendiente, corrígelo"): antes se guardaba el
+// código interno tal cual. dryRun por defecto.
+app.post("/admin/whatsapp/traducir_errores_viejos", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const claro = explainWhatsappSendError("sin_conversacion_abierta");
+  const reemplazar = (t: string | null | undefined) => (typeof t === "string" ? t.split("sin_conversacion_abierta").join(claro) : t);
+  const inbox = readCollection<{ draft_note?: string }>("email_inbox");
+  const alertas = readCollection<{ reason?: string; draft_note?: string | null }>("alerts");
+  let nInbox = 0, nAlertas = 0;
+  for (const m of inbox) if (m.draft_note?.includes("sin_conversacion_abierta")) { nInbox++; if (!dryRun) m.draft_note = reemplazar(m.draft_note) as string; }
+  for (const al of alertas) if (al.reason?.includes("sin_conversacion_abierta") || al.draft_note?.includes("sin_conversacion_abierta")) { nAlertas++; if (!dryRun) { al.reason = reemplazar(al.reason) as string; al.draft_note = reemplazar(al.draft_note) as string | null; } }
+  if (!dryRun) { writeCollection("email_inbox", inbox); writeCollection("alerts", alertas); }
+  return { status: "ok", dry_run: dryRun, correos_a_corregir: nInbox, alertas_a_corregir: nAlertas };
+}));
+
+// Contacto con la plantilla de los clientes de portal pendientes cuyo coche ya
+// no está disponible (22/11/2026). dryRun por defecto: solo lista a quién.
+app.post("/admin/portal/contactar_pendientes_plantilla", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const candidatos = portalTemplateBacklogCandidates();
+  if (a?.dryRun !== false) return { status: "ok", dry_run: true, total: candidatos.length, candidatos };
+  return { status: "ok", dry_run: false, ...(await startPortalTemplateBacklog()) };
 }));
 
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {

@@ -37,6 +37,25 @@ function knownMakes(): string[] {
   return [...new Set(currentVehicles().map((v) => v.make))];
 }
 
+// Búsqueda de texto libre (22/11/2026, caso real: una clienta pidió "algo
+// barato para primer coche y que sea automático" y la búsqueda literal de
+// "automático barato" devolvió 0 resultados -- esas palabras no están en
+// marca, modelo ni versión -- así que el agente le dijo que no había coches
+// baratos ni automáticos, con 38 coches disponibles y 10 por debajo de
+// 9.000 €). Las palabras de "cualidad" (barato, automático, manual) no se
+// buscan como texto: se interpretan.
+const CHEAP_WORDS = new Set(["barato", "barata", "baratos", "baratas", "economico", "economica", "economicos", "economicas", "asequible", "asequibles"]);
+const AUTO_WORDS = new Set(["automatico", "automatica", "automaticos", "automaticas", "automatic"]);
+const MANUAL_WORDS = new Set(["manual", "manuales"]);
+const FILLER_WORDS = new Set([
+  "coche", "coches", "carro", "vehiculo", "vehiculos", "primer", "primero", "algo", "para", "un", "una", "unos", "unas", "que",
+  "sea", "y", "o", "de", "del", "el", "la", "los", "las", "con", "mi", "busco", "quiero", "necesito", "buscar", "tipo", "cambio", "me", "interesa", "en",
+]);
+// Solo cuenta como automático el que lo dice en su versión; el feed no trae
+// el tipo de cambio como campo, así que nunca se afirma lo que no consta.
+const EXPLICIT_AUTO = /\b(aut\.?|automatic[oa]?|dsg|s[\s-]?tronic|tiptronic|steptronic|multitronic|edc|cvt|xtronic|[789]g-?tronic|g-?tronic|powershift|robotizado|easytronic|dualogic|speedshift)(?=\W|$)/i;
+export const PORTAL_URL = "https://www.coches.net/concesionario/autolunaslagunamadrid/";
+
 export function searchVehicles(args: {
   query?: string;
   make?: string;
@@ -59,7 +78,21 @@ export function searchVehicles(args: {
   // devolvía 0 resultados, aunque category si lo habría encontrado. Ahora
   // también compara contra la categoría normalizada (mismos sinónimos ya
   // reales de CATEGORY_SYNONYMS), sin tocar el resto del comportamiento.
-  const q = args.query ? normalize(args.query) : null;
+  let q = args.query ? normalize(args.query) : null;
+  const searchNotes: string[] = [];
+  let wantsCheap = false;
+  let wantsAuto = false;
+  let wantsManual = false;
+  if (q) {
+    const words = q.split(/[^a-z0-9]+/).filter(Boolean);
+    wantsCheap = words.some((w) => CHEAP_WORDS.has(w));
+    wantsAuto = words.some((w) => AUTO_WORDS.has(w));
+    wantsManual = words.some((w) => MANUAL_WORDS.has(w));
+    if (wantsCheap || wantsAuto || wantsManual) {
+      const residual = words.filter((w) => !CHEAP_WORDS.has(w) && !AUTO_WORDS.has(w) && !MANUAL_WORDS.has(w) && !FILLER_WORDS.has(w) && !/^\d+$/.test(w));
+      q = residual.length > 0 ? residual.join(" ") : null;
+    }
+  }
   if (q) {
     // La consulta puede traer más palabras que solo el tipo de vehículo
     // ("furgoneta de unos 11000 euros") -- se busca cualquier sinónimo de
@@ -86,6 +119,23 @@ export function searchVehicles(args: {
   if (typeof args.max_price_eur === "number") results = results.filter((v) => v.price_eur <= args.max_price_eur!);
   if (typeof args.min_price_eur === "number") results = results.filter((v) => v.price_eur >= args.min_price_eur!);
   if (typeof args.max_km === "number") results = results.filter((v) => v.km <= args.max_km!);
+
+  if (wantsAuto) {
+    const autos = results.filter((v) => EXPLICIT_AUTO.test(v.version));
+    if (autos.length > 0) {
+      results = autos;
+      searchNotes.push("Automáticos: solo se pueden identificar los que lo indican en su versión (Aut., DSG, S tronic...); puede haber más -- la ficha de cada coche o el equipo lo confirma. No digas que no hay otros.");
+    } else {
+      searchNotes.push("El catálogo no indica el tipo de cambio de estos coches: NO digas que no hay automáticos. Di que lo confirma el equipo y ofrece el catálogo.");
+    }
+  }
+  if (wantsManual) {
+    searchNotes.push("El catálogo no indica el tipo de cambio de la mayoría de coches: NO digas que no hay manuales. Di que lo confirma el equipo y ofrece el catálogo.");
+  }
+  if (wantsCheap) {
+    results = [...results].sort((a, b) => a.price_eur - b.price_eur);
+    searchNotes.push("\"Barato\" se ha interpretado como ordenar de menor a mayor precio (sin tope de presupuesto): enseña los más baratos con su precio real y pregunta el presupuesto aproximado.");
+  }
 
   const page = args.page && args.page > 0 ? args.page : 1;
   const start = (page - 1) * PAGE_SIZE;
@@ -131,6 +181,26 @@ export function searchVehicles(args: {
       // real -- compara estos modelos con lo que dijo (fonéticamente, la voz
       // transcribe mal) antes de decir que no lo tenemos.
       same_make_suggestions: sameMakeSuggestions,
+      ...(searchNotes.length > 0 ? { search_notes: searchNotes } : {}),
+      // Venta perdida (22/11/2026, "cuando pase esto, que Carolina le envíe el
+      // link del portal y le diga que mire algún coche que le interese y le
+      // diga marca y modelo para concertarle una visita o reserva"): sin
+      // coincidencia exacta NUNCA se cierra con "no tengo" -- se ofrece el
+      // catálogo completo y los más baratos reales.
+      ...(results.length === 0
+        ? {
+            no_match_guidance: {
+              portal_url: PORTAL_URL,
+              cheapest_available: currentVehicles()
+                .filter((v) => v.stock_status === "available")
+                .sort((a, b) => a.price_eur - b.price_eur)
+                .slice(0, 3)
+                .map((v) => ({ make: v.make, model: v.model, version: v.version, year: v.year, km: v.km, price_eur: v.price_eur })),
+              instruction:
+                "No cierres con 'no tengo'. Envía el enlace del catálogo, pídele que mire cualquier coche que le interese y te diga marca y modelo para concertarle una visita o una reserva, y ofrécele los más baratos de cheapest_available.",
+            },
+          }
+        : {}),
     },
     source: "Coches.net PRO (exportación oficial del negocio, feed XML) -- refrescado 14/10/2026. NO es un feed en vivo todavía.",
     source_updated_at: "2026-10-14",
