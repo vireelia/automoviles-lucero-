@@ -30,7 +30,9 @@ const r3 = R(await createAppointmentWithCalendar({ lead_phone: "+34600000903", l
 check("coche marcado como vendido -> denied", r3.status === "denied" && r3.error_code === "vehicle_not_available");
 
 const r4 = R(await createAppointmentWithCalendar({ lead_phone: "+34600000904", lead_name: "Luis Mora", requested_date: "2030-01-16", requested_time: "10:30", channel: "WHATSAPP" } as any));
-check("visita sin coche concreto sigue permitida", r4.status === "ok");
+check("visita sin coche concreto -> denied vehicle_required (regla 23/11)", r4.status === "denied" && r4.error_code === "vehicle_required");
+const r4b = R(await createAppointmentWithCalendar({ lead_phone: "+34600000905", lead_name: "Eva Gil", appointment_type: "tasacion", requested_date: "2030-01-16", requested_time: "11:30", channel: "WHATSAPP" } as any));
+check("tasación (su propio coche) no exige coche del stock", r4b.status === "ok");
 
 // cierre silencioso de las existentes
 const base = readCollection<any>("appointments");

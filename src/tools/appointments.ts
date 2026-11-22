@@ -202,14 +202,34 @@ export async function createAppointment(args: {
   // podemos hacer visitas de ellos"): no se agenda una visita para un coche que
   // ya no está en el stock. Los ids cambian al reimportar el stock, así que el
   // agente debe volver a buscar el coche antes de darlo por perdido.
+  // 23/11/2026 ("mejorar las visitas o reservas reales con vehículos
+  // disponibles reales"): una visita, prueba o reserva comercial es SIEMPRE
+  // para un coche concreto del stock. Sin vehicle_id no se agenda (la
+  // tasación de su coche no lo necesita).
+  const tipoCita = args.appointment_type ?? "visita";
+  if (!args.vehicle_id && tipoCita !== "tasacion") {
+    return envelope({
+      status: "denied",
+      error_code: "vehicle_required",
+      data: {
+        message:
+          "Falta el coche. Una visita es siempre para un coche concreto del stock: pregunta cuál le interesa (marca y modelo), búscalo con search_vehicles y usa el id que devuelva. Si aún no sabe cuál, enséñale 2-3 opciones reales según su presupuesto o envíale el catálogo, y agenda cuando elija una.",
+        ...buildNoMatchGuidance(),
+      },
+      source: "regla del negocio 23/11/2026: visitas y reservas solo con coches reales disponibles",
+    });
+  }
   if (args.vehicle_id) {
     const sellable = vehicleStillSellable(args.vehicle_id);
-    if (!sellable.ok) {
+    // Un coche con reserva ya confirmada o fuera de venta tampoco se enseña.
+    const cat = currentVehicles().find((v) => v.id === args.vehicle_id);
+    const noEnVenta = sellable.ok && (getOfficialStatus(args.vehicle_id) === "RESERVED" || (cat !== undefined && cat.stock_status !== "available"));
+    if (!sellable.ok || noEnVenta) {
       return envelope({
         status: "denied",
         error_code: "vehicle_not_available",
         data: {
-          motivo: sellable.motivo,
+          motivo: sellable.ok ? "reservado_o_fuera_de_venta" : sellable.motivo,
           message:
             "Ese coche ya no consta en el stock, así que no se puede agendar visita para él todavía. Antes de dárselo por perdido al cliente, vuelve a buscarlo con search_vehicles (marca y modelo): si aparece, usa su id actual y vuelve a intentarlo. Si no aparece, ya no está: díselo con naturalidad y aplica la regla de venta perdida (opciones reales, enlace del catálogo y pedir marca y modelo).",
           ...buildNoMatchGuidance(),
@@ -564,12 +584,19 @@ export async function createAppointmentWithCalendar(args: Parameters<typeof crea
     const endMs = startMs + APPOINTMENT_MINUTES * 60000;
     const busy = await calendarBusy(new Date(startMs).toISOString(), new Date(endMs).toISOString());
     if (busy.some((b) => Date.parse(b.start) < endMs && Date.parse(b.end) > startMs)) {
+      // 23/11/2026 (24% de intentos chocaban): se devuelven ya los huecos
+      // libres reales para ofrecer otro al momento, sin otra consulta.
+      let alternativas: { date: string; time: string }[] = [];
+      try {
+        const libres = (await getAppointmentSlots()) as unknown as { data?: { slots?: { date: string; time: string }[] } | null };
+        alternativas = (libres.data?.slots ?? []).slice(0, 4);
+      } catch { /* sin alternativas: el agente vuelve a pedir get_appointment_slots */ }
       return envelope({
         status: "denied",
         error_code: "slot_busy",
-        data: null,
+        data: { alternativas },
         source: "agenda del negocio (Google Calendar)",
-        conflicts: ["Ese hueco ya está ocupado -- ofrecer otro horario."],
+        conflicts: ["Ese hueco ya está ocupado -- ofrece al momento uno de data.alternativas (son huecos libres reales), sin disculparte de más."],
       });
     }
     const result = await createAppointment(args);

@@ -614,6 +614,9 @@
           "fuel": {
             "type": "string"
           },
+          "gearbox": {
+            "type": "string"
+          },
           "page": {
             "type": "number"
           }

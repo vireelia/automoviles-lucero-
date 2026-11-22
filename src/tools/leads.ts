@@ -459,6 +459,8 @@ function upsertLead_sinBloqueo(args: {
 
 function updateContactPreferences_sinBloqueo(args: { phone: string; do_not_contact?: boolean; preferred_channel?: string }) {
   const leads = readLeads();
+  // 23/11/2026: el agente pasa el teléfono como lo oye ("647478225"); la ficha está como +34647478225.
+  args = { ...args, phone: normalizePhone(args.phone) };
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
 
@@ -483,6 +485,8 @@ function updateContactPreferences_sinBloqueo(args: { phone: string; do_not_conta
 // real de las visitas/reservas que dejó, sin tener que repetirlo él.
 export function getCustomerHistory(args: { phone: string }) {
   const leads = readLeads();
+  // 23/11/2026: el agente pasa el teléfono como lo oye ("647478225"); la ficha está como +34647478225.
+  args = { ...args, phone: normalizePhone(args.phone) };
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
   const appointments = readCollection<{ vehicle_id?: string; requested_date?: string; requested_time?: string; status: string; channel?: string; lead_phone: string | null }>("appointments").filter(
@@ -508,6 +512,8 @@ export function getCustomerHistory(args: { phone: string }) {
 // no de esta función.
 function scoreLead_sinBloqueo(args: { phone: string; temperature: Temperature; objection?: string }) {
   const leads = readLeads();
+  // 23/11/2026: el agente pasa el teléfono como lo oye ("647478225"); la ficha está como +34647478225.
+  args = { ...args, phone: normalizePhone(args.phone) };
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
 
@@ -546,6 +552,8 @@ function scoreLead_sinBloqueo(args: { phone: string; temperature: Temperature; o
 // para que nunca se supere el máximo.
 function createFollowup_sinBloqueo(args: { phone: string; reason?: string }) {
   const leads = readLeads();
+  // 23/11/2026: el agente pasa el teléfono como lo oye ("647478225"); la ficha está como +34647478225.
+  args = { ...args, phone: normalizePhone(args.phone) };
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
 
@@ -569,6 +577,8 @@ function createFollowup_sinBloqueo(args: { phone: string; reason?: string }) {
 
 export function stopFollowups(args: { phone: string }) {
   const leads = readLeads();
+  // 23/11/2026: el agente pasa el teléfono como lo oye ("647478225"); la ficha está como +34647478225.
+  args = { ...args, phone: normalizePhone(args.phone) };
   const lead = leads.find((l) => l.phone === args.phone);
   if (!lead) return envelope({ status: "not_found", error_code: "lead_not_found" });
 

@@ -2,6 +2,7 @@ import { isGoogleConnected, gmailListUnread, gmailGet, gmailMarkRead } from "../
 import { processInboundEmail, drainPendingEmailQueue } from "./agent.js";
 import { readCollection, writeCollection } from "../store.js";
 import { withPersistentLockOrSkip } from "../locks.js";
+import { raiseAlert } from "../alerts/alerts.js";
 
 // Bajado de 3 minutos a 30 segundos (26/10/2026, petición real: "pon
 // todos los gmail en tiempo real"). Esto es sondeo (polling), no un
@@ -53,6 +54,23 @@ let running = false;
 // específicamente de cuota/crédito, en vez de cada 30s sin descanso.
 const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
 let quotaCooldownUntil = 0;
+
+// 23/11/2026 -- dos caídas reales del lector de Gmail: 17/11 "invalid_grant"
+// (token de Google caducado) y 20/11 "Quota exceeded", 25 fallos seguidos cada
+// una (uno cada 30 s durante ~12 min). Insistir cada 30 s no arregla ninguna
+// de las dos y la de cuota la agrava. Ahora: cuota -> pausa de 15 min con
+// espera creciente; token caducado -> pausa de 30 min y un aviso claro al
+// equipo (reconectar Google en Integraciones), una sola vez.
+let googleCooldownUntil = 0;
+let quotaStrikes = 0;
+function googleFailureCooldown(message: string): { ms: number; kind: "token" | "cuota" } | null {
+  if (/invalid_grant|google_token_refresh_failed/i.test(message)) return { ms: 30 * 60 * 1000, kind: "token" };
+  if (/google_api_(403|429)|quota|rate.?limit/i.test(message)) {
+    quotaStrikes = Math.min(quotaStrikes + 1, 4);
+    return { ms: 5 * 60 * 1000 * quotaStrikes, kind: "cuota" };
+  }
+  return null;
+}
 function looksLikeQuotaError(message: string | undefined): boolean {
   return Boolean(message) && /llm_http_429|insufficient_quota|rate_limit|daily_llm_budget_exceeded/i.test(message!);
 }
@@ -63,7 +81,7 @@ function looksLikeQuotaError(message: string | undefined): boolean {
 export function startEmailPoller() {
   setInterval(async () => {
     if (running || !isGoogleConnected()) return;
-    if (Date.now() < quotaCooldownUntil) return;
+    if (Date.now() < quotaCooldownUntil || Date.now() < googleCooldownUntil) return;
     running = true;
     // Bloqueo en disco además de la bandera de memoria (09/11/2026): con dos
     // procesos, los dos sondearían Gmail a la vez y podrían procesar el mismo
@@ -71,6 +89,7 @@ export function startEmailPoller() {
     const tomado = await withPersistentLockOrSkip("email_poller", async () => {
     try {
       const list = await gmailListUnread();
+      quotaStrikes = 0;
       const items = list.slice(0, BATCH);
       for (let i = 0; i < items.length; i++) {
         const m = await gmailGet(items[i].id);
@@ -133,6 +152,20 @@ export function startEmailPoller() {
       // sondeo seguía vivo o lleva horas fallando siempre igual.
       const message = err instanceof Error ? err.message : String(err);
       console.error("[email] poll:", err);
+      const frenar = googleFailureCooldown(message);
+      if (frenar) {
+        googleCooldownUntil = Date.now() + frenar.ms;
+        console.warn(`[email] Google falló (${frenar.kind}) -- pausa de ${Math.round(frenar.ms / 60000)} min en vez de reintentar cada 30 s.`);
+        try {
+          raiseAlert({
+            kind: "fallo_tecnico",
+            reason:
+              frenar.kind === "token"
+                ? "Gmail dejó de leer correos: el permiso de Google caducó. Hay que reconectar Google en CRM > Integraciones; hasta entonces los correos de Coches.net y Wallapop no se atienden."
+                : "Gmail alcanzó su límite de consultas; el lector de correo se pausa unos minutos y reintenta solo.",
+          });
+        } catch { /* un aviso fallido no debe romper el sondeo */ }
+      }
       try {
         const errors = readCollection<{ id: string; message: string; at: string }>("email_poller_errors");
         writeCollection("email_poller_errors", [...errors, { id: crypto.randomUUID(), message, at: new Date().toISOString() }].slice(-50));

@@ -92,6 +92,8 @@ for (const block of blocks) {
   const precioRaw = getTag(block, "precio");
   const kmRaw = getTag(block, "km");
   const garantiaRaw = fixMojibake(getTag(block, "garantia"));
+  const cambioRaw = fixMojibake(getTag(block, "cambio"));
+  const gearbox = /autom/i.test(cambioRaw) ? "Automático" : /manual/i.test(cambioRaw) ? "Manual" : null;
 
   const conflicts = [];
   let category = CATEGORY_MAP[carroceriaRaw];
@@ -116,6 +118,7 @@ for (const block of blocks) {
     year_note: null,
     km: Number(kmRaw) || 0,
     fuel,
+    gearbox,
     power_cv: Number(potenciaRaw) || 0,
     price_eur: Number(precioRaw) || 0,
     stock_status: "available",
@@ -152,6 +155,7 @@ export type Vehicle = {
   year_note: string | null;
   km: number;
   fuel: string;
+  gearbox?: "Automático" | "Manual" | null; // campo <cambio> del feed (23/11/2026)
   power_cv: number;
   price_eur: number;
   stock_status: "available" | "reserved" | "sold" | "workshop" | "not_roadworthy" | "unknown";

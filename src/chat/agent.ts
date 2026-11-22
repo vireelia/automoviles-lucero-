@@ -402,11 +402,23 @@ async function callLlm(messages: ChatMessage[], channel: Channel, forceText = fa
   activeLlmCalls++;
   try {
     const body: Record<string, unknown> = { model, temperature: 0.3, messages, tools: llmTools(), tool_choice: forceText ? "none" : "auto" };
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    // 23/11/2026: 30 errores 429 el 4/11 dejaron clientes sin respuesta. Ante
+    // un 429 o un 5xx se reintenta hasta 2 veces con espera creciente (o la
+    // que pida el proveedor, máx. 8 s); otros errores salen igual que antes.
+    // insufficient_quota NO se reintenta: no se arregla esperando.
+    let res!: Response;
+    for (let intento = 0; intento < 3; intento++) {
+      res = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok || intento === 2 || !(res.status === 429 || res.status >= 500)) break;
+      if (res.status === 429 && /insufficient_quota/i.test(await res.clone().text().catch(() => ""))) break;
+      const pedido = Number(res.headers.get("retry-after"));
+      const esperaMs = Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido * 1000, 8000) : 1500 * 2 ** intento;
+      await new Promise((r) => setTimeout(r, esperaMs));
+    }
     if (!res.ok) throw new Error(`llm_http_${res.status}`);
     const data = (await res.json()) as {
       choices: { message: ChatMessage }[];

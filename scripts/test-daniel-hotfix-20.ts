@@ -260,7 +260,8 @@ await test("20. Reintento tras error -> no genera bucle infinito ni duplica la r
   });
   const r = await processInboundEmail(fixture(20));
   assert.ok(["fallo_ia_pendiente_revision", "en_cola_fallo_ia"].includes(r.outcome), `outcome real: ${r.outcome}`);
-  assert.equal(calls429, 1, "una sola llamada real por intento, nunca un bucle dentro de la misma invocación");
+  // 23/11/2026: ante un 429 se reintenta como máximo 2 veces (3 llamadas), siempre acotado.
+  assert.ok(calls429 >= 1 && calls429 <= 3, `reintento acotado (máx. 3 llamadas), hubo ${calls429}: nunca un bucle`);
 });
 
 mockServer.close();

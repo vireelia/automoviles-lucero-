@@ -10,6 +10,28 @@ function normalize(s: string) {
   return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+// Modelos dictados por voz (23/11/2026, llamadas reales: "Audi Q tres" no
+// encontró el Q3). Se convierten a como están en el catálogo antes de buscar.
+const SPOKEN_NUM: Record<string, string> = { uno: "1", dos: "2", tres: "3", cuatro: "4", cinco: "5", seis: "6", siete: "7", ocho: "8", nueve: "9" };
+const SPOKEN_ALIASES: Array<[RegExp, string]> = [
+  [/\bequis\b/g, "x"],
+  [/\b(?:cu|kiu|q)\b(?=\s*(?:[1-9]|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b)/g, "q"],
+  [/\brasp\b/g, "rav"],
+  [/\baigo\b/g, "aygo"],
+  [/\bcadi\b/g, "caddy"],
+];
+export function normalizeSpoken(raw: string): string {
+  let t = normalize(raw);
+  for (const [re, to] of SPOKEN_ALIASES) t = t.replace(re, to);
+  // letra suelta + número hablado: "q tres" -> "q3", "a seis" -> "a6", "x cinco" -> "x5"
+  t = t.replace(/\b(rav|[aqxm])\s+(uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/g, (_m, l: string, n: string) => `${l}${SPOKEN_NUM[n]}`);
+  // "serie tres" -> "serie 3", "clase uno" -> "clase 1"
+  t = t.replace(/\b(serie|clase)\s+(uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/g, (_m, w: string, n: string) => `${w} ${SPOKEN_NUM[n]}`);
+  // "q 3" -> "q3"
+  t = t.replace(/\b([aqxm])\s+([1-9])\b/g, "$1$2");
+  return t;
+}
+
 // El cliente dice "SUV", "todoterreno", "furgoneta", "coche familiar", etc.
 // -- el feed real de Coches.net PRO usa solo 5 valores de carrocería. Este
 // mapa traduce el lenguaje natural a esos 5 valores reales.
@@ -79,6 +101,7 @@ export function searchVehicles(args: {
   min_price_eur?: number;
   max_km?: number;
   fuel?: string;
+  gearbox?: string;
   page?: number;
 }) {
   let results: Vehicle[] = currentVehicles();
@@ -92,7 +115,7 @@ export function searchVehicles(args: {
   // devolvía 0 resultados, aunque category si lo habría encontrado. Ahora
   // también compara contra la categoría normalizada (mismos sinónimos ya
   // reales de CATEGORY_SYNONYMS), sin tocar el resto del comportamiento.
-  let q = args.query ? normalize(args.query) : null;
+  let q = args.query ? normalizeSpoken(args.query) : null;
   const searchNotes: string[] = [];
   let wantsCheap = false;
   let wantsAuto = false;
@@ -120,7 +143,7 @@ export function searchVehicles(args: {
     });
   }
   if (args.make) results = results.filter((v) => normalize(v.make) === normalize(args.make!));
-  if (args.model) results = results.filter((v) => normalize(v.model).includes(normalize(args.model!)));
+  if (args.model) results = results.filter((v) => normalize(v.model).includes(normalizeSpoken(args.model!)));
   // category es la carrocería real del feed de Coches.net PRO: Monovolumen,
   // Berlina, Industriales, 4x4, Familiar. "SUV"/"todoterreno" (lenguaje
   // natural del cliente) se normaliza a "4x4" antes de llegar aquí -- ver
@@ -134,17 +157,18 @@ export function searchVehicles(args: {
   if (typeof args.min_price_eur === "number") results = results.filter((v) => v.price_eur >= args.min_price_eur!);
   if (typeof args.max_km === "number") results = results.filter((v) => v.km <= args.max_km!);
 
-  if (wantsAuto) {
-    const autos = results.filter((v) => EXPLICIT_AUTO.test(v.version));
-    if (autos.length > 0) {
-      results = autos;
-      searchNotes.push("Automáticos: solo se pueden identificar los que lo indican en su versión (Aut., DSG, S tronic...); puede haber más -- la ficha de cada coche o el equipo lo confirma. No digas que no hay otros.");
+  // El feed trae el tipo de cambio (campo gearbox, 23/11/2026): se filtra de
+  // verdad. Solo si un coche no lo trae se recurre a pistas en la versión.
+  const gearboxWanted = args.gearbox ? (normalize(args.gearbox).startsWith("auto") ? "Automático" : normalize(args.gearbox).startsWith("man") ? "Manual" : null) : null;
+  const wanted = wantsAuto ? "Automático" : wantsManual ? "Manual" : gearboxWanted;
+  if (wanted) {
+    const matches = results.filter((v) => (v.gearbox ? v.gearbox === wanted : wanted === "Automático" && EXPLICIT_AUTO.test(v.version)));
+    if (matches.length > 0) {
+      results = matches;
     } else {
-      searchNotes.push("El catálogo no indica el tipo de cambio de estos coches: NO digas que no hay automáticos. Di que lo confirma el equipo y ofrece el catálogo.");
+      results = [];
+      searchNotes.push(`Ahora mismo no hay coches ${wanted === "Automático" ? "automáticos" : "manuales"} con esos criterios: dilo con naturalidad y ofrece alternativas (otro presupuesto, otra carrocería) o el catálogo.`);
     }
-  }
-  if (wantsManual) {
-    searchNotes.push("El catálogo no indica el tipo de cambio de la mayoría de coches: NO digas que no hay manuales. Di que lo confirma el equipo y ofrece el catálogo.");
   }
   if (wantsCheap) {
     results = [...results].sort((a, b) => a.price_eur - b.price_eur);
