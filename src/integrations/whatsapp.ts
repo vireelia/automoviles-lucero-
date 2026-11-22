@@ -88,6 +88,12 @@ export function explainWhatsappSendError(error: string): string {
   if (error.includes("DIRECT_SEND_NOT_ELIGIBLE")) {
     return "Meta todavía no permite que este número inicie conversaciones nuevas sin plantilla aprobada (la cuenta no está habilitada para 'Direct Send')";
   }
+  if (error === "sin_conversacion_abierta") {
+    // Antes salía el código interno tal cual (22/11/2026, "arregla esto"): es el
+    // caso normal de un cliente de portal que nunca ha escrito por WhatsApp --
+    // Meta solo deja escribirle primero con una plantilla aprobada.
+    return "Meta todavía no permite escribirle primero por WhatsApp: este cliente aún no ha escrito a este número y fuera de las 24 horas solo se puede abrir la conversación con una plantilla aprobada";
+  }
   if (error === "whatsapp_not_connected" || error === "zernio_whatsapp_no_configurado") {
     return "el número de WhatsApp del negocio no está conectado";
   }

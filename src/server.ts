@@ -5,7 +5,8 @@ import * as nodePath from "path";
 import crypto from "crypto";
 import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
-import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone } from "./tools/leads.js";
+import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone, isRealName } from "./tools/leads.js";
+import { withRequiredName } from "./tools/client-name.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
@@ -255,13 +256,13 @@ app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
 app.post("/tools/create_handoff", markVoiceOrigin, markCallerPhone, route((a) => createHandoff(a)));
 app.post("/tools/get_appointment_slots", route(() => getAppointmentSlots()));
-app.post("/tools/create_appointment", markVoiceOrigin, markCallerPhone, route((a) => createAppointmentWithCalendar(a)));
+app.post("/tools/create_appointment", markVoiceOrigin, markCallerPhone, route(withRequiredName(createAppointmentWithCalendar)));
 app.post("/tools/update_appointment", route((a) => updateAppointment(a)));
 app.post("/tools/cancel_appointment", route((a) => cancelAppointment(a)));
 // Sin admin-token a propósito (16/10/2026): Retell la llama en vivo, igual
 // que create_handoff/create_appointment -- ver la excepción puntual en
 // scripts/sync-retell.mjs y prompt-core.md (CUÁNDO SE TRANSFIERE EN VOZ).
-app.post("/tools/create_reservation_pending", markVoiceOrigin, markCallerPhone, route((a) => createReservationPending(a)));
+app.post("/tools/create_reservation_pending", markVoiceOrigin, markCallerPhone, route(withRequiredName(createReservationPending)));
 app.post("/tools/submit_payment_receipt", requireAdminToken, route((a) => submitPaymentReceipt(a)));
 app.post("/tools/request_financing", route((a) => requestFinancing(a)));
 app.post("/tools/send_internal_summary", requireAdminToken, route((a) => sendInternalSummary(a)));
@@ -786,6 +787,68 @@ app.post("/admin/reservas/backfill_nombre_desde_llamadas", requireAdminToken, ro
     if (!dryRun) upsertLead({ phone: r.lead_phone, name: nombre, channel: "VOICE" });
   }
   return { status: "ok", dry_run: dryRun, total_reservas_revisadas: reservas.length, total_a_corregir: cambios.length, cambios };
+}));
+
+// Arreglo de clientes sin nombre (22/11/2026, "estos clientes sin nombre,
+// arréglalos"): SOLO con datos reales ya guardados, nunca inventa un nombre.
+//  - limpia nombres de relleno ("cliente", "sin nombre"...) de las fichas;
+//  - pone el nombre real que el cliente ya dijo en una llamada analizada;
+//  - pasa los teléfonos de visitas/reservas al mismo formato que su ficha
+//    (+34...), que era lo que impedía encontrar el nombre de algunos.
+// dryRun por defecto: sin dryRun:false solo cuenta, no cambia nada.
+app.post("/admin/clientes/arreglar_nombres", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const leads = readCollection<{ phone?: string | null; email?: string | null; name?: string | null }>("leads");
+  const llamadas = readCollection<{ from_number?: string | null; custom_analysis_data?: { customer_name?: string | null } }>("call_analyses");
+  const limpiar: string[] = [];
+  const ponerNombre: Array<{ phone: string; nombre: string }> = [];
+  for (const l of leads) {
+    const clave = l.phone ?? l.email ?? "";
+    if (!clave) continue;
+    if (l.name && !isRealName(l.name)) limpiar.push(clave);
+    if (!isRealName(l.name) && l.phone) {
+      const norm = normalizePhone(l.phone);
+      const llamada = llamadas.find((c) => c.from_number && normalizePhone(c.from_number) === norm && isRealName(c.custom_analysis_data?.customer_name));
+      if (llamada) ponerNombre.push({ phone: l.phone, nombre: llamada.custom_analysis_data!.customer_name!.trim() });
+    }
+  }
+  const citas = readCollection<{ lead_phone?: string | null }>("appointments");
+  const reservas = readCollection<{ lead_phone?: string | null }>("reservations");
+  const necesitaFormato = (p?: string | null) => Boolean(p && !p.includes("@") && normalizePhone(p) !== p);
+  const citasFormato = citas.filter((c) => necesitaFormato(c.lead_phone)).length;
+  const reservasFormato = reservas.filter((r) => necesitaFormato(r.lead_phone)).length;
+  if (!dryRun) {
+    for (const p of ponerNombre) upsertLead({ phone: p.phone, name: p.nombre });
+    for (const clave of limpiar) {
+      if (clave.includes("@")) upsertLead({ email: clave });
+      else upsertLead({ phone: clave });
+    }
+    const fix = <T extends { lead_phone?: string | null }>(rows: T[]) => rows.map((r) => (necesitaFormato(r.lead_phone) ? { ...r, lead_phone: normalizePhone(r.lead_phone!) } : r));
+    writeCollection("appointments", fix(readCollection<{ lead_phone?: string | null }>("appointments")));
+    writeCollection("reservations", fix(readCollection<{ lead_phone?: string | null }>("reservations")));
+  }
+  // Lo que sigue sin nombre real tras el arreglo: solo el equipo puede
+  // conseguirlo preguntándoselo al cliente.
+  const leadsDespues = readCollection<{ phone?: string | null; email?: string | null; name?: string | null }>("leads");
+  const nombreDe = (contacto?: string | null) => {
+    if (!contacto) return null;
+    const key = normalizePhone(contacto);
+    const l = leadsDespues.find((x) => (x.phone && normalizePhone(x.phone) === key) || (x.email && x.email.toLowerCase() === key));
+    return isRealName(l?.name) ? l!.name : null;
+  };
+  const vivas = readCollection<{ lead_phone?: string | null; lead_name?: string; status: string; requested_date?: string; vehicle_id?: string; channel?: string }>("appointments").filter((c) => c.status === "requested" || c.status === "confirmed");
+  const sinNombre = vivas.filter((c) => !nombreDe(c.lead_phone) && !isRealName(c.lead_name));
+  return {
+    status: "ok",
+    dry_run: dryRun,
+    fichas_con_nombre_de_relleno_a_limpiar: limpiar.length,
+    nombres_reales_recuperados_de_llamadas: ponerNombre,
+    citas_con_telefono_a_normalizar: citasFormato,
+    reservas_con_telefono_a_normalizar: reservasFormato,
+    citas_vivas: vivas.length,
+    citas_vivas_sin_nombre_ahora: sinNombre.length,
+    muestra_sin_nombre: sinNombre.slice(0, 60).map((c) => ({ telefono: c.lead_phone, fecha: c.requested_date, canal: c.channel })),
+  };
 }));
 
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {

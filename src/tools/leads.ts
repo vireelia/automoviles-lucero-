@@ -269,6 +269,33 @@ export function normalizePhone(raw: string): string {
   return hadPlus ? "+" + bare : trimmed;
 }
 
+// Regla del dueño (22/11/2026, "te dije que no subas ningún cliente sin
+// nombre al sistema"): un nombre solo cuenta si es un nombre de persona real.
+// Palabras de relleno como "cliente" o "sin nombre" (que el propio agente
+// llegó a guardar como si fueran un nombre) no valen, ni un correo o un
+// teléfono escrito en el campo nombre.
+const GENERIC_NAMES = new Set([
+  "cliente", "clienta", "clientes", "sin nombre", "usuario", "usuaria", "desconocido", "desconocida", "anonimo", "anonima",
+  "whatsapp", "wallapop", "coches net", "cochesnet", "milanuncios", "interesado", "interesada", "persona", "nombre",
+  "na", "no", "si", "ninguno", "ninguna", "test", "prueba", "null", "undefined", "visitante",
+]);
+export function isRealName(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string") return false;
+  const n = raw.trim();
+  if (n.length < 2 || n.length > 60) return false;
+  if (!/\p{L}{2}/u.test(n)) return false;
+  if (n.includes("@") || /\d{3,}/.test(n)) return false;
+  const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+  return !GENERIC_NAMES.has(norm);
+}
+// Nombre real ya guardado en Clientes para este teléfono o correo (o null).
+export function knownRealName(contact: string | null | undefined): string | null {
+  if (!contact) return null;
+  const key = normalizePhone(contact);
+  const lead = readCollection<Lead>("leads").find((l) => (l.phone && normalizePhone(l.phone) === key) || (l.email && l.email.toLowerCase() === key));
+  return lead && isRealName(lead.name) ? lead.name!.trim() : null;
+}
+
 // Aviso cruzado entre agentes (26/10/2026) -- Carolina (WhatsApp) nunca
 // escribe primero por su cuenta a un número que no le ha escrito antes
 // (ventana de 24h de Meta para texto libre, sin plantilla aprobada), así
@@ -361,8 +388,11 @@ function upsertLead_sinBloqueo(args: {
   // comparando con lo que había antes.
   const isNewPhoneFromOtherChannel = Boolean(normalizedPhone && args.channel && args.channel !== "WHATSAPP" && !lead?.phone);
 
+  // Nombre de relleno ("cliente", "sin nombre"...) = no hay nombre: nunca se
+  // guarda, y si la ficha ya tenía uno así, se limpia (22/11/2026).
+  const incomingName = isRealName(args.name) ? args.name!.trim() : undefined;
   if (lead) {
-    lead.name = args.name ?? lead.name;
+    lead.name = incomingName ?? (isRealName(lead.name) ? lead.name : null);
     lead.email = args.email ?? lead.email;
     lead.phone = normalizedPhone ?? lead.phone;
     lead.intent = args.intent ?? lead.intent;
@@ -380,7 +410,7 @@ function upsertLead_sinBloqueo(args: {
       id: crypto.randomUUID(),
       phone: normalizedPhone ?? null,
       email: args.email ?? null,
-      name: args.name ?? null,
+      name: incomingName ?? null,
       intent: args.intent ?? null,
       notes: args.notes ?? null,
       channel: args.channel ?? null,

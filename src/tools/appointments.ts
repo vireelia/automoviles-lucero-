@@ -9,7 +9,7 @@ import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
 import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
-import { markLeadRealIntent, upsertLead } from "./leads.js";
+import { markLeadRealIntent, upsertLead, normalizePhone } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
 import { isContactoInicialTemplateApproved } from "../integrations/zernio.js";
 import { sendVehicleContactTemplateGuardedForAppointment } from "../outbound-guard.js";
@@ -134,6 +134,11 @@ export async function createAppointment(args: {
   // nunca se sobrescribe después de creada. Se guarda vía el spread de abajo.
   channel?: string;
 }) {
+  // Teléfono siempre en el mismo formato (+34...) al guardar (22/11/2026): antes
+  // se guardaba tal cual lo dictaba el cliente ("632988965"), y no coincidía
+  // con su ficha ("+34632988965") -- la tarjeta salía "Sin nombre" aunque
+  // el cliente sí tuviera nombre.
+  if (args.lead_phone) args = { ...args, lead_phone: normalizePhone(args.lead_phone) };
   const minutes = parseTime(args.requested_time);
   const nonBookingDay = isNonBookingDay(args.requested_date);
   // FALLO REAL grave detectado (21/11/2026, mismo patrón ya encontrado y

@@ -13,7 +13,7 @@ import { pendingAlerts, markAlertDone, deleteAlert, type AlertKind } from "../al
 import { moveToTrash, moveManyToTrash, listTrash, restoreFromTrash, purgeFromTrash } from "./trash.js";
 import { tryAutoCreateReservation } from "../tools/requests.js";
 import { notifyVisitCancelled, notifyVisitScheduled } from "../tools/team-notify.js";
-import { normalizePhone, upsertLead, mergeLeads, markHumanTookOver, clearHumanTookOver } from "../tools/leads.js";
+import { normalizePhone, upsertLead, mergeLeads, markHumanTookOver, clearHumanTookOver, isRealName, knownRealName } from "../tools/leads.js";
 import { parseCochesNetJsonBlock, parseCochesNetReplyMessage, extractWallapopContact, isCochesNetSharedSender, extractCochesNetClientIdentity } from "../email/interest.js";
 import { listTasks, createManualTask, createAutoTask, completeTask, assignTask, type Task, type TaskType } from "../tools/tasks.js";
 import { isVoiceAgentEnabled, setVoiceAgentEnabled, isEmailAutoSendEnabled, setEmailAutoSendEnabled, isWhatsappZernioAgentEnabled, setWhatsappZernioAgentEnabled, isWhatsappChatPaused, setWhatsappChatPaused, isEmailContactPaused, setEmailContactPaused } from "../tools/agent-toggle.js";
@@ -126,6 +126,7 @@ type Reservation = {
 type Appointment = {
   id: string;
   lead_phone: string | null;
+  lead_name?: string;
   vehicle_id?: string;
   appointment_type?: string;
   requested_date?: string;
@@ -872,8 +873,21 @@ ${lines ? `<p style="margin:0 0 8px">${lines}</p>` : ""}
 ${parsed.inquiry ? `<p style="margin:0"><b>Dice:</b> "${esc(parsed.inquiry)}"</p>` : ""}
 </div>`;
 }
+// Mismo número en distinto formato ("632988965", "34632988965", "+34 632 98 89 65")
+// debe dar siempre la misma clave (22/11/2026): antes solo se quitaban los
+// símbolos, así que una cita guardada sin prefijo no encontraba la ficha
+// del cliente ("+34...") y salía "Sin nombre" teniendo nombre.
 function normalizePhoneDigits(p: string | null | undefined): string {
-  return (p ?? "").replace(/\D/g, "");
+  const raw = (p ?? "").trim();
+  if (!raw) return "";
+  return normalizePhone(raw).replace(/\D/g, "");
+}
+// Nombre que se muestra en una visita/reserva: el de la ficha si es real, y si
+// no el que guardó la propia visita; nunca un relleno tipo "cliente".
+function shownName(lead: Lead | undefined, fallback?: string | null): string | null {
+  if (isRealName(lead?.name)) return lead!.name!.trim();
+  if (isRealName(fallback)) return fallback!.trim();
+  return null;
 }
 function confirmButton(label: string, action: string, extra: string, question: string): string {
   return `<button class="btn ${extra}" name="accion" value="${esc(action)}" onclick="return confirm('${esc(question)}')">${esc(label)}</button>`;
@@ -936,6 +950,7 @@ const NAV_ITEMS: { key: string; href: string; label: string; adminOnly?: boolean
   { key: "calendar", href: "/crm/agenda", label: "Agenda" },
   { key: "pin", href: "/crm/citas", label: "Visitas" },
   { key: "bookmark", href: "/crm/reservas", label: "Reservas" },
+  { key: "tag", href: "/crm/compras", label: "Compras" },
   { key: "trending", href: "/crm/ventas", label: "Ventas" },
   { key: "check", href: "/crm/seguimiento", label: "Tareas" },
   { key: "chart", href: "/crm/informes", label: "Informes" },
@@ -959,6 +974,7 @@ const NAV_ICON_PATHS: Record<string, string> = {
   calendar: "M7 3v3.2M17 3v3.2M4.5 9h15M5.5 5.5h13a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1Z",
   pin: "M12 21s7-6.3 7-11.5A7 7 0 0 0 5 9.5C5 14.7 12 21 12 21Zm0-9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
   bookmark: "M6.5 3h11a1 1 0 0 1 1 1v17l-6.5-4-6.5 4V4a1 1 0 0 1 1-1Z",
+  tag: "M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3-8.7 8.7-8.3-8.3Zm5-5.2h.01",
   trending: "M3 17l6-6 4 4 7.5-8.5M14 6.5h6.5V13",
   check: "M9 12.2l2 2 4-4.2M5.5 4h13a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z",
   chart: "M4.5 20V10.5M11 20V4.5M17.5 20v-7M4.5 20h16",
@@ -1974,7 +1990,7 @@ function apptCard(a: Appointment): string {
     confirmButton("🗑️", "eliminar", "light", "¿Eliminar esta visita para siempre? Se puede restaurar luego desde la Papelera."),
   ].join("");
   const flags = [
-    !lead?.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
+    !shownName(lead, a.lead_name) ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
     !a.lead_phone ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : "",
     a.notes ? `<span class="tag">${esc(a.notes)}</span>` : "",
   ].filter(Boolean).join(" ");
@@ -1988,7 +2004,7 @@ function apptCard(a: Appointment): string {
   return `<div class="record-row" id="c-${esc(a.id)}">
 ${simpleCheckbox("citas-bulk", a.id)}
 <div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>${esc(d.weekday.slice(0, 3))}</span><b>${esc(d.day)}</b><span>${esc(a.requested_time ?? "")}</span></div>
-<div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="who"><b>${shownName(lead, a.lead_name) ? esc(shownName(lead, a.lead_name)) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(APPOINTMENT_TEXT[a.status] ?? a.status)}</span><span class="lastcontact">${esc(ORIGIN[a.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/citas/${esc(a.id)}" style="display:contents">
 <div class="acts">${phoneIconLink(a.lead_phone)}${whatsapp}${mail}${verifBtn}${actions}</div>
@@ -2050,7 +2066,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   const expiring = daysLeft !== null && (r.status === "pending_payment" || r.status === "pending_verification" || r.status === "confirmed");
   const contactPart = r.lead_phone && !r.lead_phone.includes("@") ? r.lead_phone : lead?.email ?? null;
   const flags = [
-    !lead?.name ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
+    !shownName(lead) ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin nombre</span>` : "",
     !r.lead_phone ? `<span class="tag" style="background:#fde2e1;color:#7a1c17">Sin teléfono</span>` : "",
     r.verified_by ? `<span class="tag">Confirmada por ${esc(r.verified_by)}</span>` : "",
     expiring ? `<span class="tag" style="${daysLeft! <= 3 ? "background:#fdecea;color:#8a1f0c" : ""}">⏰ Caduca el ${esc(fmtDate(r.expires_at!))} (quedan ${daysLeft} día${daysLeft === 1 ? "" : "s"})</span>` : "",
@@ -2058,7 +2074,7 @@ function reservationCard(r: Reservation, user: CrmUser): string {
   return `<div class="record-row" id="r-${esc(r.id)}">
 ${canBulkDelete ? simpleCheckbox("reservas-bulk", r.id) : ""}
 <div class="datebadge" style="background:${badgeBg};color:${badgeFg}"><span>Reserva</span><b>${r.amount_eur}€</b></div>
-<div class="who"><b>${lead?.name ? esc(lead.name) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
+<div class="who"><b>${shownName(lead) ? esc(shownName(lead)) : `<span style="color:#b3261e">Sin nombre</span>`}</b><span>${esc(veh)}${contactPart ? ` · ${esc(contactPart)}` : ""}</span></div>
 <div class="meta"><span style="font-size:12.5px;font-weight:700;color:${badgeFg}">${esc(sold ? "Vendido" : RESERVATION_TEXT[r.status] ?? r.status)}</span><span class="lastcontact">${esc(ORIGIN[r.channel ?? ""] ?? "Origen desconocido")}</span></div>
 <form method="post" action="/crm/reservas/${esc(r.id)}" style="display:contents">
 <div class="acts">${phoneIconLink(r.lead_phone)}${whatsapp}${mail}${verifBtn}${actions.join("")}</div>
@@ -2563,6 +2579,110 @@ crm.post("/citas-masivo", (req, res) => {
 });
 
 // ---------- Reservas ----------
+// Compras (22/11/2026, "en su CRM tenemos que crear una sección para recibir
+// esas peticiones, ver fotos de clientes y sus coches, precio que piden,
+// todo"): las solicitudes de venta de coche/furgoneta que llegan de la web
+// vendenostufurgoneta.es (colección purchase_requests, ver tools/requests.ts).
+// Solo lectura de datos reales -- nunca calcula ni promete ninguna oferta.
+type PurchaseRequestRow = {
+  id: string;
+  lead_phone?: string;
+  lead_name?: string;
+  email?: string;
+  make?: string;
+  model?: string;
+  year?: number;
+  km?: number;
+  condition?: string;
+  known_issues?: string;
+  expected_price_eur?: number;
+  vehicle_type?: string;
+  fuel?: string;
+  plate?: string;
+  comments?: string;
+  photo_urls?: string[];
+  available_for_call?: boolean;
+  channel?: string;
+  origin_page?: string;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  handled_by?: string;
+};
+const PURCHASE_STATUS_LABEL: Record<string, string> = {
+  pending_review: "Nueva",
+  contacted: "Contactada",
+  bought: "Comprada",
+  discarded: "Descartada",
+};
+const isVideoUrl = (u: string) => /\.(mp4|mov|webm)(\?|$)/i.test(u);
+function purchaseCard(r: PurchaseRequestRow): string {
+  const title = [r.make, r.model].filter(Boolean).join(" ") || "Vehículo sin identificar";
+  const specs = [
+    r.vehicle_type === "furgoneta" ? "Furgoneta" : r.vehicle_type === "coche" ? "Coche" : null,
+    r.year ? String(r.year) : null,
+    typeof r.km === "number" ? `${r.km.toLocaleString("es-ES")} km` : null,
+    r.fuel || null,
+    r.plate ? `Matrícula ${r.plate}` : null,
+  ].filter(Boolean);
+  const price = typeof r.expected_price_eur === "number" && r.expected_price_eur > 0 ? `${r.expected_price_eur.toLocaleString("es-ES")} €` : "No ha indicado precio";
+  const photos = (r.photo_urls ?? []).map((u) =>
+    isVideoUrl(u)
+      ? `<a href="${esc(u)}" target="_blank" rel="noopener" class="tag" style="text-decoration:none">▶ Ver vídeo</a>`
+      : `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Foto del vehículo" loading="lazy" style="width:110px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--border)"></a>`,
+  ).join("");
+  const tagClass = r.status === "pending_review" ? "t-hot" : r.status === "contacted" ? "t-warm" : "";
+  const btn = (accion: string, label: string, cls = "") => `<form method="post" action="/crm/compras/${esc(r.id)}" style="display:inline"><input type="hidden" name="accion" value="${accion}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
+  const waMsg = `Hola${r.lead_name ? " " + r.lead_name : ""}, te escribimos de Automóviles Lucero por la solicitud que nos enviaste para vender tu ${title}. ¿Podemos hablar?`;
+  const actions =
+    r.status === "pending_review" ? btn("contactado", "Marcar contactada", "ok") + btn("descartar", "Descartar") :
+    r.status === "contacted" ? btn("comprado", "Marcar comprada", "ok") + btn("descartar", "Descartar") :
+    btn("reabrir", "Reabrir");
+  return `<div class="card${r.status === "pending_review" ? " urgent" : ""}" id="c-${esc(r.id)}"><div class="info">
+<h3>${esc(title)} <span class="tag ${tagClass}">${esc(PURCHASE_STATUS_LABEL[r.status] ?? r.status)}</span></h3>
+<p style="font-size:20px;font-weight:700;margin:4px 0">Pide: ${esc(price)}</p>
+${specs.length ? `<p>${esc(specs.join(" · "))}</p>` : ""}
+${r.condition ? `<p>Estado: ${esc(r.condition)}</p>` : ""}
+${r.known_issues ? `<p>Problemas conocidos: ${esc(r.known_issues)}</p>` : ""}
+${r.comments ? `<p>Comentarios del propietario: ${esc(r.comments)}</p>` : ""}
+<p>Cliente: <b>${esc(contactLabel(r.lead_phone, r.lead_name))}</b>${r.email ? ` · ${esc(r.email)}` : ""} · ${esc(fmtDate(r.created_at))}${r.available_for_call ? " · quiere que le llamen" : ""}</p>
+${photos ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">${photos}</div>` : `<p class="sub">Sin fotos adjuntas.</p>`}
+<div>${actions}${phoneLink(r.lead_phone)}${waButton(r.lead_phone, waMsg)}</div>
+</div></div>`;
+}
+crm.get("/compras", (req, res) => {
+  const f = typeof req.query.f === "string" ? req.query.f : "nuevas";
+  const all = list<PurchaseRequestRow>("purchase_requests")
+    .filter((r) => r.make || r.model || r.lead_phone) // descarta restos sin ningún dato útil
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const rows =
+    f === "todas" ? all :
+    f === "contactadas" ? all.filter((r) => r.status === "contacted") :
+    f === "cerradas" ? all.filter((r) => r.status === "bought" || r.status === "discarded") :
+    all.filter((r) => r.status === "pending_review");
+  const count = (fn: (r: PurchaseRequestRow) => boolean) => all.filter(fn).length;
+  const pill = (k: string, label: string, n: number) => `<a href="/crm/compras?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label} (${n})</a>`;
+  const body = `<h1>Compras</h1>
+<p class="sub">Personas que quieren venderte su coche o furgoneta desde la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
+<p>${pill("nuevas", "Nuevas", count((r) => r.status === "pending_review"))} ${pill("contactadas", "Contactadas", count((r) => r.status === "contacted"))} ${pill("cerradas", "Cerradas", count((r) => r.status === "bought" || r.status === "discarded"))} ${pill("todas", "Todas", all.length)}</p>
+${rows.length === 0 ? `<div class="empty">No hay solicitudes en esta lista.</div>` : `<div class="records-list">${rows.map(purchaseCard).join("")}</div>`}`;
+  res.type("html").send(page("Compras", me(res), body, msgOf(req)));
+});
+
+crm.post("/compras/:id", (req, res) => {
+  const accion = String(req.body.accion ?? "");
+  const rows = list<PurchaseRequestRow>("purchase_requests");
+  const r = rows.find((x) => x.id === req.params.id);
+  if (!r) return back(res, "/crm/compras", "No encuentro esa solicitud");
+  const next: Record<string, string> = { contactado: "contacted", comprado: "bought", descartar: "discarded", reabrir: "pending_review" };
+  if (!next[accion]) return back(res, "/crm/compras", "Acción no válida");
+  r.status = next[accion];
+  r.updated_at = now();
+  r.handled_by = me(res).name;
+  save("purchase_requests", rows);
+  back(res, "/crm/compras?f=todas", "Solicitud actualizada");
+});
+
 crm.get("/reservas", async (req, res) => {
   const c = typeof req.query.c === "string" ? req.query.c : "todos";
   let reservations = list<Reservation>("reservations").sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -2608,7 +2728,7 @@ ${interesados.map((h) => `<div class="card urgent" style="position:relative"><di
 </div>` : ""}
 <div class="box"><h3 style="margin-top:0">Hacer una reserva a mano</h3>
 <form method="post" action="/crm/reservas">
-<label>Nombre del cliente</label><input name="nombre" placeholder="Si no lo escribes, queda sin nombre en el CRM">
+<label>Nombre del cliente</label><input name="nombre" required placeholder="Obligatorio: nombre real del cliente">
 <label>Coche</label><select name="vehicle_id">${available.map((v) => option(v.id, `${vehicleName(v.id)} · ${priceOf(v.id)} €`, "")).join("")}</select>
 <label>Teléfono o correo del cliente</label><input name="contacto" required>
 <button class="btn ok" type="submit">Crear la reserva</button></form></div>
@@ -2623,6 +2743,8 @@ crm.post("/reservas", async (req, res) => {
   const contacto = String(req.body.contacto ?? "").trim();
   const nombre = String(req.body.nombre ?? "").trim();
   if (!vehicleId || !contacto) return back(res, "/crm/reservas", "Elige un coche y escribe el contacto del cliente");
+  // Regla del dueño (22/11/2026): nunca un cliente sin nombre en el sistema.
+  if (!isRealName(nombre)) return back(res, "/crm/reservas", "Escribe el nombre real del cliente: no se crea ninguna reserva sin nombre");
   // A petición real (19/10/2026, "pon toda la información para crear una
   // reserva"): si se escribe un nombre, se guarda en Clientes (nuevo o
   // completando uno ya existente que no lo tuviera) -- así la reserva no
@@ -4360,6 +4482,7 @@ const AYUDA_DESCRIPTIONS: Record<string, string> = {
   "/crm/agenda": "Visitas, llamadas y tareas de todos los canales, cruzadas en una sola vista -- cada fila enlaza a su sección real para gestionarla.",
   "/crm/citas": "Los días y horas en que vendrán los clientes a ver un coche.",
   "/crm/reservas": "Una reserva aparta un coche con una señal de 500 €. Cuando el cliente paga, compruébalo y pulsa \"Confirmar la reserva\".",
+  "/crm/compras": "Las personas que quieren venderte su coche o furgoneta desde la web: sus datos, el precio que piden, el estado del vehículo y sus fotos. Marca cada una como contactada, comprada o descartada.",
   "/crm/ventas": "El historial real de ventas cerradas -- importe, canal y quién la generó (Miguel, Carolina o Daniel), nunca una cifra inventada.",
   "/crm/seguimiento": "Tareas comerciales de todos los canales -- algunas se crean solas (visita por confirmar, justificante por verificar...), otras se añaden a mano.",
   "/crm/informes": "Conteos reales del periodo que elijas -- leads, visitas, reservas, ventas, conversión. \"Sin datos\" significa que todavía no hay ningún caso real que medir, nunca un error.",
@@ -5197,6 +5320,7 @@ ${clientesPager(t, dateFilter, pageNum, totalPages, leadsFiltrados.length, leads
 crm.post("/clientes", (req, res) => {
   const telefono = String(req.body.telefono ?? "").trim();
   if (!telefono) return back(res, "/crm/clientes", "Escribe el teléfono del cliente");
+  if (!isRealName(String(req.body.nombre ?? ""))) return back(res, "/crm/clientes", "Escribe el nombre real del cliente: no se añade ningún cliente sin nombre");
   const leads = list<Lead>("leads");
   // Arreglo real (20/10/2026, sección 6.5): el alta manual comparaba el
   // teléfono tal cual, sin normalizar -- a diferencia de upsertLead (el

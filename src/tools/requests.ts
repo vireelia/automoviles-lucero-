@@ -4,7 +4,7 @@ import { currentVehicles } from "../data/vehicles-current.js";
 import { createReservationPending } from "./reservations.js";
 import { createAutoTask } from "./tasks.js";
 import { notifyHandoffRequested } from "./team-notify.js";
-import { normalizePhone, markLeadRealIntent } from "./leads.js";
+import { normalizePhone, markLeadRealIntent, knownRealName } from "./leads.js";
 
 function now() {
   return new Date().toISOString();
@@ -34,6 +34,10 @@ function normalizeText(s: string) {
 export async function tryAutoCreateReservation(leadPhone: string, vehicleInterest: string | null | undefined, channel?: string | null): Promise<void> {
   try {
     if (!vehicleInterest || !vehicleInterest.trim()) return;
+    // Regla del dueño (22/11/2026): nunca una reserva de un cliente sin nombre.
+    // Si la ficha no tiene nombre real, no se crea sola: queda el aviso
+    // humano para que el equipo lo pida al cliente.
+    if (!knownRealName(leadPhone)) return;
     const wanted = normalizeText(vehicleInterest);
     const vehicles = currentVehicles();
     let matches = vehicles.filter((v) => {
@@ -83,11 +87,32 @@ export function createPurchaseRequest(args: {
   known_issues?: string;
   expected_price_eur?: number;
   trade_in_vehicle_id?: string;
+  // Solicitudes de venta que llegan de la web vendenostufurgoneta.es
+  // (22/11/2026, "en su CRM tenemos que crear una sección para recibir esas
+  // peticiones, ver fotos de clientes y sus coches, precio que piden"):
+  // los datos completos y las fotos/vídeos, para verlos en Compras.
+  lead_name?: string;
+  email?: string;
+  vehicle_type?: string;
+  fuel?: string;
+  plate?: string;
+  comments?: string;
+  photo_urls?: string[];
+  available_for_call?: boolean;
+  channel?: string;
+  origin_page?: string;
 }) {
+  // Solo enlaces http(s) reales, máximo 12 -- nunca se guarda nada que no
+  // sea una URL, porque el CRM la pinta como imagen/enlace.
+  const photoUrls = Array.isArray(args.photo_urls)
+    ? args.photo_urls.filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u)).slice(0, 12)
+    : undefined;
   const request = {
     id: crypto.randomUUID(),
     type: "purchase_request" as const,
     ...args,
+    lead_phone: args.lead_phone ? normalizePhone(args.lead_phone) : args.lead_phone,
+    ...(photoUrls ? { photo_urls: photoUrls } : {}),
     status: "pending_review",
     created_at: now(),
   };

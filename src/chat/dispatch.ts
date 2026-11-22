@@ -1,3 +1,4 @@
+import { withRequiredName } from "../tools/client-name.js";
 import { getBusinessInfo } from "../tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles } from "../tools/vehicles.js";
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups } from "../tools/leads.js";
@@ -36,7 +37,7 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   create_followup: (a) => createFollowup(a),
   stop_followups: (a) => stopFollowups(a),
   get_appointment_slots: () => getAppointmentSlots(),
-  create_appointment: (a) => createAppointmentWithCalendar(a),
+  create_appointment: (a) => withRequiredName(createAppointmentWithCalendar)(a),
   update_appointment: (a) => updateAppointment(a),
   cancel_appointment: (a) => cancelAppointment(a),
   request_financing: (a) => requestFinancing(a),
@@ -53,7 +54,7 @@ const HANDLERS: Record<string, (args: any) => unknown> = {
   // con el incidente ya documentado el 18/10/2026 ("jamás apareció la
   // reserva de verdad en el sistema") -- la causa raíz real de ese
   // incidente era esta, no solo un fallo de seguimiento del prompt.
-  create_reservation_pending: (a) => createReservationPending(a),
+  create_reservation_pending: (a) => withRequiredName(createReservationPending)(a),
   create_service_request: (a) => createServiceRequest(a),
   create_handoff: (a) => createHandoff(a),
   // En el chat el enlace viaja dentro de la respuesta, así que sí se entrega.
