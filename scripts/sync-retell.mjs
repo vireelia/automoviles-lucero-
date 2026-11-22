@@ -171,7 +171,7 @@ function tool(name, description, properties, required = [], speakDuring = false)
 // voz, con Ramón y José ya confirmados.
 const AGENT_TOOLS = [
   tool("get_business_info", "Devuelve políticas confirmadas del negocio (horarios, financiación, garantía, reserva, ubicación, WhatsApp).", {}, []),
-  tool("search_vehicles", "Busca vehículos reales del inventario actual por texto libre, marca, modelo, categoría/carrocería, precio, km, combustible o cambio (gearbox: "Automático" o "Manual"). Usa esto siempre que el cliente pregunte por un coche concreto o un tipo de coche -- nunca inventes datos de vehículos sin consultarlo primero.", {
+  tool("search_vehicles", "Busca vehículos reales del inventario actual por texto libre, marca, modelo, categoría/carrocería, precio, km, combustible o cambio (gearbox: Automático o Manual). Usa esto siempre que el cliente pregunte por un coche concreto o un tipo de coche -- nunca inventes datos de vehículos sin consultarlo primero.", {
     query: S, make: S, model: S, category: S, max_price_eur: N, min_price_eur: N, max_km: N, fuel: S, gearbox: S, page: N,
   }, [], true),
   tool("get_vehicle", "Devuelve los datos reales de un vehículo concreto del inventario por su id (precio, km, año, combustible, potencia, garantía, estado).", { id: S }, ["id"], true),
