@@ -10,7 +10,7 @@ import { withRequiredName } from "./tools/client-name.js";
 import { registerWebLeadsRoutes } from "./web-leads.js";
 import { portalTemplateBacklogCandidates, startPortalTemplateBacklog } from "./alerts/portal-template-backlog.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
-import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
+import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment, closeAppointmentsForUnavailableVehicles } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
 import { createReservationPending, submitPaymentReceipt, confirmReservation, cancelReservation, reopenReservation } from "./tools/reservations.js";
 import { requestFinancing } from "./tools/financing.js";
@@ -925,6 +925,16 @@ app.post("/admin/vehiculos/remapear_ids", requireAdminToken, route(async (a: { m
   const reservas = remap<{ vehicle_id?: string | null }>("reservations");
   const estados = remap<{ vehicle_id?: string | null }>("vehicle_state");
   return { status: "ok", dry_run: dryRun, mapeos_validos: validos.length, mapeos_ignorados: Object.keys(mapping).length - validos.length, citas, reservas, estado_oficial: estados };
+}));
+
+// Cierre silencioso de visitas de hoy/futuras de coches que ya no están en el
+// stock (23/11/2026, "si esos coches no están en Coches.net no podemos hacer
+// visitas de ellos"). No avisa a nadie por WhatsApp: deja una tarea "llamar" en
+// el CRM. dryRun por defecto.
+app.post("/admin/citas/cerrar_coche_no_disponible", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const hoy = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Madrid" }).format(new Date());
+  const r = await closeAppointmentsForUnavailableVehicles({ dryRun: a?.dryRun !== false, today: hoy });
+  return { status: "ok", dry_run: a?.dryRun !== false, hoy, ...r };
 }));
 
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {

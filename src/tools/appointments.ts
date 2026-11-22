@@ -8,6 +8,8 @@ import { notifyVisitScheduled, notifyVisitCancelled } from "./team-notify.js";
 import { createAutoTask } from "./tasks.js";
 import { sendWhatsapp } from "./delivery.js";
 import { currentVehicles } from "../data/vehicles-current.js";
+import { getOfficialStatus } from "./vehicle-state.js";
+import { buildNoMatchGuidance } from "./vehicles.js";
 import { isUnderHumanControl, isVoiceCallActive } from "./leads.js";
 import { markLeadRealIntent, upsertLead, normalizePhone } from "./leads.js";
 import { raiseAlert } from "../alerts/alerts.js";
@@ -122,6 +124,63 @@ async function sendVisitConfirmationMessage(contact: string | undefined, vehicle
 // queda "requested" (Sección 22: CITA != RESERVA). Se valida el horario
 // confirmado para no aceptar una solicitud claramente fuera de lo que el
 // negocio ya dijo que no atiende.
+// ¿Sigue el coche en el stock y sin vender? (id actual, no el de un export viejo)
+export function vehicleStillSellable(vehicleId: string): { ok: true } | { ok: false; motivo: string } {
+  const existe = currentVehicles().some((v) => v.id === vehicleId);
+  if (!existe) return { ok: false, motivo: "no_esta_en_el_stock_actual" };
+  if (getOfficialStatus(vehicleId) === "SOLD") return { ok: false, motivo: "vendido" };
+  return { ok: true };
+}
+
+// Cierre silencioso de visitas de HOY o FUTURAS de coches que ya no están
+// (23/11/2026): no avisa a Ramón/José ni al cliente (eso lo hace una persona);
+// deja una tarea "llamar" en el CRM para que el equipo avise al cliente.
+export async function closeAppointmentsForUnavailableVehicles(opts: { dryRun: boolean; today: string }) {
+  const rows = readCollection<any>("appointments", []);
+  const aCerrar = rows.filter(
+    (a) =>
+      (a.status === "requested" || a.status === "confirmed") &&
+      a.vehicle_id &&
+      !vehicleStillSellable(a.vehicle_id).ok &&
+      typeof a.requested_date === "string" &&
+      a.requested_date >= opts.today,
+  );
+  const pasadas = rows.filter(
+    (a) => (a.status === "requested" || a.status === "confirmed") && a.vehicle_id && !vehicleStillSellable(a.vehicle_id).ok && typeof a.requested_date === "string" && a.requested_date < opts.today,
+  ).length;
+  const sinFecha = rows.filter((a) => (a.status === "requested" || a.status === "confirmed") && a.vehicle_id && !vehicleStillSellable(a.vehicle_id).ok && !a.requested_date).length;
+  if (!opts.dryRun) {
+    for (const a of aCerrar) {
+      if (a.google_event_id && isGoogleConnected()) {
+        try {
+          await calendarDeleteEvent(a.google_event_id);
+        } catch (err) {
+          console.error("[appointments] no se pudo borrar el evento de Google Calendar:", err instanceof Error ? err.message : String(err));
+        }
+      }
+      mutateCollectionSync<any>("appointments", (items) => {
+        const i = items.findIndex((x) => x.id === a.id);
+        if (i >= 0) items[i] = { ...items[i], status: "cancelled", cancel_reason: "coche_ya_no_disponible_stock_22_11_2026" };
+        return items;
+      });
+      createAutoTask({
+        lead_phone: a.lead_phone ?? null,
+        type: "llamar",
+        reason: `Avisar al cliente: su visita del ${a.requested_date} ${a.requested_time ?? ""} era para un coche que ya no está en el stock (${vehicleLabel(a.vehicle_id)}). Ofrecerle opciones parecidas.`,
+        source_ref: `coche_no_disponible:${a.id}`,
+        channel: a.channel ?? null,
+        priority: "alta",
+        due_at: null,
+      });
+    }
+  }
+  return {
+    visitas_a_cerrar: aCerrar.map((a) => ({ fecha: a.requested_date, hora: a.requested_time ?? null, telefono: a.lead_phone ?? null, coche: vehicleLabel(a.vehicle_id) })),
+    pasadas_sin_tocar: pasadas,
+    sin_fecha_sin_tocar: sinFecha,
+  };
+}
+
 export async function createAppointment(args: {
   lead_phone?: string;
   lead_name?: string;
@@ -139,6 +198,26 @@ export async function createAppointment(args: {
   // con su ficha ("+34632988965") -- la tarjeta salía "Sin nombre" aunque
   // el cliente sí tuviera nombre.
   if (args.lead_phone) args = { ...args, lead_phone: normalizePhone(args.lead_phone) };
+  // Regla del dueño (23/11/2026, "si esos coches no están en Coches.net no
+  // podemos hacer visitas de ellos"): no se agenda una visita para un coche que
+  // ya no está en el stock. Los ids cambian al reimportar el stock, así que el
+  // agente debe volver a buscar el coche antes de darlo por perdido.
+  if (args.vehicle_id) {
+    const sellable = vehicleStillSellable(args.vehicle_id);
+    if (!sellable.ok) {
+      return envelope({
+        status: "denied",
+        error_code: "vehicle_not_available",
+        data: {
+          motivo: sellable.motivo,
+          message:
+            "Ese coche ya no consta en el stock, así que no se puede agendar visita para él todavía. Antes de dárselo por perdido al cliente, vuelve a buscarlo con search_vehicles (marca y modelo): si aparece, usa su id actual y vuelve a intentarlo. Si no aparece, ya no está: díselo con naturalidad y aplica la regla de venta perdida (opciones reales, enlace del catálogo y pedir marca y modelo).",
+          ...buildNoMatchGuidance(),
+        },
+        source: "regla del negocio 23/11/2026: sin visitas de coches que no están en stock",
+      });
+    }
+  }
   const minutes = parseTime(args.requested_time);
   const nonBookingDay = isNonBookingDay(args.requested_date);
   // FALLO REAL grave detectado (21/11/2026, mismo patrón ya encontrado y

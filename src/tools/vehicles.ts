@@ -56,6 +56,20 @@ const FILLER_WORDS = new Set([
 const EXPLICIT_AUTO = /\b(aut\.?|automatic[oa]?|dsg|s[\s-]?tronic|tiptronic|steptronic|multitronic|edc|cvt|xtronic|[789]g-?tronic|g-?tronic|powershift|robotizado|easytronic|dualogic|speedshift)(?=\W|$)/i;
 export const PORTAL_URL = "https://www.coches.net/concesionario/autolunaslagunamadrid/";
 
+// Guía para el agente cuando no hay coincidencia: nunca cerrar con "no tengo".
+export function buildNoMatchGuidance() {
+  return {
+    portal_url: PORTAL_URL,
+    cheapest_available: currentVehicles()
+      .filter((v) => v.stock_status === "available")
+      .sort((a, b) => a.price_eur - b.price_eur)
+      .slice(0, 3)
+      .map((v) => ({ make: v.make, model: v.model, version: v.version, year: v.year, km: v.km, price_eur: v.price_eur })),
+    instruction:
+      "No cierres con 'no tengo'. Envía el enlace del catálogo, pídele que mire cualquier coche que le interese y te diga marca y modelo para concertarle una visita o una reserva, y ofrécele los más baratos de cheapest_available.",
+  };
+}
+
 export function searchVehicles(args: {
   query?: string;
   make?: string;
@@ -187,20 +201,7 @@ export function searchVehicles(args: {
       // diga marca y modelo para concertarle una visita o reserva"): sin
       // coincidencia exacta NUNCA se cierra con "no tengo" -- se ofrece el
       // catálogo completo y los más baratos reales.
-      ...(results.length === 0
-        ? {
-            no_match_guidance: {
-              portal_url: PORTAL_URL,
-              cheapest_available: currentVehicles()
-                .filter((v) => v.stock_status === "available")
-                .sort((a, b) => a.price_eur - b.price_eur)
-                .slice(0, 3)
-                .map((v) => ({ make: v.make, model: v.model, version: v.version, year: v.year, km: v.km, price_eur: v.price_eur })),
-              instruction:
-                "No cierres con 'no tengo'. Envía el enlace del catálogo, pídele que mire cualquier coche que le interese y te diga marca y modelo para concertarle una visita o una reserva, y ofrécele los más baratos de cheapest_available.",
-            },
-          }
-        : {}),
+      ...(results.length === 0 ? { no_match_guidance: buildNoMatchGuidance() } : {}),
     },
     source: "Coches.net PRO (exportación oficial del negocio, feed XML) -- refrescado 14/10/2026. NO es un feed en vivo todavía.",
     source_updated_at: "2026-10-14",
