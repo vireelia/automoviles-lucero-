@@ -2614,6 +2614,7 @@ type PurchaseRequestRow = {
   available_for_call?: boolean;
   channel?: string;
   origin_page?: string;
+  source?: string;
   status: string;
   created_at: string;
   updated_at?: string;
@@ -2635,7 +2636,7 @@ function purchaseCard(r: PurchaseRequestRow): string {
     r.fuel || null,
     r.plate ? `Matrícula ${r.plate}` : null,
   ].filter(Boolean);
-  const price = typeof r.expected_price_eur === "number" && r.expected_price_eur > 0 ? `${r.expected_price_eur.toLocaleString("es-ES")} €` : "No ha indicado precio";
+  const price = typeof r.expected_price_eur === "number" && r.expected_price_eur > 0 ? `${r.expected_price_eur.toLocaleString("es-ES")} €` : "";
   const photos = (r.photo_urls ?? []).map((u) =>
     isVideoUrl(u)
       ? `<a href="${esc(u)}" target="_blank" rel="noopener" class="tag" style="text-decoration:none">▶ Ver vídeo</a>`
@@ -2650,7 +2651,7 @@ function purchaseCard(r: PurchaseRequestRow): string {
     btn("reabrir", "Reabrir");
   return `<div class="card${r.status === "pending_review" ? " urgent" : ""}" id="c-${esc(r.id)}"><div class="info">
 <h3>${esc(title)} <span class="tag ${tagClass}">${esc(PURCHASE_STATUS_LABEL[r.status] ?? r.status)}</span></h3>
-<p style="font-size:20px;font-weight:700;margin:4px 0">Pide: ${esc(price)}</p>
+${price ? `<p style="font-size:20px;font-weight:700;margin:4px 0">Pide: ${esc(price)}</p>` : ""}
 ${specs.length ? `<p>${esc(specs.join(" · "))}</p>` : ""}
 ${r.condition ? `<p>Estado: ${esc(r.condition)}</p>` : ""}
 ${r.known_issues ? `<p>Problemas conocidos: ${esc(r.known_issues)}</p>` : ""}
@@ -2662,8 +2663,10 @@ ${photos ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">${phot
 }
 crm.get("/compras", (req, res) => {
   const f = typeof req.query.f === "string" ? req.query.f : "nuevas";
+  // Solo solicitudes rellenadas por un cliente en el formulario de la web
+  // (22/11/2026): las que apuntan los agentes en sus conversaciones no entran.
   const all = list<PurchaseRequestRow>("purchase_requests")
-    .filter((r) => r.make || r.model || r.lead_phone) // descarta restos sin ningún dato útil
+    .filter((r) => r.source === "web_form")
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
   const rows =
     f === "todas" ? all :
@@ -2673,9 +2676,9 @@ crm.get("/compras", (req, res) => {
   const count = (fn: (r: PurchaseRequestRow) => boolean) => all.filter(fn).length;
   const pill = (k: string, label: string, n: number) => `<a href="/crm/compras?f=${k}" class="tag" style="text-decoration:none;${f === k ? "background:var(--accent);color:#fff" : ""}">${label} (${n})</a>`;
   const body = `<h1>Compras</h1>
-<p class="sub">Personas que quieren venderte su coche o furgoneta desde la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
+<p class="sub">Personas que han rellenado el formulario de vender su coche o furgoneta en la web: lo que piden, el estado y sus fotos. Contacta con ellas y marca en qué punto está cada una.</p>
 <p>${pill("nuevas", "Nuevas", count((r) => r.status === "pending_review"))} ${pill("contactadas", "Contactadas", count((r) => r.status === "contacted"))} ${pill("cerradas", "Cerradas", count((r) => r.status === "bought" || r.status === "discarded"))} ${pill("todas", "Todas", all.length)}</p>
-${rows.length === 0 ? `<div class="empty">No hay solicitudes en esta lista.</div>` : `<div class="records-list">${rows.map(purchaseCard).join("")}</div>`}`;
+${rows.length === 0 ? `<div class="empty">No hay solicitudes en esta lista. Aquí aparecen solo las que un cliente envía desde el formulario de la web.</div>` : `<div class="records-list">${rows.map(purchaseCard).join("")}</div>`}`;
   res.type("html").send(page("Compras", me(res), body, msgOf(req)));
 });
 

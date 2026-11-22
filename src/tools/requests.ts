@@ -101,6 +101,9 @@ export function createPurchaseRequest(args: {
   available_for_call?: boolean;
   channel?: string;
   origin_page?: string;
+  // "web_form" solo lo pone el servidor (ruta /tools/create_web_sell_request):
+  // es lo que decide qué solicitudes aparecen en la sección Compras.
+  source?: string;
 }) {
   // Solo enlaces http(s) reales, máximo 12 -- nunca se guarda nada que no
   // sea una URL, porque el CRM la pinta como imagen/enlace.

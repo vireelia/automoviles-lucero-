@@ -7,6 +7,7 @@ import { getBusinessInfo } from "./tools/business.js";
 import { searchVehicles, getVehicle, getVehicleStatus, findSimilarVehicles, syncInventory } from "./tools/vehicles.js";
 import { upsertLead, updateContactPreferences, getCustomerHistory, scoreLead, createFollowup, stopFollowups, purgeLeadsExcept, mergeLeads, normalizePhone, isRealName } from "./tools/leads.js";
 import { withRequiredName } from "./tools/client-name.js";
+import { registerWebLeadsRoutes } from "./web-leads.js";
 import { createPurchaseRequest, createServiceRequest, createHandoff, createVehicleValuation } from "./tools/requests.js";
 import { getAppointmentSlots, createAppointmentWithCalendar, updateAppointment, cancelAppointment } from "./tools/appointments.js";
 import { sendInternalSummary, sendVehicleLink, sendLocation, sendWhatsapp, notifySalesperson, saveConversation, createConversationSummary } from "./tools/delivery.js";
@@ -18,7 +19,7 @@ import { forwardVoiceAnalysis } from "./integrations/n8n.js";
 import { renderPanel } from "./panel.js";
 import { startScheduler } from "./scheduler.js";
 import { readCollection, writeCollection, claimOnce, mutateCollectionSync, writeShard, readAllShards, deleteShard, readShard } from "./store.js";
-import { restoreFromTrash, moveToTrash } from "./crm/trash.js";
+import { restoreFromTrash, moveToTrash, moveManyToTrash } from "./crm/trash.js";
 import { createAuthUrl, consumeState, exchangeCodeAndStore, googleStatus, describeGoogleError, gmailSearch, gmailGet, gmailGetMetadata, gmailListUnread, calendarBusy, calendarListEvents, type GmailMessage } from "./integrations/google.js";
 import { extractWallapopContact, detectPortal } from "./email/interest.js";
 import { sendWhatsappText, isWhatsappConnected } from "./integrations/whatsapp.js";
@@ -104,6 +105,9 @@ app.use(
     },
   }),
 );
+
+// Formulario público de vender coche/furgoneta de la web (22/11/2026).
+registerWebLeadsRoutes(app);
 
 // BUG REAL encontrado 30/09/2026 en producción: el comentario de abajo
 // decía que Retell manda los argumentos sueltos en la raíz del body -- FALSO.
@@ -252,6 +256,12 @@ app.post("/tools/score_lead", route((a) => scoreLead(a)));
 app.post("/tools/create_followup", route((a) => createFollowup(a)));
 app.post("/tools/stop_followups", route((a) => stopFollowups(a)));
 app.post("/tools/create_purchase_request", requireAdminToken, route((a) => createPurchaseRequest(a)));
+// Solicitud de venta rellenada por un cliente en el formulario de la web (22/11/2026,
+// "solo deben entrar en Compras los clientes que rellenen la información de la
+// web"): la marca source:"web_form" la pone SIEMPRE el servidor aquí, nunca viene
+// del cuerpo de la petición, y es lo único que enseña la sección Compras.
+app.post("/tools/create_web_sell_request", requireAdminToken, route((a: Parameters<typeof createPurchaseRequest>[0]) => createPurchaseRequest({ ...a, source: "web_form", channel: "WEB" })));
+
 app.post("/tools/create_vehicle_valuation", route((a) => createVehicleValuation(a)));
 app.post("/tools/create_service_request", route((a) => createServiceRequest(a)));
 app.post("/tools/create_handoff", markVoiceOrigin, markCallerPhone, route((a) => createHandoff(a)));
@@ -849,6 +859,21 @@ app.post("/admin/clientes/arreglar_nombres", requireAdminToken, route(async (a: 
     citas_vivas_sin_nombre_ahora: sinNombre.length,
     muestra_sin_nombre: sinNombre.slice(0, 60).map((c) => ({ telefono: c.lead_phone, fecha: c.requested_date, canal: c.channel })),
   };
+}));
+
+// Limpieza de Compras (22/11/2026, "solo deja los clientes que rellenen la
+// información en la web"): las solicitudes guardadas por los agentes
+// (sin source:"web_form") se mueven a la Papelera -- recuperables desde el CRM,
+// nunca se destruyen. dryRun por defecto.
+app.post("/admin/compras/borrar_antiguas", requireAdminToken, route(async (a: { dryRun?: boolean }) => {
+  const dryRun = a?.dryRun !== false;
+  const rows = readCollection<{ id: string; source?: string; make?: string; model?: string; lead_phone?: string }>("purchase_requests");
+  const antiguas = rows.filter((r) => r.source !== "web_form");
+  if (!dryRun && antiguas.length > 0) {
+    moveManyToTrash(antiguas.map((r) => ({ collection: "purchase_requests", record: r, label: `Compra: ${[r.make, r.model].filter(Boolean).join(" ") || "vehículo sin identificar"} (${r.lead_phone ?? "sin contacto"})` })), "admin-token");
+    writeCollection("purchase_requests", rows.filter((r) => r.source === "web_form"));
+  }
+  return { status: "ok", dry_run: dryRun, total: rows.length, a_la_papelera: antiguas.length, se_quedan: rows.length - antiguas.length };
 }));
 
 app.post("/admin/email/reprocesar_pendientes", requireAdminToken, route(async (a: { message_ids: string[] }) => {
