@@ -9,11 +9,12 @@
  *   placement       top | bottom | left | right | center (por defecto bottom).
  *   advanceOnClick  avanza cuando la persona hace clic de verdad en el elemento resaltado.
  *   optional        si el elemento no existe (p. ej. sección solo de admin), el paso se salta.
+ *   requires        selector que debe existir (p. ej. el enlace del menú de esa sección); si no, el paso se salta.
  * spa: true -> navega con history.pushState (React Router, etc.); false -> recarga normal (HTML de servidor).
  * El progreso se guarda en localStorage, así que sobrevive a recargas y a cambios de página.
  */
 (function () {
-  var cfg, state, ui, cleanup, waitTimer, observer;
+  var cfg, state, ui, cleanup, waitTimer, observer, navAt = 0, gen = 0;
 
   function load() {
     try { var r = JSON.parse(localStorage.getItem(cfg.key) || "null"); if (r && typeof r.i === "number") return r; } catch (e) {}
@@ -66,29 +67,44 @@
     if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
     if (observer) { observer.disconnect(); observer = null; }
     if (ui) { ui.remove(); ui = null; }
+    var viejos = document.querySelectorAll('[data-guided-tour-ui]');
+    for (var q = 0; q < viejos.length; q++) viejos[q].remove();
   }
 
   function render() {
     teardown();
+    var myGen = ++gen; // cualquier búsqueda anterior queda anulada
     var step = cfg.steps[state.i];
     if (!step) { stop(); return; }
     renderButton();
     if (step.path && here() !== norm(step.path) && state.navFor !== step.id) {
       state.navFor = step.id; save(); // una sola navegación por paso: una redirección del servidor no debe provocar un bucle
+      navAt = Date.now();
       goTo(step.path);
-      if (cfg.spa) waitAndShow(step);
+      if (cfg.spa) waitAndShow(step, myGen);
       return;
     }
-    waitAndShow(step);
+    waitAndShow(step, myGen);
   }
 
-  function waitAndShow(step) {
+  function waitAndShow(step, myGen) {
     var tries = 0, done = false;
     function attempt() {
       if (done) return true;
-      if (step.path && here() !== norm(step.path) && state.navFor !== step.id) return false;
+      if (myGen !== gen) { done = true; return true; } // anulado por un render más reciente
+      if (cfg.spa && step.path && here() !== norm(step.path)) {
+        // SPA: si la ruta no coincide tras asentarse, la app redirigió (p. ej. sin permiso): se salta el paso
+        if (Date.now() - navAt < 700) return false;
+        done = true; if (observer) { observer.disconnect(); observer = null; }
+        go(state.i + 1); return true;
+      }
+      if (!cfg.spa && step.path && here() !== norm(step.path) && state.navFor !== step.id) return false;
+      // SPA: justo tras navegar, el elemento encontrado puede ser el de la página anterior; se espera a que se asiente
+      if (cfg.spa && Date.now() - navAt < 350) return false;
       var t = find(step);
       if (!t) return false;
+      // requires: si el elemento del menú de esa sección no existe (sin permiso), el paso se salta
+      if (step.requires && !document.querySelector(step.requires)) { done = true; if (observer) { observer.disconnect(); observer = null; } go(state.i + 1); return true; }
       done = true; if (observer) { observer.disconnect(); observer = null; }
       show(step, t);
       return true;
@@ -97,7 +113,7 @@
     observer = new MutationObserver(function () { attempt(); });
     observer.observe(document.body, { childList: true, subtree: true });
     (function poll() {
-      if (done) return;
+      if (done || myGen !== gen) return;
       tries++;
       if (attempt()) return;
       if (tries >= (cfg.spa ? 40 : 15)) { // ~4 s en SPA, ~1,5 s en HTML de servidor (ya está todo pintado)
@@ -113,7 +129,7 @@
   function show(step, target) {
     var total = cfg.steps.length;
     ui = el("div", "position:fixed;inset:0;z-index:2147483000;pointer-events:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif");
-    ui.setAttribute("aria-live", "polite");
+    ui.setAttribute("aria-live", "polite"); ui.setAttribute("data-guided-tour-ui", "1");
     document.body.appendChild(ui);
 
     var shade = "background:rgba(15,23,42,.62);position:absolute;pointer-events:auto;";
@@ -191,6 +207,11 @@
     window.addEventListener("scroll", rl, true);
     window.addEventListener("resize", rl);
     var raf = setTimeout(layout, 350); // tras el scroll suave
+    var watch = null;
+    if (target && cfg.spa) {
+      watch = new MutationObserver(function () { if (!document.body.contains(target)) { watch.disconnect(); render(); } });
+      watch.observe(document.body, { childList: true, subtree: true });
+    }
 
     var onKey = function (e) {
       if (e.key === "Escape") stop();
@@ -206,6 +227,7 @@
     }
     cleanup = function () {
       clearTimeout(raf);
+      if (watch) watch.disconnect();
       window.removeEventListener("scroll", rl, true);
       window.removeEventListener("resize", rl);
       document.removeEventListener("keydown", onKey);
@@ -226,6 +248,7 @@
 
   window.GuidedTour = {
     init: function (config) {
+      if (cfg) return; // ya iniciado (p. ej. React en modo estricto monta dos veces)
       cfg = config; state = load();
       function ready() {
         renderButton();
