@@ -1661,7 +1661,7 @@ window.luceroVerificarEntregaIcon = function (btn) {
       if (!d.ultimo_mensaje_saliente) { alert(name + " (" + phone + "): Zernio no tiene ningún mensaje saliente registrado."); return; }
       var m = d.ultimo_mensaje_saliente;
       var estado = m.deliveryStatus === "failed" ? "❌ FALLÓ: WhatsApp no lo entregó" : m.readAt ? "✓✓ Leído por el cliente" : m.deliveredAt ? "✓✓ Entregado al teléfono" : m.deliveryStatus === "sent" ? "✓ Enviado (pendiente de confirmación de entrega)" : "Estado: " + (m.deliveryStatus || "desconocido");
-      alert(name + " (" + phone + "):\n" + estado);
+      alert(name + " (" + phone + "):\\n" + estado);
     })
     .catch(function () {
       btn.disabled = false;
@@ -1744,7 +1744,7 @@ window.toggleAllMsgs = function (master, name) {
       // otra pantalla.
       var prevMsg = parseInt(localStorage.getItem(MSG_KEY) || "0", 10);
       localStorage.setItem(MSG_KEY, String(d.msgTotal));
-      var enListaContactos = /^\/crm\/contactos\/(whatsapp|correo)/.test(location.pathname);
+      var enListaContactos = /^\\/crm\\/contactos\\/(whatsapp|correo)/.test(location.pathname);
       if (enListaContactos && d.msgTotal > prevMsg) softRefreshCurrentPage();
     }).catch(function () {});
   }
@@ -1754,6 +1754,7 @@ window.toggleAllMsgs = function (master, name) {
   setInterval(checkBadges, 2000);
 })();
 </script>
+${tourScriptTag(user.role)}
 </body></html>`;
 }
 
@@ -6513,6 +6514,7 @@ ${simpleCheckbox("papelera-bulk", t.id)}
 // eso exige generar primero el PDF con el registro completo, sin paso por
 // papelera.
 import PDFDocument from "pdfkit";
+import { tourScriptTag } from "./tour.js";
 
 crm.get("/clientes/archivados", (req, res) => {
   if (me(res).role !== "admin") return back(res, "/crm", "Esta sección es solo para el administrador");
