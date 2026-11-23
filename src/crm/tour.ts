@@ -117,3 +117,10 @@ export function tourScriptTag(role?: string): string {
   const data = JSON.stringify({ key: "lucero-crm-tour", startLabel: "Ver tutorial", spa: false, color: "#dc2626", steps: role === "admin" ? STEPS : STEPS.filter((st) => !ADMIN_ONLY.has(st.id.replace(/-pagina$/, "").replace(/^menu-/, ""))) }).replace(/</g, "\\u003c");
   return `<script>${js}\nGuidedTour.init(${data});</script>`;
 }
+
+// Estado público e inocuo del tutorial (sin datos de negocio): sirve para comprobar desde fuera, sin entrar al
+// CRM, que la versión desplegada lleva el motor y cuántos pasos tiene (23/11/2026, "en lucero no me aparece nada").
+export function tourStatus(): { loaded: boolean; engine_bytes: number; steps: number } {
+  const js = engine();
+  return { loaded: js.length > 0, engine_bytes: js.length, steps: STEPS.length };
+}

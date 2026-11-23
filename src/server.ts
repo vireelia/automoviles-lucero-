@@ -1,3 +1,4 @@
+import { tourStatus } from "./crm/tour.js";
 import express from "express";
 import PDFDocument from "pdfkit";
 import * as nodeFs from "fs";
@@ -200,7 +201,7 @@ function route(fn: (args: any) => unknown) {
   };
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => res.json({ ok: true, tutorial: tourStatus() }));
 
 // -- Tools expuestas a los agentes de voz/chat de Retell (Sección 43) --
 app.post("/tools/get_business_info", route(() => getBusinessInfo()));
