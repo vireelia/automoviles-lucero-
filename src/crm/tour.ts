@@ -1,101 +1,285 @@
 import { readFileSync } from "fs";
 import path from "path";
 
-// Tutorial guiado del CRM (23/11/2026). El motor es genérico y vive en
-// src/data/guided-tour.js (se copia tal cual al Docker); aquí solo están los
-// pasos reales de ESTE CRM. Cada sección: primero se señala su entrada del menú
-// (con clic de verdad), luego se explica la página y sus botones.
+// Tutorial guiado del CRM (23/11/2026, rehecho a petición: "que vaya más organizado, que lo explique en las
+// secciones reales y que explique mejor para qué sirven"). El motor es genérico y vive en src/data/guided-tour.js
+// (se copia tal cual al Docker); aquí solo está el contenido real de ESTE CRM.
+//
+// Organización: 5 bloques con una tarjeta de introducción cada uno. En cada sección, primero se señala su entrada
+// del menú (con clic de verdad) explicando PARA QUÉ SIRVE, y luego se resaltan los bloques reales de la pantalla
+// (contadores, listas, pestañas, botones) explicando qué se hace con cada uno. Todo lo que se describe existe en
+// la pantalla real; si un elemento depende de que haya datos, el paso tiene alternativa o se salta solo.
 
 type Step = {
   id: string;
   path: string;
   target: string;
   text?: string;
+  fallback?: string;
   title: string;
   body: string;
+  group: string;
   placement?: "top" | "bottom" | "left" | "right" | "center";
   advanceOnClick?: boolean;
   optional?: boolean;
+  center?: boolean;
+  adminOnly?: boolean;
 };
 
-const nav = (href: string) => `nav a[href="${href}"]`;
+const G0 = "Primeros pasos";
+const G1 = "Bloque 1 · Tu día a día";
+const G2 = "Bloque 2 · Vender un coche";
+const G3 = "Bloque 3 · Conseguir coches";
+const G4 = "Bloque 4 · Control y resultados";
+const G5 = "Bloque 5 · Administración";
 
-function menuStep(id: string, href: string, title: string, body: string, optional = false): Step {
-  return { id: `menu-${id}`, path: "/crm", target: nav(href), title, body: `${body} Haz clic para entrar.`, placement: "right", advanceOnClick: true, optional };
+type Page = { target: string; fallback?: string; text?: string; title: string; body: string; optional?: boolean; placement?: Step["placement"] };
+
+const steps: Step[] = [];
+let cur = "/crm"; // página en la que se está; los pasos de menú no obligan a volver al inicio
+
+function intro(group: string, id: string, title: string, body: string, adminOnly = false) {
+  steps.push({ id, path: cur, target: "body", center: true, group, title, body, placement: "center", adminOnly });
 }
 
-const STEPS: Step[] = [
-  { id: "bienvenida", path: "/crm", target: "header .brand", title: "Bienvenido al CRM de Lucero", body: "Este recorrido te enseña, sección por sección y botón por botón, para qué sirve cada cosa. Puedes salir cuando quieras con «Salir del tutorial» o con la tecla Esc, y volver a empezar con el botón «Ver tutorial» de la esquina.", placement: "right" },
-  { id: "barra-superior", path: "/crm", target: ".topbar", title: "Barra superior", body: "Siempre visible. Aquí tienes el buscador (por nombre, teléfono o coche), los avisos de mensajes sin leer y de alertas, y el estado de los asistentes. Los números bajan solos cuando abres cada conversación.", placement: "bottom" },
-  { id: "hoy", path: "/crm", target: "main h1", title: "Inicio: lo de hoy", body: "Resumen de lo que necesita atención hoy: visitas del día, mensajes sin contestar, reservas pendientes y tareas. Es lo primero que conviene mirar al llegar.", placement: "bottom" },
-  { id: "hoy-buscar", path: "/crm", target: 'main input[placeholder^="Buscar"]', optional: true, title: "Buscador", body: "Escribe un nombre, un teléfono o un coche y te lleva directo a la ficha. Es la forma más rápida de encontrar a un cliente.", placement: "bottom" },
+function section(o: { group: string; id: string; href: string; page?: string; title: string; why: string; adminOnly?: boolean; pages?: Page[] }) {
+  steps.push({
+    id: `menu-${o.id}`, path: cur, target: `nav a[href="${o.href}"]`, group: o.group, title: o.title,
+    body: `Para qué sirve: ${o.why}\n\nHaz clic para entrar.`, placement: "right", advanceOnClick: true, adminOnly: o.adminOnly,
+  });
+  cur = o.page ?? o.href;
+  (o.pages ?? []).forEach((p, i) =>
+    steps.push({
+      id: `${o.id}-${i + 1}`, path: cur, target: p.target, fallback: p.fallback, text: p.text, optional: p.optional ?? false,
+      group: o.group, title: p.title, body: p.body, placement: p.placement ?? "bottom", adminOnly: o.adminOnly,
+    }),
+  );
+}
 
-  menuStep("coches", "/crm/coches", "Vehículos", "El stock real de coches y furgonetas, con precio, kilómetros, cambio y estado."),
-  { id: "coches-pagina", path: "/crm/coches", target: "main h1", title: "Listado de vehículos", body: "Cada coche muestra su estado (disponible, reservado, vendido). Entra en uno para ver su ficha y corregir el precio si hace falta. Las visitas y reservas solo se pueden hacer con coches que estén aquí y disponibles.", placement: "bottom" },
+// ---------------------------------------------------------------------------------------------------------------
+steps.push({
+  id: "bienvenida", path: "/crm", target: "body", center: true, group: G0, title: "Bienvenido al CRM de Lucero", placement: "center",
+  body:
+    "Este recorrido te explica, sección por sección y sobre las pantallas reales, para qué sirve cada cosa y qué puedes hacer en ella.\n\n" +
+    "Va en 5 bloques: Tu día a día · Vender un coche · Conseguir coches · Control y resultados · Administración.\n\n" +
+    "Puedes salir cuando quieras (tecla Esc) y repetirlo con el botón «Ver tutorial» de la esquina.",
+});
+steps.push({
+  id: "barra-superior", path: "/crm", target: ".topbar", group: G0, title: "La barra superior, siempre visible", placement: "bottom",
+  body:
+    "• Buscador: encuentra a cualquier cliente, coche o matrícula (atajo ⌘K o Ctrl+K).\n" +
+    "• Mensajes y avisos: el número es lo que no has leído; baja solo cuando abres cada conversación.\n" +
+    "• «Asistentes»: indica si Miguel, Carolina y Daniel están activos o necesitan revisión.",
+});
 
-  menuStep("clientes", "/crm/clientes", "Clientes", "Todos los interesados, ordenados por temperatura (frío, templado, caliente)."),
-  { id: "clientes-pagina", path: "/crm/clientes", target: "main h1", title: "Ficha de clientes", body: "Aquí ves quién ha escrito o llamado, con su coche de interés y su temperatura. Abre una ficha para ver toda la historia: conversaciones, visitas, reservas y tareas.", placement: "bottom" },
-  { id: "clientes-anadir", path: "/crm/clientes", target: "main button", text: "Añadir cliente", optional: true, title: "Añadir cliente", body: "Para dar de alta a mano a alguien que ha llamado o ha venido. Es obligatorio escribir su nombre real: no se guardan clientes sin nombre.", placement: "bottom" },
-  { id: "clientes-exportar", path: "/crm/clientes", target: "main a, main button", text: "Exportar", optional: true, title: "Exportar", body: "Descarga la lista de clientes en un archivo (JSON) para guardarla o usarla en otro sitio.", placement: "bottom" },
-  { id: "clientes-limpiar", path: "/crm/clientes", target: "main button", text: "Limpiar", optional: true, title: "Limpiar sin interés real", body: "Retira de la lista los contactos que nunca mostraron interés real (por ejemplo, mensajes automáticos), para que solo queden clientes de verdad.", placement: "bottom" },
+// ---- Bloque 1 ---------------------------------------------------------------------------------------------------
+intro(G1, "b1", "Tu día a día", "Lo que miras cada mañana:\n\n• Inicio: qué hay que atender hoy.\n• Contactos: quién ha escrito o llamado.\n• Agenda: qué hay en el calendario.\n• Tareas: qué te toca hacer.");
 
-  menuStep("anuncios", "/crm/anuncios", "Anuncios", "Los coches que se publican y su rendimiento."),
-  { id: "anuncios-pagina", path: "/crm/anuncios", target: "main h1", title: "Anuncios", body: "Resumen de lo publicado. Desde aquí se prepara qué coches conviene anunciar.", placement: "bottom" },
+section({
+  group: G1, id: "inicio", href: "/crm", title: "Inicio",
+  why: "es el resumen del día y lo primero que debes mirar al llegar. Reúne de todos los canales lo que necesita tu atención.",
+  pages: [
+    { target: "main .stats", fallback: "main h1", title: "Los contadores del día",
+      body: "Seis números: visitas de hoy, reservas por atender, incidencias, correos por contestar, reservas activas y clientes sin responsable.\n\nPulsa un número para ir directo a esa lista. Si todo está a cero, no hay nada urgente." },
+    { target: "main .home-cols h2", fallback: "main .box", title: "Lo de hoy, en cuatro listas",
+      body: "Visitas de hoy · Reservas que hay que atender · Clientes nuevos de hoy · Próximas visitas.\n\nCada tarjeta trae botones para actuar sin salir de aquí: «Llamar», «Escribir por WhatsApp», «Ya le he llamado» (quita el aviso) o «Ha pagado» en las reservas." },
+    { target: "main form.search", fallback: "main h1", title: "Buscador del día a día",
+      body: "Escribe un nombre, un teléfono o un coche y te lleva directo a su ficha. Es la forma más rápida de encontrar a alguien." },
+  ],
+});
 
-  menuStep("studio", "/crm/studio", "Studio IA", "Crea imágenes y vídeos de los coches con inteligencia artificial.", true),
-  { id: "studio-pagina", path: "/crm/studio", target: "main h1", optional: true, title: "Studio IA", body: "Genera contenido para redes. Cada generación tiene coste real, por eso solo lo ven los administradores. Desde un resultado terminado puedes publicarlo en redes.", placement: "bottom" },
+section({
+  group: G1, id: "contactos", href: "/crm/contactos", page: "/crm/contactos/whatsapp", title: "Contactos",
+  why: "aquí están todas las conversaciones con clientes: WhatsApp (Carolina), correo (Daniel) y llamadas (Miguel). Los asistentes contestan solos; tú lees y entras si hace falta.",
+  pages: [
+    { target: "#contactos-tabs", fallback: "main h1", title: "Un canal por pestaña",
+      body: "WhatsApp, Correo, Llamadas y los avisos de Coches.net y Wallapop.\n\nCada conversación entra por su canal y, al abrirla, se marca como leída: el número de la barra superior baja, como en WhatsApp." },
+    { target: "#contactos-panel", fallback: "main h1", title: "La lista y la conversación",
+      body: "A un lado, las conversaciones con la más reciente arriba. Al abrir una ves lo que se ha hablado y los datos del cliente." },
+    { target: "main a, main button", text: "Nuevo contacto", optional: true, title: "+ Nuevo contacto",
+      body: "Para dar de alta a mano a alguien que ha llamado o ha venido en persona. Hace falta su nombre real: sin nombre no se guarda." },
+  ],
+});
 
-  menuStep("contactos", "/crm/contactos", "Contactos", "Todas las conversaciones en un solo sitio: WhatsApp, correo y llamadas."),
-  { id: "contactos-pagina", path: "/crm/contactos/whatsapp", target: "main h1", title: "Contactos", body: "Aquí atiendes las conversaciones. Las pestañas separan WhatsApp, Correo y Llamadas. Al abrir una conversación se marca como leída y el número de la barra superior baja, como en WhatsApp.", placement: "bottom" },
-  { id: "contactos-nuevo", path: "/crm/contactos/whatsapp", target: "main a, main button", text: "Nuevo contacto", optional: true, title: "+ Nuevo contacto", body: "Da de alta a mano a alguien (nombre real, teléfono o correo, coche de interés y canal por el que llegó).", placement: "bottom" },
+section({
+  group: G1, id: "agenda", href: "/crm/agenda", title: "Agenda",
+  why: "un calendario de los próximos días con todo mezclado: visitas, llamadas y tareas de todos los canales.",
+  pages: [
+    { target: "main .agenda-day.today", fallback: "main .agenda-day", title: "Día por día",
+      body: "Cada fila enlaza a su sección real (la visita, la tarea…) para gestionarla. El día de hoy aparece resaltado." },
+  ],
+});
 
-  menuStep("agenda", "/crm/agenda", "Agenda", "El calendario de visitas y citas."),
-  { id: "agenda-pagina", path: "/crm/agenda", target: "main h1", title: "Agenda", body: "Vista de calendario de lo que hay agendado. Las citas solo se confirman de lunes a viernes, de 9:30 a 14:00; fines de semana y festivos quedan como solicitadas.", placement: "bottom" },
+section({
+  group: G1, id: "tareas", href: "/crm/seguimiento", title: "Tareas",
+  why: "la lista de cosas que alguien del equipo debe hacer: llamar a un cliente, confirmar una visita, verificar un pago…",
+  pages: [
+    { target: "main .cards-grid > :first-child", fallback: "main .box", title: "Tareas pendientes",
+      body: "Algunas se crean solas: visita por confirmar, justificante por verificar, cliente que no se presentó, aviso urgente de un asistente.\n\nCada tarjeta tiene «Ver cliente» para abrir su ficha y «Completar» cuando ya está hecha." },
+    { target: "main button", text: "Crear tarea", optional: true, title: "Crear una tarea tú",
+      body: "Para apuntar algo pendiente: elige el tipo, el cliente (por teléfono), escribe qué hay que hacer y ponle prioridad, fecha y responsable." },
+  ],
+});
 
-  menuStep("citas", "/crm/citas", "Visitas", "Las visitas pedidas por los clientes para ver un coche."),
-  { id: "citas-pagina", path: "/crm/citas", target: "main h1", title: "Visitas", body: "Cada visita lleva nombre, teléfono, coche y hora. Los asistentes solo las crean con un coche real disponible y con el nombre del cliente. Si el coche se vende, la visita se cierra y se crea una tarea para avisar al cliente.", placement: "bottom" },
-  { id: "citas-imprimir", path: "/crm/citas", target: "main a, main button", text: "imprimir", optional: true, title: "Ver la semana para imprimir", body: "Abre la semana en una vista lista para imprimir y dejarla en el mostrador.", placement: "bottom" },
+// ---- Bloque 2 ---------------------------------------------------------------------------------------------------
+intro(G2, "b2", "Vender un coche",
+  "El camino real de una venta:\n\n1. El cliente pregunta y queda en Clientes.\n2. Pide ver un coche: Visitas.\n3. Aparta el coche con 500 €: Reservas.\n4. Se cierra la venta: Ventas.\n\nVehículos es el catálogo del que parte todo.");
 
-  menuStep("reservas", "/crm/reservas", "Reservas", "Los coches que un cliente quiere apartar."),
-  { id: "reservas-pagina", path: "/crm/reservas", target: "main h1", title: "Reservas", body: "Una reserva queda pendiente hasta que llega el justificante de pago. Pueden existir varias pendientes a la vez para el mismo coche: gana quien primero paga y envía el justificante.", placement: "bottom" },
-  { id: "reservas-crear", path: "/crm/reservas", target: "main button", text: "Crear la reserva", optional: true, title: "Crear la reserva", body: "Para apuntar a mano una reserva. Hace falta el nombre real del cliente; sin él no se crea.", placement: "top" },
-  { id: "reservas-atendido", path: "/crm/reservas", target: "main button", text: "Ya lo he atendido", optional: true, title: "Ya lo he atendido", body: "Marca el aviso como resuelto cuando ya has gestionado esa reserva, para que deje de aparecer como pendiente.", placement: "top" },
+section({
+  group: G2, id: "clientes", href: "/crm/clientes", title: "Clientes",
+  why: "la ficha de cada persona interesada, con lo que quiere y lo caliente que está (caliente, tibio o frío).",
+  pages: [
+    { target: "main .cards-grid > :first-child", fallback: "main h1", title: "Una tarjeta por cliente",
+      body: "Miguel, Carolina y Daniel anotan solos lo que quiere cada cliente, sea cual sea el canal: tú lo lees y llamas si hace falta.\n\nLos fríos sin contacto en 45 días se archivan solos; nunca se borran, solo dejan de aparecer." },
+    { target: "main details.box", fallback: "main h1", title: "Añadir un cliente a mano",
+      body: "Despliega este bloque para dar de alta a alguien: nombre real (obligatorio), teléfono y el coche que le interesa." },
+    { target: "main a, main button", text: "Limpiar", optional: true, title: "Limpiar y exportar",
+      body: "«Limpiar sin interés real» quita los contactos que nunca mostraron interés (mensajes automáticos…).\n\nA su lado: «Exportar (JSON)» descarga la lista y «Gestionar archivados» recupera los archivados." },
+  ],
+});
 
-  menuStep("compras", "/crm/compras", "Compras", "Los clientes que quieren vendernos su coche o furgoneta."),
-  { id: "compras-pagina", path: "/crm/compras", target: "main h1", title: "Compras", body: "Solo entran aquí las solicitudes reales que los clientes rellenan en la web vendenostufurgoneta.es: datos del vehículo, kilómetros, precio que piden, estado y fotos. Abre una para ver todo.", placement: "bottom" },
-  { id: "compras-eliminar", path: "/crm/compras", target: "main button", text: "Eliminar", optional: true, title: "Eliminar seleccionadas", body: "Marca las solicitudes que ya no interesan (hay casilla para seleccionar todas) y elimínalas de una vez. Van a la Papelera, así que se pueden recuperar.", placement: "bottom" },
+section({
+  group: G2, id: "vehiculos", href: "/crm/coches", title: "Vehículos",
+  why: "el catálogo real de coches y furgonetas. Los asistentes solo ofrecen y agendan lo que está aquí y disponible.",
+  pages: [
+    { target: "main .cards-grid > :first-child", fallback: "main h1", title: "Un coche por tarjeta",
+      body: "Cada tarjeta muestra el coche con su precio y su estado. Pulsa «Cambiar» para marcarlo disponible, reservado o vendido, o para cambiar el precio.\n\nSi lo marcas como vendido, ya no se agendan visitas ni reservas de ese coche." },
+  ],
+});
 
-  menuStep("ventas", "/crm/ventas", "Ventas", "Los coches vendidos."),
-  { id: "ventas-pagina", path: "/crm/ventas", target: "main h1", title: "Ventas", body: "Registro de las ventas cerradas, para ver qué se ha vendido y cuándo.", placement: "bottom" },
+section({
+  group: G2, id: "visitas", href: "/crm/citas", title: "Visitas",
+  why: "los días y horas en que vendrán clientes a ver un coche. La mayoría las agendan solos los asistentes.",
+  pages: [
+    { target: "main .records-list > :first-child", fallback: "main h1", title: "La lista de visitas",
+      body: "Cada visita tiene cliente, coche, día y hora. Solo se crean con el nombre real del cliente y con un coche disponible del catálogo.\n\nSi el coche se vende, la visita se cierra sola y se crea una tarea para avisar al cliente." },
+    { target: "main button", text: "Vino y compró", fallback: "main .records-list", optional: true, title: "Después de la visita",
+      body: "Marca qué pasó: «Vino», «Vino y compró» o «No se presentó» (esta última crea una tarea de seguimiento).\n\n«Cancelar» la anula y «Cambiar» mueve el día o la hora." },
+  ],
+});
 
-  menuStep("tareas", "/crm/seguimiento", "Tareas", "Lo que el equipo tiene que hacer: llamar, confirmar visitas, avisar clientes."),
-  { id: "tareas-pagina", path: "/crm/seguimiento", target: "main h1", title: "Tareas y seguimiento", body: "Muchas se crean solas (por ejemplo, avisar a un cliente cuyo coche se vendió). Cada tarea lleva su próxima acción y enlaza a la ficha del cliente.", placement: "bottom" },
-  { id: "tareas-crear", path: "/crm/seguimiento", target: "main button", text: "Crear tarea", optional: true, title: "Crear tarea", body: "Apunta a mano algo pendiente: escribe la próxima acción (por ejemplo, «llamar el jueves») y guárdala.", placement: "top" },
+section({
+  group: G2, id: "reservas", href: "/crm/reservas", title: "Reservas",
+  why: "apartar un coche a un cliente con una señal de 500 €.",
+  pages: [
+    { target: "main .records-list > :first-child", fallback: "main h1", title: "El camino de una reserva",
+      body: "1. El cliente la pide y queda pendiente de pago.\n2. Cuando paga, pulsa «Ha pagado».\n3. Compruebas el justificante y pulsas «Confirmar la reserva»: el coche pasa a reservado.\n\nSi no se concreta, «Cancelar»." },
+    { target: "main button", text: "Crear la reserva", optional: true, title: "Crear una reserva a mano",
+      body: "Para cuando el cliente decide en persona o por teléfono: elige el coche, escribe su nombre real (obligatorio) y su teléfono." },
+  ],
+});
 
-  menuStep("informes", "/crm/informes", "Informes", "Cifras del negocio y de los asistentes."),
-  { id: "informes-pagina", path: "/crm/informes", target: "main h1", title: "Informes", body: "Resultados reales: conversaciones, visitas, reservas e incidencias de los asistentes.", placement: "bottom" },
-  { id: "informes-analizar", path: "/crm/informes", target: "main button", text: "Analizar incidencias", optional: true, title: "Analizar incidencias ahora", body: "Revisa los fallos recientes de los asistentes y te explica qué ha pasado y qué conviene corregir.", placement: "bottom" },
+section({
+  group: G2, id: "ventas", href: "/crm/ventas", title: "Ventas",
+  why: "el historial de ventas cerradas, para ver qué se ha vendido y por qué canal llegó el cliente.",
+  pages: [
+    { target: "main .stats", fallback: "main h1", title: "El resumen de ventas",
+      body: "Ventas cerradas, importe total conocido y cuántas no tienen reserva vinculada.\n\nUna venta se cierra desde la ficha del cliente («✅ Venta cerrada»). Nunca se muestra un importe inventado." },
+  ],
+});
 
-  menuStep("asistentes", "/crm/asistentes", "Asistentes", "Miguel (voz), Carolina (WhatsApp) y Daniel (correo).", true),
-  { id: "asistentes-pagina", path: "/crm/asistentes", target: "main h1", optional: true, title: "Asistentes", body: "Los tres asistentes de IA: Miguel atiende las llamadas, Carolina contesta por WhatsApp y Daniel gestiona el correo de Coches.net y Wallapop. Aquí ves su actividad y puedes pausar cada uno.", placement: "bottom" },
+// ---- Bloque 3 ---------------------------------------------------------------------------------------------------
+intro(G3, "b3", "Conseguir coches",
+  "No solo vendes: también compras.\n\n• Compras: personas que quieren venderte su coche.\n• Anuncios: qué retirar de los portales.\n• Studio IA: imágenes y vídeos para publicitar los coches.");
 
-  menuStep("integraciones", "/crm/integraciones", "Integraciones", "Las conexiones con WhatsApp, Google y la voz.", true),
-  { id: "integraciones-pagina", path: "/crm/integraciones", target: "main h1", optional: true, title: "Integraciones", body: "Estado de cada conexión. Si Gmail deja de leer correos, aquí se reconecta Google. Si algo está desconectado, los asistentes de ese canal no funcionan.", placement: "bottom" },
+section({
+  group: G3, id: "compras", href: "/crm/compras", title: "Compras",
+  why: "las personas que quieren venderte su coche o furgoneta. Solo entran las que rellenan el formulario de la web vendenostufurgoneta.es.",
+  pages: [
+    { target: "main .compras-split", fallback: "main h1", title: "La solicitud y su detalle",
+      body: "A un lado, la lista con el coche de cada persona. Al abrir una ves lo que pide, el estado del vehículo y sus fotos." },
+    { target: "main button", text: "Marcar contactada", fallback: "main .compras-split", optional: true, title: "Llevar el control",
+      body: "Llama o escribe por WhatsApp desde los botones y marca en qué punto está: «Marcar contactada» o «Descartar».\n\n«Eliminar» la manda a la Papelera, y las casillas permiten eliminar varias a la vez." },
+  ],
+});
 
-  menuStep("equipo", "/crm/equipo", "Usuarios", "Las personas que entran al CRM y sus permisos.", true),
-  { id: "equipo-pagina", path: "/crm/equipo", target: "main h1", optional: true, title: "Usuarios", body: "Quién puede entrar y con qué rol: administrador, comercial o equipo. Solo los administradores ven este apartado.", placement: "bottom" },
+section({
+  group: G3, id: "anuncios", href: "/crm/anuncios", title: "Anuncios",
+  why: "saber qué coches ya no deben seguir publicados en Coches.net, Milanuncios o Wallapop porque se han reservado o vendido.",
+  pages: [
+    { target: "main .records-list", fallback: "main .box", title: "Qué retirar de los portales",
+      body: "Publicar anuncios desde aquí todavía no está construido (faltan los accesos de esos portales).\n\nLos portales no se sincronizan solos: lo que se reserva o se vende hay que retirarlo a mano en cada uno. Debajo tienes accesos al catálogo y a Studio IA." },
+  ],
+});
 
-  menuStep("ajustes", "/crm/ajustes", "Ajustes", "Configuración general del CRM.", true),
-  { id: "ajustes-pagina", path: "/crm/ajustes", target: "main h1", optional: true, title: "Ajustes", body: "Opciones generales del negocio y del CRM.", placement: "bottom" },
+section({
+  group: G3, id: "studio", href: "/crm/studio", title: "Studio IA", adminOnly: true,
+  why: "genera con IA vídeos e imágenes publicitarias de los coches y los publica en redes. Solo administradores, porque cada generación tiene un coste real.",
+  pages: [
+    { target: "main .box", fallback: "main h1", title: "Generar contenido",
+      body: "Elige el coche y qué quieres crear. Cuando termina, puedes publicarlo en redes desde el propio resultado." },
+  ],
+});
 
-  menuStep("papelera", "/crm/papelera", "Papelera", "Lo eliminado, por si hay que recuperarlo.", true),
-  { id: "papelera-pagina", path: "/crm/papelera", target: "main h1", optional: true, title: "Papelera", body: "Nada se borra del todo: lo que eliminas en Compras, Clientes u otras secciones queda aquí y se puede recuperar.", placement: "bottom" },
+// ---- Bloque 4 ---------------------------------------------------------------------------------------------------
+intro(G4, "b4", "Control y resultados",
+  "Para saber cómo va el negocio y si los asistentes trabajan bien:\n\n• Informes: cifras reales de cada periodo.\n• Asistentes: actividad de Miguel, Carolina y Daniel.");
 
-  { id: "fin", path: "/crm", target: "header .brand", title: "Listo", body: "Ya conoces todo el CRM. Recuerda: el botón «Ver tutorial» de la esquina inferior derecha repite este recorrido cuando quieras.", placement: "right" },
-];
+section({
+  group: G4, id: "informes", href: "/crm/informes", title: "Informes",
+  why: "cifras reales de un periodo: cuántos clientes llegan, cuántos ven un coche, cuántos reservan y cuántos compran.",
+  pages: [
+    { target: "main .legend", fallback: "main .stats", title: "Elige el periodo",
+      body: "Hoy, Ayer, Últimos 7 o 30 días, Este mes, Mes anterior o Todo. Las cifras de la página se recalculan para ese periodo." },
+    { target: "main .stats", fallback: "main h1", title: "Del cliente a la venta",
+      body: "Clientes nuevos y contactados, calientes, visitas concertadas, confirmadas y realizadas…\n\nSon siempre conteos reales: «Sin datos» significa que aún no hay casos que medir, no un error." },
+    { target: "main button", text: "Analizar incidencias", fallback: "main .box", optional: true, title: "Calidad de los asistentes",
+      body: "Más abajo hay costes (voz y OpenAI), clientes por canal y calidad de datos.\n\n«Analizar incidencias ahora» revisa los fallos recientes de los asistentes y explica qué corregir." },
+  ],
+});
 
-// Secciones solo para administradores (mismas que NAV_ITEMS con adminOnly).
-const ADMIN_ONLY = new Set(["studio", "asistentes", "integraciones", "equipo", "ajustes", "papelera"]);
+section({
+  group: G4, id: "asistentes", href: "/crm/asistentes", title: "Asistentes", adminOnly: true,
+  why: "ver cómo trabajan los 3 asistentes de IA: Miguel (llamadas), Carolina (WhatsApp y chat) y Daniel (correo).",
+  pages: [
+    { target: "main .row", fallback: "main h1", title: "Una tarjeta por asistente",
+      body: "Cada una muestra su configuración y su última actividad. La conexión técnica con WhatsApp, correo y teléfono está en Integraciones." },
+  ],
+});
+
+// ---- Bloque 5 ---------------------------------------------------------------------------------------------------
+intro(G5, "b5", "Administración", "Solo para administradores:\n\n• Integraciones: conexiones técnicas.\n• Usuarios: quién entra al CRM.\n• Ajustes: datos del negocio.\n• Papelera: lo eliminado, recuperable.", true);
+
+section({
+  group: G5, id: "integraciones", href: "/crm/integraciones", title: "Integraciones", adminOnly: true,
+  why: "las conexiones técnicas del CRM con Google (correo y calendario), WhatsApp y el teléfono. Aquí se activa o pausa cada asistente.",
+  pages: [
+    { target: "main h3", text: "Google", fallback: "main h1", title: "Qué hay conectado",
+      body: "• Google: correo y calendario. Si Gmail deja de leer correos, se reconecta aquí.\n• Correo: modo de prueba, para redactar sin enviar.\n• WhatsApp (Zernio) y Teléfono (Miguel): estado y botón para activar o desactivar al asistente de ese canal." },
+  ],
+});
+
+section({
+  group: G5, id: "usuarios", href: "/crm/equipo", title: "Usuarios", adminOnly: true,
+  why: "quién entra al CRM y con qué permisos.",
+  pages: [
+    { target: "main .box", fallback: "main h1", title: "Dar de alta y cambiar contraseñas",
+      body: "Crea el acceso de una persona nueva y elige su rol: administrador, comercial o equipo.\n\nDebajo, cada persona con su botón «Cambiar contraseña»." },
+  ],
+});
+
+section({
+  group: G5, id: "ajustes", href: "/crm/ajustes", title: "Ajustes", adminOnly: true,
+  why: "los datos del negocio tal como los usan los asistentes: contacto, ubicación, criterios de financiación y plantillas de WhatsApp.",
+  pages: [
+    { target: "main h3", text: "Contacto", fallback: "main h1", title: "Datos que usan los asistentes",
+      body: "Lo que cambies aquí tiene efecto al momento, sin reiniciar nada. Los horarios, la garantía y la reserva son de solo lectura.\n\nPulsa «Guardar cambios» al terminar." },
+  ],
+});
+
+section({
+  group: G5, id: "papelera", href: "/crm/papelera", title: "Papelera", adminOnly: true,
+  why: "lo que se eliminó (reservas, visitas, avisos, alertas) queda aquí y se puede recuperar. Nada se borra para siempre hasta que lo confirmes en esta pantalla.",
+});
+
+steps.push({
+  id: "fin", path: cur, target: "body", center: true, group: G0, title: "Ya conoces todo el CRM", placement: "center",
+  body:
+    "Recuerda el camino de una venta:\nContactos → Clientes → Visitas → Reservas → Ventas.\n\n" +
+    "Cuando quieras repasar algo, pulsa «Ver tutorial» en la esquina inferior derecha.",
+});
+
+const STEPS: Step[] = steps;
 
 let engineCache: string | null = null;
 function engine(): string {
@@ -109,17 +293,18 @@ function engine(): string {
   return engineCache;
 }
 
-// Etiqueta <script> lista para pegar antes de </body>. `<` escapado en los datos
-// para que un texto nunca pueda cerrar el script.
+// Etiqueta <script> lista para pegar antes de </body>. `<` escapado en los datos para que un texto nunca cierre el script.
 export function tourScriptTag(role?: string): string {
   const js = engine();
   if (!js) return "";
-  const data = JSON.stringify({ key: "lucero-crm-tour", startLabel: "Ver tutorial", spa: false, color: "#dc2626", steps: role === "admin" ? STEPS : STEPS.filter((st) => !ADMIN_ONLY.has(st.id.replace(/-pagina$/, "").replace(/^menu-/, ""))) }).replace(/</g, "\\u003c");
+  const list = role === "admin" ? STEPS : STEPS.filter((st) => !st.adminOnly);
+  // La clave lleva v2: quien tenía el tutorial antiguo a medias no reanuda en un paso que ya no existe.
+  const data = JSON.stringify({ key: "lucero-crm-tour-v2", startLabel: "Ver tutorial", spa: false, color: "#dc2626", steps: list }).replace(/</g, "\\u003c");
   return `<script>${js}\nGuidedTour.init(${data});</script>`;
 }
 
 // Estado público e inocuo del tutorial (sin datos de negocio): sirve para comprobar desde fuera, sin entrar al
-// CRM, que la versión desplegada lleva el motor y cuántos pasos tiene (23/11/2026, "en lucero no me aparece nada").
+// CRM, que la versión desplegada lleva el motor y cuántos pasos tiene.
 export function tourStatus(): { loaded: boolean; engine_bytes: number; steps: number } {
   const js = engine();
   return { loaded: js.length > 0, engine_bytes: js.length, steps: STEPS.length };

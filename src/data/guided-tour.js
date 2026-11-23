@@ -9,6 +9,9 @@
  *   placement       top | bottom | left | right | center (por defecto bottom).
  *   advanceOnClick  avanza cuando la persona hace clic de verdad en el elemento resaltado.
  *   optional        si el elemento no existe (p. ej. sección solo de admin), el paso se salta.
+ *   group           etiqueta del bloque; se muestra junto al contador ("Paso 7 de 52 · Tu día a día").
+ *   center          tarjeta centrada sin resaltar nada (introducciones de bloque).
+ *   fallback        selector alternativo si no se encuentra target (p. ej. lista vacía).
  *   requires        selector que debe existir (p. ej. el enlace del menú de esa sección); si no, el paso se salta.
  * spa: true -> navega con history.pushState (React Router, etc.); false -> recarga normal (HTML de servidor).
  * El progreso se guarda en localStorage, así que sobrevive a recargas y a cambios de página.
@@ -32,11 +35,14 @@
   }
 
   function find(step) {
-    var list = document.querySelectorAll(step.target);
+    return findIn(step, step.target) || (step.fallback ? findIn(step, step.fallback, true) : null);
+  }
+  function findIn(step, sel, noText) {
+    var list = document.querySelectorAll(sel);
     for (var k = 0; k < list.length; k++) {
       var n = list[k];
       if (n.offsetParent === null && getComputedStyle(n).position !== "fixed") continue; // oculto
-      if (!step.text || (n.textContent || "").toLowerCase().indexOf(step.text.toLowerCase()) !== -1) return n;
+      if (noText || !step.text || (n.textContent || "").toLowerCase().indexOf(step.text.toLowerCase()) !== -1) return n;
     }
     return null;
   }
@@ -89,6 +95,7 @@
 
   function waitAndShow(step, myGen) {
     var tries = 0, done = false;
+    if (step.center) { if (!(step.path && here() !== norm(step.path) && state.navFor !== step.id)) { show(step, null); return; } }
     function attempt() {
       if (done) return true;
       if (myGen !== gen) { done = true; return true; } // anulado por un render más reciente
@@ -141,9 +148,9 @@
     ui.appendChild(blocker);
 
     var card = el("div", "position:absolute;pointer-events:auto;background:#fff;color:#1e293b;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.28);padding:16px;font-size:14px;line-height:1.5;max-height:85vh;overflow-y:auto;box-sizing:border-box");
-    var count = el("div", "font-size:12px;font-weight:700;color:" + (cfg.color || "#0284c7") + ";margin-bottom:4px", "Paso " + (state.i + 1) + " de " + total);
+    var count = el("div", "font-size:12px;font-weight:700;color:" + (cfg.color || "#0284c7") + ";margin-bottom:4px", "Paso " + (state.i + 1) + " de " + total + (step.group ? "  \u00b7  " + step.group : ""));
     var h = el("div", "font-size:16px;font-weight:700;margin-bottom:6px;word-break:break-word", step.title);
-    var b = el("div", "color:#475569;margin-bottom:14px;word-break:break-word", step.body);
+    var b = el("div", "color:#475569;margin-bottom:14px;word-break:break-word;white-space:pre-line", step.body);
     var row = el("div", "display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between");
     var exit = el("button", "background:none;border:0;color:#94a3b8;text-decoration:underline;cursor:pointer;font-size:12px;padding:4px 0", "Salir del tutorial");
     exit.type = "button"; exit.onclick = stop;
