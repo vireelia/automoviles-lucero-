@@ -9,7 +9,7 @@
  *   placement       top | bottom | left | right | center (por defecto bottom).
  *   advanceOnClick  avanza cuando la persona hace clic de verdad en el elemento resaltado.
  *   optional        si el elemento no existe (p. ej. sección solo de admin), el paso se salta.
- *   group           etiqueta del bloque; se muestra junto al contador ("Paso 7 de 52 · Tu día a día").
+ *   group           etiqueta del bloque; se muestra junto al contador ("Paso 7 de 52 · Tu día a día") y activa «Saltar sección».
  *   center          tarjeta centrada sin resaltar nada (introducciones de bloque).
  *   fallback        selector alternativo si no se encuentra target (p. ej. lista vacía).
  *   requires        selector que debe existir (p. ej. el enlace del menú de esa sección); si no, el paso se salta.
@@ -34,17 +34,30 @@
     return n;
   }
 
-  function find(step) {
-    return findIn(step, step.target) || (step.fallback ? findIn(step, step.fallback, true) : null);
+  // Busca el elemento del paso. Con "text", entre los visibles que lo contienen elige el más
+  // ajustado (el de menos texto), para resaltar justo ese elemento y no su contenedor.
+  // El selector alternativo (fallback) solo se usa si se permite: así, mientras la página
+  // carga sus datos, el tutorial espera al elemento real en vez de resaltar el título.
+  function find(step, allowFallback) {
+    return findIn(step, step.target) || (step.fallback && allowFallback ? findIn(step, step.fallback, true) : null);
+  }
+  function visible(n) {
+    if (n.closest && n.closest("[data-guided-tour-ui]")) return false;
+    if (n.offsetParent === null && getComputedStyle(n).position !== "fixed") return false;
+    var r = n.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
   }
   function findIn(step, sel, noText) {
-    var list = document.querySelectorAll(sel);
+    var list = document.querySelectorAll(sel), best = null, bestLen = Infinity;
+    var want = step.text && !noText ? step.text.toLowerCase() : null;
     for (var k = 0; k < list.length; k++) {
       var n = list[k];
-      if (n.offsetParent === null && getComputedStyle(n).position !== "fixed") continue; // oculto
-      if (noText || !step.text || (n.textContent || "").toLowerCase().indexOf(step.text.toLowerCase()) !== -1) return n;
+      if (!visible(n)) continue;
+      if (!want) return n;
+      var t = (n.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (t.indexOf(want) !== -1 && t.length < bestLen) { best = n; bestLen = t.length; }
     }
-    return null;
+    return best;
   }
 
   function goTo(path) {
@@ -94,7 +107,7 @@
   }
 
   function waitAndShow(step, myGen) {
-    var tries = 0, done = false;
+    var tries = 0, done = false, startedAt = Date.now();
     if (step.center) { if (!(step.path && here() !== norm(step.path) && state.navFor !== step.id)) { show(step, null); return; } }
     function attempt() {
       if (done) return true;
@@ -108,7 +121,7 @@
       if (!cfg.spa && step.path && here() !== norm(step.path) && state.navFor !== step.id) return false;
       // SPA: justo tras navegar, el elemento encontrado puede ser el de la página anterior; se espera a que se asiente
       if (cfg.spa && Date.now() - navAt < 350) return false;
-      var t = find(step);
+      var t = find(step, !cfg.spa || Date.now() - startedAt > 2500); // SPA: ~2,5 s para que la página cargue sus datos; HTML de servidor: ya está todo pintado
       if (!t) return false;
       // requires: si el elemento del menú de esa sección no existe (sin permiso), el paso se salta
       if (step.requires && !document.querySelector(step.requires)) { done = true; if (observer) { observer.disconnect(); observer = null; } go(state.i + 1); return true; }
@@ -123,7 +136,7 @@
       if (done || myGen !== gen) return;
       tries++;
       if (attempt()) return;
-      if (tries >= (cfg.spa ? 40 : 15)) { // ~4 s en SPA, ~1,5 s en HTML de servidor (ya está todo pintado)
+      if (tries >= (cfg.spa ? 60 : 15)) { // ~6 s en SPA, ~1,5 s en HTML de servidor (ya está todo pintado)
         done = true; if (observer) { observer.disconnect(); observer = null; }
         if (step.optional) { go(state.i + 1); return; }
         show(step, null);
@@ -154,6 +167,15 @@
     var row = el("div", "display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between");
     var exit = el("button", "background:none;border:0;color:#94a3b8;text-decoration:underline;cursor:pointer;font-size:12px;padding:4px 0", "Salir del tutorial");
     exit.type = "button"; exit.onclick = stop;
+    // "Saltar sección": va al primer paso del siguiente bloque (si los pasos llevan group)
+    var nextGroup = -1;
+    if (step.group) for (var g = state.i + 1; g < total; g++) if (cfg.steps[g].group !== step.group) { nextGroup = g; break; }
+    var left = el("div", "display:flex;gap:12px;align-items:center");
+    left.appendChild(exit);
+    if (nextGroup > 0) {
+      var skip = el("button", "background:none;border:0;color:#64748b;text-decoration:underline;cursor:pointer;font-size:12px;padding:4px 0", "Saltar secci\u00f3n");
+      skip.type = "button"; skip.onclick = function () { go(nextGroup); }; left.appendChild(skip);
+    }
     var btns = el("div", "display:flex;gap:8px");
     if (state.i > 0) {
       var prev = el("button", "background:#fff;border:1px solid #cbd5e1;color:#334155;border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer", "Anterior");
@@ -163,7 +185,7 @@
     var next = el("button", "background:" + (cfg.color || "#0284c7") + ";border:0;color:#fff;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer", last ? "Finalizar" : (step.advanceOnClick ? "Siguiente" : "Siguiente"));
     next.type = "button"; next.onclick = function () { go(state.i + 1); };
     btns.appendChild(next);
-    row.appendChild(exit); row.appendChild(btns);
+    row.appendChild(left); row.appendChild(btns);
     card.appendChild(count); card.appendChild(h); card.appendChild(b);
     if (step.advanceOnClick && target) card.appendChild(el("div", "font-size:12px;color:#64748b;margin:-6px 0 12px", "Haz clic en el elemento resaltado para continuar."));
     card.appendChild(row);
