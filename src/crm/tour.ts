@@ -273,7 +273,7 @@ section({
 });
 
 steps.push({
-  id: "fin", path: cur, target: "body", center: true, group: G0, title: "Ya conoces todo el CRM", placement: "center",
+  id: "fin", path: cur, target: "body", center: true, group: "Final", title: "Ya conoces todo el CRM", placement: "center",
   body:
     "Recuerda el camino de una venta:\nContactos → Clientes → Visitas → Reservas → Ventas.\n\n" +
     "Cuando quieras repasar algo, pulsa «Ver tutorial» en la esquina inferior derecha.",
@@ -300,7 +300,12 @@ export function tourScriptTag(role?: string): string {
   const list = role === "admin" ? STEPS : STEPS.filter((st) => !st.adminOnly);
   // La clave lleva v2: quien tenía el tutorial antiguo a medias no reanuda en un paso que ya no existe.
   const data = JSON.stringify({ key: "lucero-crm-tour-v2", startLabel: "Ver tutorial", spa: false, color: "#dc2626", steps: list }).replace(/</g, "\\u003c");
-  return `<script>${js}\nGuidedTour.init(${data});</script>`;
+  // En el móvil el menú lateral está plegado tras el botón ☰: los pasos que señalan una sección del menú lo abren
+  // (y el resto de pasos lo cierran), para que el resalte caiga sobre el enlace real y no sobre un hueco vacío.
+  const beforeStep = "function(s){var sb=document.getElementById('sidebar'),bd=document.getElementById('lucero-backdrop');" +
+    "if(!sb||!window.matchMedia('(max-width:700px)').matches)return;var open=!!(s&&/^nav /.test(s.target||''));" +
+    "sb.classList.toggle('mobile-open',open);if(bd)bd.classList.toggle('show',open);}";
+  return `<script>${js}\nGuidedTour.init(Object.assign(${data},{beforeStep:${beforeStep}}));</script>`;
 }
 
 // Estado público e inocuo del tutorial (sin datos de negocio): sirve para comprobar desde fuera, sin entrar al

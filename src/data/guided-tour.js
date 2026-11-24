@@ -11,6 +11,8 @@
  *   optional        si el elemento no existe (p. ej. sección solo de admin), el paso se salta.
  *   group           etiqueta del bloque; se muestra junto al contador ("Paso 7 de 52 · Tu día a día") y activa «Saltar sección».
  *   center          tarjeta centrada sin resaltar nada (introducciones de bloque).
+ * cfg.beforeStep(step) (opcional): se llama antes de buscar el elemento de cada paso y con null al cerrar el
+ *   tutorial. Sirve, p. ej., para abrir el menú lateral en el móvil cuando el paso señala una sección del menú.
  *   fallback        selector alternativo si no se encuentra target (p. ej. lista vacía).
  *   requires        selector que debe existir (p. ej. el enlace del menú de esa sección); si no, el paso se salta.
  * spa: true -> navega con history.pushState (React Router, etc.); false -> recarga normal (HTML de servidor).
@@ -69,7 +71,9 @@
     }
   }
 
+  function hook(step) { if (cfg && typeof cfg.beforeStep === "function") { try { cfg.beforeStep(step); } catch (e) {} } }
   function stop() {
+    hook(null);
     state.active = false; state.i = 0; save();
     teardown();
     renderButton();
@@ -108,6 +112,7 @@
 
   function waitAndShow(step, myGen) {
     var tries = 0, done = false, startedAt = Date.now();
+    hook(step);
     if (step.center) { if (!(step.path && here() !== norm(step.path) && state.navFor !== step.id)) { show(step, null); return; } }
     function attempt() {
       if (done) return true;
@@ -136,7 +141,7 @@
       if (done || myGen !== gen) return;
       tries++;
       if (attempt()) return;
-      if (tries >= (cfg.spa ? 60 : 15)) { // ~6 s en SPA, ~1,5 s en HTML de servidor (ya está todo pintado)
+      if (tries >= (cfg.spa ? 60 : (step.optional ? 5 : 15))) { // HTML de servidor: la página ya llega completa; un paso opcional sin elemento se salta en ~0,5 s // ~6 s en SPA, ~1,5 s en HTML de servidor (ya está todo pintado)
         done = true; if (observer) { observer.disconnect(); observer = null; }
         if (step.optional) { go(state.i + 1); return; }
         show(step, null);
