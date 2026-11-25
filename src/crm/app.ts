@@ -4267,11 +4267,9 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
   // vez de enlazar a algo vacío.
   const hayRespuestaDelCliente = phone ? list<WhatsappMessage>("whatsapp_inbox").some((m) => m.phone === phone.replace(/^\+/, "")) : false;
   const statusBox = yaContactado
-    ? `<div class="box" style="background:var(--ok-bg);border:1px solid #2e9e55;margin:12px 0">✅ Ya se le contactó por WhatsApp directamente.${
-        phone && hayRespuestaDelCliente
-          ? ` <a href="/crm/contactos/whatsapp?q=${encodeURIComponent(phone)}">Ver la conversación ↗</a>`
-          : " El cliente todavía no ha respondido nada -- por eso no hay conversación que ver todavía en Contactos → WhatsApp (aparecerá en cuanto conteste)."
-      }</div>`
+    ? (phone && hayRespuestaDelCliente
+        ? `<div class="box" style="background:var(--ok-bg);border:1px solid #2e9e55;margin:12px 0">✅ Contactado por WhatsApp y el cliente respondió. <a href="/crm/contactos/whatsapp?q=${encodeURIComponent(phone)}">Ver la conversación ↗</a></div>`
+        : `<div class="box" style="background:#fff4e0;border:1px solid var(--warn);margin:12px 0"><b>📤 Plantilla de WhatsApp enviada, pero la entrega NO está confirmada.</b> El cliente aún no ha respondido. Pulsa «Verificar entrega real» para comprobar si de verdad le llegó; si no, escríbele tú por WhatsApp (botón abajo) o gestiónalo en Wallapop. (Comprobado 25/11: hay plantillas que Zernio acepta pero no llegan a entregarse.)</div>`)
     : selected.outcome === "pendiente_whatsapp_manual"
       ? `<div class="box" style="background:#fdecea;border:1px solid var(--urgent);margin:12px 0"><b>El envío automático por WhatsApp falló.</b> Hace falta escribirle a mano.${phone ? ` ${waButton(phone, "")}` : ""}${selected.draft_note ? `<div class="box" style="background:var(--ok-bg);white-space:pre-wrap;margin-top:8px">${esc(selected.draft_note)}</div>` : ""}</div>`
       : phone
@@ -4290,7 +4288,9 @@ function wallapopDetailFor(selected: InboxMail, allLeads: Lead[], volver: string
   // es true cuando el envío por WhatsApp de verdad se completó), nunca un
   // estado inventado. Se muestra siempre, en los dos sentidos.
   const contactoPill = yaContactado
-    ? `<span class="btn ok" style="pointer-events:none;display:inline-block;margin-top:6px">✓ Carolina ya le contactó</span>`
+    ? (hayRespuestaDelCliente
+        ? `<span class="btn ok" style="pointer-events:none;display:inline-block;margin-top:6px">✓ Contactado y el cliente respondió</span>`
+        : `<span class="btn" style="pointer-events:none;display:inline-block;margin-top:6px;background:#fff4e0;color:#8a5a00;border:1px solid var(--warn)">📤 Plantilla enviada — entrega sin confirmar</span>`)
     : `<span class="btn" style="pointer-events:none;display:inline-block;margin-top:6px;background:var(--urgent-bg,#fdecea);color:var(--urgent,#b3261e);border:1px solid var(--urgent,#b3261e)">✕ Carolina no le ha contactado todavía</span>`;
   // Petición real (21/11/2026, "tampoco está el botón... para que el
   // equipo también le pueda enviar un mensaje por WhatsApp"): el equipo
@@ -4321,7 +4321,7 @@ ${!selected.archived ? `<button class="btn light" type="submit" name="accion" va
 </form>`;
   const activity = `<h3 style="margin-top:0">Actividad</h3>
 <div class="activity-item email">Aviso de Wallapop recibido<time>${esc(fmtDate(selected.created_at))}</time></div>
-${yaContactado ? `<div class="activity-item ia">Contactado por WhatsApp (Carolina)</div>` : ""}
+${yaContactado ? (hayRespuestaDelCliente ? `<div class="activity-item ia">Contactado por WhatsApp — el cliente respondió</div>` : `<div class="activity-item ia">Plantilla de WhatsApp enviada (entrega sin confirmar)</div>`) : ""}
 ${selected.answered ? `<div class="activity-item ia">Gestionado por el equipo en Wallapop</div>` : ""}
 ${selected.archived ? `<div class="activity-item ia">Archivado</div>` : ""}
 <h3>Notas internas</h3>
@@ -4517,7 +4517,7 @@ function correoContactos(f: MsgFilter, q: string, pageNum: number, navBase: stri
     const yaContactadoPorWhatsapp = m.outcome === "sent_whatsapp_automatico" || m.outcome === "sent_whatsapp_plantilla";
     const rowClass = isSelected ? " active" : c.read || c.answered || yaContactadoPorWhatsapp ? " leido" : "";
     const estadoTag = yaContactadoPorWhatsapp
-      ? `<span class="tag" style="background:#2e9e55;color:#fff;font-size:10px;padding:2px 6px" title="Carolina ya le escribió por WhatsApp">✅ Contactado por WhatsApp</span>`
+      ? `<span class="tag" style="background:#fff4e0;color:#8a5a00;border:1px solid var(--warn);font-size:10px;padding:2px 6px" title="Se envió la plantilla de WhatsApp; la entrega no está confirmada hasta que el cliente responda o se verifique">📤 Plantilla enviada</span>`
       : !c.answered
         ? `<span class="tag" style="background:var(--warn);color:#fff;font-size:10px;padding:2px 6px">Pendiente</span>`
         : "";

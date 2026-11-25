@@ -27,7 +27,12 @@ type Lead = { phone?: string | null; do_not_contact?: boolean };
 // dar día/hora. Deliberadamente sin "hora"/"día" suelto, que aparecen en
 // cualquier pregunta por el horario de la tienda.
 export const INTENT_COMERCIAL =
-  /\b(cita|visita|visitar|verlo|ver el coche|probarlo|prueba|reservar|reserva|se[ñn]al|comprarlo|me lo llevo|financiar|financiaci[oó]n|entrada|tasar|tasaci[oó]n)\b|\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado)\b|\b\d{1,2}[:h]\d{0,2}\b/i;
+  // 25/11/2026: añadidas señales de compra directas que antes NO se detectaban
+  // (caso real: cliente escribió "Quiero el coche" tras mandar fotos y Carolina
+  // lo silenció porque la etapa seguía en CONSULTA_INFORMATIVA, tope 4). Ahora
+  // "quiero el coche / lo quiero / me interesa / comprar / me lo quedo" suben la
+  // etapa a INTERES_DETECTADO y nunca se cortan como una consulta informativa.
+  /\b(cita|visita|visitar|verlo|ver el coche|probarlo|prueba|reservar|reserva|se[ñn]al|comprar|comprarlo|me lo llevo|me lo quedo|financiar|financiaci[oó]n|entrada|tasar|tasaci[oó]n)\b|\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado)\b|\b\d{1,2}[:h]\d{0,2}\b|\bquiero (el|ese|este)( coche| veh[ií]culo| furgoneta)?\b|\blo quiero\b|\bme interesa\b|\bme lo quedo\b|\bestoy interesad[oa]\b/i;
 const SIN_INTERES = /\b(no me interesa|ya no|lo dejo|he comprado otro|ya compr[eé]|d[eé]jalo|no gracias)\b/i;
 const NO_CONTACTAR = /\b(no me escrib|no me escribas|no quiero mensajes|baja|stop|d[ae]rme de baja|no me contact)\b/i;
 const QUIERE_PERSONA = /\b(hablar con|con ram[oó]n|con jos[eé]|una persona|humano|me llam[eé]is|ll[aá]mame|tel[eé]fono)\b/i;

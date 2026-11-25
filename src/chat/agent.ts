@@ -675,7 +675,18 @@ async function handleChatMessageUnlocked(
   const esConversacionNueva = Date.now() - new Date(conversation.updated_at).getTime() > HORAS_NUEVA_CONVERSACION * 3600 * 1000;
   const stage = conversationStage(contact, userText, conversation.messages);
   const MAX_RESPUESTAS_BREVEDAD = maxUserTurnsFor(stage);
-  if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL")) {
+  // FALLO REAL detectado (25/11/2026, pruebas en vivo + caso real): una vez
+  // enviado el cierre por tope (cap_closure_sent_at), CUALQUIER mensaje
+  // posterior se silenciaba -- incluido "Quiero el coche" o "quiero reservar".
+  // Eso es tirar una venta ya decidida. Un mensaje con intención comercial real
+  // (esComercial: interés/visita/reserva) NUNCA debe silenciarse ni cortarse por
+  // el tope de brevedad: son justo los mensajes que generan visitas y reservas.
+  // Cuando llega uno, se salta todo el bloque del tope y la conversación sigue
+  // con normalidad (agenda la visita/reserva o deriva a Ramón/José). El tope de
+  // brevedad sigue intacto para consultas informativas, que es donde Ramón
+  // pidió contener el gasto.
+  const intencionComercialAhora = esComercial(stage);
+  if (!esConversacionNueva && (channel === "WHATSAPP" || channel === "EMAIL") && !intencionComercialAhora) {
     // FALLO REAL detectado probándolo en real (05/11/2026, captura de
     // pantalla real: "ni me dio fechas... envió el mismo mensaje dos
     // veces"): contar mensajes de "assistant" con contenido cuenta TAMBIÉN
