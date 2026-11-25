@@ -43,6 +43,15 @@ const WHATSAPP_BATCH_MAX_AGE_MS = WHATSAPP_BATCH_MAX_AGE_HOURS * 3600_000;
 // Ventana configurable (PUNTO 2 del encargo): por defecto 8s desde el
 // ÚLTIMO mensaje recibido de ese cliente, no desde el primero.
 export const BATCH_WINDOW_MS = Number(process.env.ZERNIO_WHATSAPP_BATCH_WINDOW_MS) > 0 ? Number(process.env.ZERNIO_WHATSAPP_BATCH_WINDOW_MS) : 8_000;
+// Ventana MÁS LARGA mientras el último mensaje recibido es una foto/nota de voz
+// (25/11/2026, prueba real: 4 fotos en 31s se partían en 2 lotes -> 2 respuestas
+// y encima disparaban el cierre por tope de brevedad). La gente manda las fotos
+// de una en una, con pausas de 10-20s: con 8s Carolina contestaba a media tanda.
+// Mientras lo ÚLTIMO que llega sigue siendo un adjunto, se espera hasta 30s sin
+// nada nuevo antes de cerrar el lote (así se agrupa toda la tanda en UNA sola
+// respuesta); en cuanto el cliente escribe TEXTO, vuelve a la ventana corta de
+// 8s (ya terminó de mandar fotos y está preguntando). Configurable por entorno.
+export const MEDIA_BATCH_WINDOW_MS = Number(process.env.ZERNIO_WHATSAPP_MEDIA_BATCH_WINDOW_MS) > 0 ? Number(process.env.ZERNIO_WHATSAPP_MEDIA_BATCH_WINDOW_MS) : 30_000;
 // Frecuencia del sondeo: tiene que ser bastante más fina que la ventana para
 // no añadir una demora perceptible al cliente.
 const POLL_INTERVAL_MS = Number(process.env.ZERNIO_WHATSAPP_BATCH_POLL_MS) > 0 ? Number(process.env.ZERNIO_WHATSAPP_BATCH_POLL_MS) : 1_000;
@@ -199,7 +208,14 @@ export async function processDueWhatsappBatches(handler: BatchHandler): Promise<
       }
 
       if (state.items.length === 0) return;
-      if (Date.now() - state.last_at < BATCH_WINDOW_MS) return; // sigue dentro de la ventana de silencio
+      // Ventana adaptativa (25/11/2026): si lo ÚLTIMO que llegó de este cliente
+      // es una foto o nota de voz, probablemente siga enviando la tanda -> se
+      // espera MEDIA_BATCH_WINDOW_MS (30s) para agruparlas todas en una sola
+      // respuesta; si lo último es texto, ya terminó y pregunta -> ventana corta.
+      const ultimo = state.items[state.items.length - 1];
+      const esperandoMasFotos = ultimo?.media_type === "image" || ultimo?.media_type === "audio";
+      const ventanaSilencio = esperandoMasFotos ? MEDIA_BATCH_WINDOW_MS : BATCH_WINDOW_MS;
+      if (Date.now() - state.last_at < ventanaSilencio) return; // sigue dentro de la ventana de silencio
 
       // PUNTO 3: antes de desenganchar y procesar, comprueba la antigüedad
       // real del lote (desde el último mensaje recibido de este cliente) --
