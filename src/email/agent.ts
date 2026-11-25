@@ -238,7 +238,11 @@ export type EmailDelivery = { status: Outbox["status"]; error?: string };
 // de reserva/visita, aviso urgente al equipo, respuesta manual del CRM, el
 // resumen diario interno al propio equipo) deben pasar allowProactive:true
 // explícitamente, en su propio call site.
-export type EmailOutboundAuthz = { allowProactive?: boolean; lastInboundAt?: number | null; reason?: string };
+export type EmailOutboundAuthz = { allowProactive?: boolean; lastInboundAt?: number | null; reason?: string; sourcePortal?: string | null };
+
+// Portales cuyos avisos SÍ puede contestar Daniel. Cualquier otra cosa -- un correo directo, un hilo
+// privado, un remitente personal -- jamás se responde. (25/11/2026, Ramón: "solo Coches.net y Wallapop".)
+const ALLOWED_SOURCE_PORTALS = new Set(["Coches.net", "Wallapop"]);
 
 // Fecha (ms epoch) del último correo real registrado como ENTRANTE de esta
 // dirección, o null si no consta ninguno. Usa received_at (internalDate de
@@ -301,6 +305,29 @@ export async function deliverEmail(
   // bien si debía llamar o no (p. ej. checkStaleFollowups en scheduler.ts,
   // función ya desactivada en código pero que seguía llamando a deliverEmail
   // sin ninguna barrera si alguien la reactivaba).
+  //
+  // CIERRE DURO DEFINITIVO (25/11/2026): Daniel solo responde a avisos de Coches.net o Wallapop, NUNCA a
+  // un correo directo/privado. Durante meses el filtro vivía en decideInterest ("¿es interesante?") y se
+  // parcheó 5 veces: cada vez se cerraba un caso y aparecía otro, y clientes personales seguían recibiendo
+  // respuesta. Este cortafuegos vive en el ÚNICO punto de salida real al proveedor (deliverEmail) y mira el
+  // portal de ORIGEN del aviso, no el destinatario (Coches.net a veces entrega el email real del cliente,
+  // que es un envío legítimo). Fail-closed: si el aviso no viene de un portal permitido, no sale nada,
+  // falle lo que falle en las capas de arriba o se añada un call site nuevo que se olvide de comprobarlo.
+  if (!authz.sourcePortal || !ALLOWED_SOURCE_PORTALS.has(authz.sourcePortal)) {
+    const blocked = readCollection<Outbox>("email_outbox");
+    blocked.push({
+      id: crypto.randomUUID(),
+      to,
+      subject,
+      body,
+      status: "failed",
+      thread_id: thread?.threadId,
+      error: `bloqueado_sin_portal_permitido:${authz.sourcePortal ?? "directo"}`,
+      created_at: new Date().toISOString(),
+    });
+    writeCollection("email_outbox", blocked.slice(-500));
+    return { status: "failed", error: `bloqueado_sin_portal_permitido:${authz.sourcePortal ?? "directo"}` };
+  }
   const lastInboundAt = authz.lastInboundAt !== undefined ? authz.lastInboundAt : lastInboundEmailAt(to);
   const auth = authorizeOutboundMessage({
     phone: to,
@@ -997,7 +1024,7 @@ export async function processInboundEmail(
     subject,
     body,
     email.threadId && email.inReplyTo ? { threadId: email.threadId, inReplyTo: email.inReplyTo } : undefined,
-    { lastInboundAt: email.receivedAt ? new Date(email.receivedAt).getTime() : null, reason: `deliverEmail_auto:${portalInfo.portal ?? "directo"}` },
+    { lastInboundAt: email.receivedAt ? new Date(email.receivedAt).getTime() : null, reason: `deliverEmail_auto:${portalInfo.portal ?? "directo"}`, sourcePortal: portalInfo.portal },
   );
   const status = delivery.status;
   const error = delivery.error;
@@ -1097,6 +1124,7 @@ export async function sendPendingDailyCapEmails(): Promise<number> {
       replySubject(actual.subject),
       actual.draft_note!,
       actual.thread_id && actual.in_reply_to ? { threadId: actual.thread_id, inReplyTo: actual.in_reply_to } : undefined,
+      { sourcePortal: actual.portal ?? null },
     );
     if (delivery.status !== "sent") break; // Google desconectado u otro fallo real -- no tiene sentido seguir intentando esta pasada.
     mutateCollectionSync<InboxItem>("email_inbox", (inbox) => {
