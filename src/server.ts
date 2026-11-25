@@ -1386,6 +1386,37 @@ app.get("/debug/facebook_processed", requireAdminToken, debugSlice("facebook_pro
 app.get("/debug/handoffs", requireAdminToken, debugSlice("handoffs", 100));
 app.get("/debug/zernio_whatsapp_conversations", requireAdminToken, debugSlice("zernio_whatsapp_conversations", 200));
 app.get("/debug/whatsapp_inbox", requireAdminToken, debugSlice("whatsapp_inbox", 50));
+// Verificación REAL de contactos de WhatsApp (25/11/2026, Ramón: "Carolina pone contactado y es mentira").
+// Para cada lead marcado contactado (first_contact_sent) consulta a Zernio el estado de ENTREGA real.
+// Solo LEE: no modifica estados ni envía nada. Sirve para comprobar cliente por cliente la verdad.
+app.get("/debug/verificar_contactos_whatsapp", requireAdminToken, async (_req, res) => {
+  const norm = (p: string) => String(p || "").replace(/\D/g, "").slice(-9);
+  const contactados = readCollection<{ phone: string; portal?: string | null; vehicle?: string | null; at: string }>("first_contact_sent");
+  const convs = readCollection<{ phone: string; conversation_id: string; account_id: string }>("zernio_whatsapp_conversations");
+  const byPhone = new Map(convs.map((c) => [norm(c.phone), c]));
+  const detalle: { phone: string; portal: string | null; fecha: string; entrega_real: string }[] = [];
+  for (const c of contactados.slice(-100)) {
+    const map = byPhone.get(norm(c.phone));
+    let estado = "sin_conversacion_zernio";
+    if (map?.conversation_id) {
+      try {
+        const r = await getRealDeliveryStatus(map.conversation_id, 10);
+        if (!r.ok) estado = `error:${r.error}`;
+        else {
+          const out = r.messages.filter((m) => m.direction === "outbound" || m.direction === "out");
+          const last = out[0];
+          estado = !last ? "sin_mensaje_saliente" : last.readAt ? "leido_por_cliente" : last.deliveredAt ? "entregado" : last.deliveryStatus === "failed" ? "FALLO_ENTREGA" : last.deliveryStatus === "sent" ? "enviado_sin_confirmar" : (last.deliveryStatus || "desconocido");
+        }
+      } catch (err) {
+        estado = `error:${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+    detalle.push({ phone: c.phone, portal: c.portal ?? null, fecha: c.at, entrega_real: estado });
+  }
+  const resumen: Record<string, number> = {};
+  for (const d of detalle) resumen[d.entrega_real] = (resumen[d.entrega_real] ?? 0) + 1;
+  res.json({ total: detalle.length, resumen, detalle });
+});
 app.get("/debug/email_inbox", requireAdminToken, debugSlice("email_inbox", 50));
 app.get("/debug/email_processed", requireAdminToken, debugSlice("email_processed", 50));
 app.get("/debug/zernio_whatsapp_processed", requireAdminToken, debugSlice("zernio_whatsapp_processed", 50));
