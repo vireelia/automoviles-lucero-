@@ -4043,7 +4043,21 @@ function whatsappDetailFor(selected: WhatsappMessage, allLeads: Lead[], volver: 
     m.reply_attachment_type === "image" && m.reply_attachment_path ? `<img src="/crm/whatsapp/adjunto/${esc(m.reply_attachment_path)}" style="max-width:220px;border-radius:8px;display:block" alt="Foto enviada">${m.reply_text && m.reply_text !== "📷 Foto" ? `<div style="margin-top:4px">${esc(m.reply_text)}</div>` : ""}`
     : m.reply_attachment_type === "audio" && m.reply_attachment_path ? `<audio controls preload="none" style="max-width:220px"><source src="/crm/whatsapp/adjunto/${esc(m.reply_attachment_path)}"></audio>`
     : esc(m.reply_text ?? "");
-  const threadHtml = thread.map((m) => `<div class="wa-row in"><div class="wa-bubble in" data-copy="${esc(m.text)}">${inboundBody(m)}${copyBtn(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>${m.reply_text ? `<div class="wa-row out"><div class="wa-bubble out" data-copy="${esc(m.reply_text)}">${outboundBody(m)}${copyBtn(m.reply_text)}${m.delivered === false ? `<div class="wa-no-entregado">⚠️ No se pudo entregar</div>` : ""}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : ""}`).join("");
+  // FALLO DE VISTA (25/11/2026): la respuesta de un lote de varias fotos se
+  // guarda IDÉNTICA en cada registro de foto del lote, así que antes se pintaba
+  // una burbuja de respuesta por foto y parecía que Carolina envió el mismo
+  // mensaje varias veces. En realidad fue UN solo envío (confirmado con los
+  // mensajes reales de Zernio: 5 fotos -> 1 respuesta a las 16:40). Se colapsa:
+  // la respuesta se muestra UNA sola vez, tras el último mensaje al que
+  // contesta, cuando es exactamente el mismo texto, consecutivo y sin adjunto
+  // propio del equipo (un adjunto real sí es un envío distinto y nunca se agrupa).
+  const threadHtml = thread.map((m, i) => {
+    const next = thread[i + 1];
+    const replyIsBatchDup = !!m.reply_text && !m.reply_attachment_path && next !== undefined && next.reply_text === m.reply_text && !next.reply_attachment_path;
+    const inHtml = `<div class="wa-row in"><div class="wa-bubble in" data-copy="${esc(m.text)}">${inboundBody(m)}${copyBtn(m.text)}<time>${esc(fmtDate(m.created_at).split(", ")[1] ?? "")}</time></div></div>`;
+    const outHtml = m.reply_text && !replyIsBatchDup ? `<div class="wa-row out"><div class="wa-bubble out" data-copy="${esc(m.reply_text)}">${outboundBody(m)}${copyBtn(m.reply_text)}${m.delivered === false ? `<div class="wa-no-entregado">⚠️ No se pudo entregar</div>` : ""}<time>${m.answered_by === "ia" ? "Carolina (IA)" : "Equipo"}</time></div></div>` : "";
+    return inHtml + outHtml;
+  }).join("");
   // Estado real de la conversación (26/10/2026, "que se vea cuando
   // carolina este escribiendo... y cuando tenemos nosotros que
   // responder") -- se mira el ÚLTIMO mensaje del hilo, no el que esté
