@@ -1418,6 +1418,7 @@ app.get("/debug/verificar_contactos_whatsapp", requireAdminToken, async (_req, r
   res.json({ total: detalle.length, resumen, detalle });
 });
 app.get("/debug/email_inbox", requireAdminToken, debugSlice("email_inbox", 50));
+app.get("/debug/email_outbox", requireAdminToken, debugSlice("email_outbox", 50));
 app.get("/debug/email_processed", requireAdminToken, debugSlice("email_processed", 50));
 app.get("/debug/zernio_whatsapp_processed", requireAdminToken, debugSlice("zernio_whatsapp_processed", 50));
 
