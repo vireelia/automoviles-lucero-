@@ -1633,6 +1633,59 @@ app.get("/debug/llm_usage_resumen", requireAdminToken, (_req, res) => {
   );
   res.json({ fecha: today, por_canal: resumen, nota: "eur_estimado es orientativo (precio público gpt-4.1-mini), no el cobro real de OpenAI" });
 });
+// Acumulado MENSUAL de consumo (26/11/2026, "mira el acumulado del mes"):
+// /debug/llm_usage_resumen solo cuenta HOY y /debug/llm_usage_logs va capado a
+// 500 entradas, así que un mes con más de 500 llamadas quedaba truncado al
+// mirarlo desde fuera. Esto lee TODA la colección en disco (hasta 5000
+// entradas, ver writeCollection("llm_usage_logs", ...slice(-5000))) y agrega
+// por mes + desglose por canal del mes pedido (?mes=YYYY-MM, por defecto el
+// actual). Mismos precios orientativos que el resumen diario; sigue sin ser el
+// cobro real de OpenAI.
+app.get("/debug/llm_usage_mes", requireAdminToken, (req, res) => {
+  const PRECIO_INPUT_POR_1M = 0.4;
+  const PRECIO_CACHED_POR_1M = 0.1;
+  const PRECIO_OUTPUT_POR_1M = 1.6;
+  const eur = (prompt: number, cached: number, completion: number) => {
+    const noCache = Math.max(0, prompt - cached);
+    return (noCache / 1_000_000) * PRECIO_INPUT_POR_1M + (cached / 1_000_000) * PRECIO_CACHED_POR_1M + (completion / 1_000_000) * PRECIO_OUTPUT_POR_1M;
+  };
+  const round4 = (x: number) => Math.round(x * 10000) / 10000;
+  const log = readCollection<{ channel: string; prompt_tokens: number; completion_tokens: number; cached_tokens: number; at: string }>("llm_usage_logs");
+  const mes = typeof req.query.mes === "string" && /^\d{4}-\d{2}$/.test(req.query.mes) ? req.query.mes : new Date().toISOString().slice(0, 7);
+  type Acc = { llamadas: number; prompt_tokens: number; cached_tokens: number; completion_tokens: number };
+  const nuevo = (): Acc => ({ llamadas: 0, prompt_tokens: 0, cached_tokens: 0, completion_tokens: 0 });
+  const sumar = (acc: Acc, r: { prompt_tokens: number; cached_tokens: number; completion_tokens: number }) => {
+    acc.llamadas++;
+    acc.prompt_tokens += r.prompt_tokens || 0;
+    acc.cached_tokens += r.cached_tokens || 0;
+    acc.completion_tokens += r.completion_tokens || 0;
+  };
+  const porMes: Record<string, Acc> = {};
+  const porCanal: Record<string, Acc> = {};
+  for (const r of log) {
+    const m = (r.at || "").slice(0, 7);
+    if (!m) continue;
+    sumar((porMes[m] ??= nuevo()), r);
+    if (m === mes) sumar((porCanal[r.channel] ??= nuevo()), r);
+  }
+  const canalOut = Object.fromEntries(
+    Object.entries(porCanal).map(([canal, c]) => [canal, { ...c, porcentaje_cacheado: c.prompt_tokens > 0 ? Math.round((c.cached_tokens / c.prompt_tokens) * 100) : 0, eur_estimado: round4(eur(c.prompt_tokens, c.cached_tokens, c.completion_tokens)) }]),
+  );
+  const total_mes_eur_estimado = round4(Object.values(porCanal).reduce((a, c) => a + eur(c.prompt_tokens, c.cached_tokens, c.completion_tokens), 0));
+  const por_mes = Object.fromEntries(
+    Object.entries(porMes)
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([m, c]) => [m, { llamadas: c.llamadas, eur_estimado: round4(eur(c.prompt_tokens, c.cached_tokens, c.completion_tokens)) }]),
+  );
+  res.json({
+    mes,
+    por_canal: canalOut,
+    total_mes_eur_estimado,
+    por_mes,
+    entradas_en_disco: log.length,
+    nota: "eur_estimado orientativo (precio público gpt-4.1-mini), NO el cobro real de OpenAI. Lee hasta 5000 entradas guardadas; un mes con más de 5000 llamadas puede quedar parcialmente truncado.",
+  });
+});
 app.get("/debug/trash", requireAdminToken, debugSlice("trash", 200));
 app.get("/debug/whatsapp_chat_pauses", requireAdminToken, debugSlice("whatsapp_chat_pauses", 200));
 app.get("/debug/agent_toggles", requireAdminToken, debugSlice("agent_toggles", 50));
