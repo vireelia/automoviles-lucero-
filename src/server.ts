@@ -58,6 +58,7 @@ import { handleChatMessage, LlmNotConfigured, shrinkForStorage, type ChatTurnRes
 import { enqueuePendingReply, drainPendingReplies } from "./chat/pending-replies.js";
 import { withPersistentLockOrSkip } from "./locks.js";
 import { enqueueWhatsappBatchMessage, startWhatsappBatchPoller, combineBatchText, claimBatchOnce, type BatchItem } from "./chat/whatsapp-batch.js";
+import { understandMedia } from "./chat/media-understanding.js";
 import { createAutoTask, listTasks, completeTask } from "./tools/tasks.js";
 
 // Reintento de respuestas pendientes por fallo de la IA, con las mismas
@@ -1767,6 +1768,10 @@ type WhatsappInboxRecord = {
   // nombre de ruta de siempre, sirve ambos tipos).
   media_path?: string;
   media_type?: "audio" | "image";
+  // Transcripción (audio) o descripción (imagen), generada UNA sola vez al
+  // llegar (chat/media-understanding.ts): texto real para el agente y el CRM,
+  // nunca el binario. Vacío si el kill-switch está apagado o la lectura falló.
+  media_text?: string;
   // Adjunto REAL enviado desde el CRM (no recibido) -- distinto de
   // reply_text, que puede ser solo el pie de foto o un texto de respaldo.
   reply_attachment_path?: string;
@@ -2055,10 +2060,18 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     // mensaje si falla: mejor guardar el texto honesto de respaldo que no
     // guardar nada.
     let mediaPath: string | undefined;
+    let mediaText: string | undefined;
     if (mediaAttachment?.url) {
       const downloaded = await downloadWhatsAppMedia(mediaAttachment.url, accountId);
-      if (downloaded.ok) mediaPath = saveWhatsAppMedia(downloaded.buffer, downloaded.mimeType);
-      else console.warn(`[zernio-whatsapp] no se pudo descargar ${audioAttachment ? "la nota de voz" : "la foto"}:`, downloaded.error);
+      if (downloaded.ok) {
+        mediaPath = saveWhatsAppMedia(downloaded.buffer, downloaded.mimeType);
+        // "Oído y vista" de Carolina (barato, kill-switch LUCERO_MEDIA_UNDERSTANDING):
+        // se procesa la media UNA sola vez aquí, al llegar, y se guarda el texto.
+        // Si el interruptor está apagado o falla, understandMedia devuelve null y
+        // todo sigue como antes con el marcador honesto "📷 Foto"/"🎤 Nota de voz".
+        const understood = await understandMedia(downloaded.buffer, downloaded.mimeType, audioAttachment ? "audio" : "image");
+        if (understood) mediaText = understood;
+      } else console.warn(`[zernio-whatsapp] no se pudo descargar ${audioAttachment ? "la nota de voz" : "la foto"}:`, downloaded.error);
     }
     try {
       // Bajo bloqueo (09/11/2026): mismo motivo que en WhatsApp directo.
@@ -2072,6 +2085,7 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
           archived: false,
           created_at: new Date().toISOString(),
           ...(mediaPath ? { media_path: mediaPath, media_type: audioAttachment ? ("audio" as const) : ("image" as const) } : {}),
+          ...(mediaText ? { media_text: mediaText } : {}),
         });
         return inbox.slice(-500);
       });
@@ -2150,7 +2164,9 @@ app.post("/webhooks/zernio-whatsapp", async (req, res) => {
     await enqueueWhatsappBatchMessage(phone, {
       eventId,
       whatsappInboxId,
-      text: text.trim().slice(0, 2000),
+      // Si hubo transcripción/descripción real, el agente la lee en vez del
+      // marcador (combineBatchText la marca como "[imagen N] ..." / "[nota de voz N] ...").
+      text: (mediaText ?? text.trim()).slice(0, 2000),
       // media_type depende del tipo de ADJUNTO real (para que combineBatchText
       // sepa marcarlo como "[imagen N]"/"[nota de voz N]"), nunca de si la
       // descarga tuvo éxito -- media_path sí depende de la descarga, solo
