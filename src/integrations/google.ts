@@ -228,14 +228,16 @@ export async function sendGmail(
   }) as Promise<{ id: string; threadId: string }>;
 }
 
-export async function gmailListUnread(): Promise<{ id: string; threadId: string }[]> {
+export async function gmailListUnread(extraQuery = ""): Promise<{ id: string; threadId: string }[]> {
   const data = (await googleFetch(
     // Subido de 20 a 100 (03/11/2026, incidente real: correos nuevos en
     // tiempo real quedaban enterrados detrás de un backlog de no leídos
     // acumulado durante días de apagón real, decisión explícita de Eliud
     // de aceptar el riesgo de contestar tarde al backlog antes que seguir
     // perdiendo correos nuevos).
-    "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + encodeURIComponent("is:unread in:inbox") + "&maxResults=100",
+    // extraQuery permite restringir por remitente (p.ej. solo Coches.net/
+    // Wallapop en el sondeo de Daniel); vacío = toda la bandeja no leída (debug).
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + encodeURIComponent(`is:unread in:inbox${extraQuery ? ` ${extraQuery}` : ""}`) + "&maxResults=100",
   )) as { messages?: { id: string; threadId: string }[] };
   return data.messages ?? [];
 }

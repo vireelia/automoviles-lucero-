@@ -1,5 +1,6 @@
 import { isGoogleConnected, gmailListUnread, gmailGet, gmailMarkRead } from "../integrations/google.js";
 import { processInboundEmail, drainPendingEmailQueue } from "./agent.js";
+import { detectPortal } from "./interest.js";
 import { readCollection, writeCollection } from "../store.js";
 import { withPersistentLockOrSkip } from "../locks.js";
 import { raiseAlert } from "../alerts/alerts.js";
@@ -88,11 +89,25 @@ export function startEmailPoller() {
     // correo. Si otro ya está sondeando, este ciclo se salta.
     const tomado = await withPersistentLockOrSkip("email_poller", async () => {
     try {
-      const list = await gmailListUnread();
+      // REGLA DE RAMÓN: Daniel solo abre correos de Coches.net y Wallapop.
+      // Gmail ni siquiera lista los demás -> nunca se tocan.
+      const list = await gmailListUnread("(from:coches.net OR from:wallapop.com)");
       quotaStrikes = 0;
       const items = list.slice(0, BATCH);
       for (let i = 0; i < items.length; i++) {
         const m = await gmailGet(items[i].id);
+        // REGLA DE RAMÓN (26/11/2026, queja real del cliente): Daniel SOLO
+        // abre/lee/marca y responde correos de Coches.net y Wallapop. Cualquier
+        // otro correo (privado del concesionario, cliente directo, proveedor...)
+        // NO se toca: ni se procesa, ni se marca como leído -- se deja intacto y
+        // sin leer para que lo gestione el equipo. Doble barrera: la consulta de
+        // gmailListUnread ya filtra por esos remitentes; aquí se reconfirma por
+        // si algo se colara (gmailGet no marca como leído, así que comprobar el
+        // remitente aquí nunca "abre" el correo).
+        const portalDelRemitente = detectPortal({ from: m.from, subject: m.subject, text: m.text }).portal;
+        if (portalDelRemitente !== "Coches.net" && portalDelRemitente !== "Wallapop") {
+          continue;
+        }
         const result = await processInboundEmail({
           messageKey: m.id,
           from: m.from,
