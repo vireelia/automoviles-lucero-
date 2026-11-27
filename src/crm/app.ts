@@ -1454,16 +1454,24 @@ verdad sigue pendiente de mirar. */
    lo mas a whassap") -- fondo de chat beige/verde clásico, burbuja
    saliente verde clara, entrante blanca, hora dentro de la propia
    burbuja (como WhatsApp de verdad), no como línea aparte. */
-.wa-thread{display:flex;flex-direction:column;gap:6px;max-height:380px;overflow-y:auto;padding:12px;background:#e5ddd5;border-radius:10px}
-.wa-bubble{position:relative;max-width:78%;padding:7px 24px 8px 10px;border-radius:8px;font-size:14px;white-space:pre-wrap;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+/* Look WhatsApp Web (27/11/2026, "ese mismo diseño"): fondo con doodle como
+   el de WhatsApp Web, burbujas con colita (::before), colores reales y doble
+   check azul en las salientes. Solo CSS -- misma conversación real de
+   whatsapp_inbox, mismo data-copy, sin tocar envíos ni markup. */
+.wa-thread{display:flex;flex-direction:column;gap:6px;max-height:460px;overflow-y:auto;padding:14px 16px;border-radius:10px;background-color:#efeae2;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300'%3E%3Cg fill='none' stroke='rgba(11,20,26,0.05)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M24 36c0-5 4-9 9-9h16c5 0 9 4 9 9v8c0 5-4 9-9 9H40l-6 6v-6c-5 0-9-4-10-9z'/%3E%3Ccircle cx='110' cy='44' r='10'/%3E%3Cpath d='M180 26l4 8 9 1-6 6 1 9-8-4-8 4 1-9-6-6 9-1z'/%3E%3Cpath d='M126 118c7 0 12 5 12 11s-5 11-12 11h-3l-6 4v-5c-5-2-9-6-9-10 0-6 5-11 12-11z'/%3E%3Crect x='28' y='120' width='28' height='18' rx='3'/%3E%3Cpath d='M200 204l5 10 11 1-8 7 2 11-10-5-10 5 2-11-8-7 11-1z'/%3E%3Ccircle cx='250' cy='214' r='11'/%3E%3C/g%3E%3C/svg%3E");background-size:300px}
+.wa-bubble{position:relative;max-width:72%;padding:6px 24px 8px 10px;border-radius:8px;font-size:14px;line-height:19px;white-space:pre-wrap;box-shadow:0 1px .5px rgba(11,20,26,.13)}
+.wa-bubble::before{content:"";position:absolute;top:0;width:0;height:0}
 .wa-copy-btn{position:absolute;top:3px;right:3px;width:18px;height:18px;border:0;border-radius:50%;background:rgba(0,0,0,.06);color:#54656f;font-size:10.5px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
 .wa-copy-btn:hover{background:rgba(0,0,0,.14)}
 .wa-row{display:flex;flex-direction:column}
 .wa-row.in{align-items:flex-start}
 .wa-row.out{align-items:flex-end}
-.wa-row .wa-bubble.in{background:#fff;border-top-left-radius:2px}
-.wa-row .wa-bubble.out{background:#d9fdd3;border-top-right-radius:2px}
-.wa-bubble time{display:block;font-size:10.5px;color:#8696a0;text-align:right;margin-top:3px}
+.wa-row .wa-bubble.in{background:#fff;border-top-left-radius:0}
+.wa-row .wa-bubble.out{background:#d9fdd3;border-top-right-radius:0}
+.wa-bubble.in::before{left:-8px;border-top:8px solid #fff;border-left:8px solid transparent}
+.wa-bubble.out::before{right:-8px;border-top:8px solid #d9fdd3;border-right:8px solid transparent}
+.wa-bubble time{display:block;font-size:10.5px;color:#667781;text-align:right;margin-top:3px}
+.wa-bubble.out time::after{content:" ✓✓";color:#53bdeb;font-weight:700;letter-spacing:-1px}
 .wa-no-entregado{font-size:11.5px;font-weight:700;color:var(--urgent);margin-top:4px}
 /* Caja de responder/adjuntar compacta (28/10/2026, "ponla más organizada,
 más bonita, con botones más pequeños al lado del chat") -- antes eran dos
